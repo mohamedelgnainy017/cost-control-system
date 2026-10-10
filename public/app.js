@@ -20,6 +20,33 @@ async function api(path, opts = {}) {
   return j.data;
 }
 const hdr = { 'Content-Type': 'application/json' };
+
+/* ---- أدوات الفلاتر المشتركة ---- */
+function debounce(fn, ms = 300) {
+  let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+/* يجمع قيم حقول الفلاتر في استعلام URL */
+function filterQS(ids) {
+  const p = new URLSearchParams();
+  for (const [k, id] of Object.entries(ids)) {
+    const el = $(id); if (!el) continue;
+    const v = (el.value || '').trim();
+    if (v) p.set(k, v);
+  }
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
+/* يلحق استعلام الفلاتر بمسار له معاملات أصلية أو لا */
+const appendQ = (base, qs) => qs ? base + (base.includes('?') ? '&' : '?') + qs.slice(1) : base;
+/* يملأ قائمة منسدلة بأبعاد مميزة من الخادم مع الحفاظ على الاختيار الحالي */
+async function fillDimSelect(id, url) {
+  const el = $(id); if (!el) return;
+  const cur = el.value;
+  const vals = await api(url).catch(() => []);
+  el.innerHTML = '<option value="">الكل</option>' +
+    vals.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('');
+  el.value = cur;
+}
 function toast(msg, ms = 3500) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), ms);
@@ -384,6 +411,16 @@ async function loadMdItems() {
   ]);
   mdGroupsList = g; mdClassesList = c;
   fillMdSelects();
+  const setFilter = (sel, vals) => {
+    const el = $(sel);
+    if (!el) return;
+    const cur = el.value;
+    el.innerHTML = '<option value="">كل المجموعات</option>' +
+      vals.map(x => `<option value="${escHtml(x.code)}">${escHtml(x.code)} — ${escHtml(x.descr || '')}</option>`).join('');
+    el.value = cur;
+  };
+  setFilter('#md-items-group', g);
+  setFilter('#md-items-class', c);
   await renderMdItems();
 }
 
@@ -410,7 +447,10 @@ function mdGroupToClass() {
 
 async function renderMdItems() {
   const q = ($('#md-items-q')?.value || '').trim();
-  const d = await api(`/api/md/items?origin=${mdItemsOrigin}&q=${encodeURIComponent(q)}&limit=1000`);
+  const grp = ($('#md-items-group')?.value || '').trim();
+  const cls = ($('#md-items-class')?.value || '').trim();
+  const d = await api(`/api/md/items?origin=${mdItemsOrigin}&q=${encodeURIComponent(q)}&limit=1000`
+    + (grp ? '&group=' + encodeURIComponent(grp) : '') + (cls ? '&cls=' + encodeURIComponent(cls) : ''));
   mdItemsRows = d;
   const mine = d.filter(r => r.origin !== 'movement').length;
   const cnt = $('#md-items-count');
@@ -441,6 +481,8 @@ $('#md-items-q')?.addEventListener('input', () => {
   clearTimeout(mdItemsTimer);
   mdItemsTimer = setTimeout(() => renderMdItems().catch(() => {}), 300);
 });
+['#md-items-group', '#md-items-class'].forEach(sel =>
+  $(sel)?.addEventListener('change', () => renderMdItems().catch(e => toast(e.message))));
 
 $('#tbl-md-items')?.addEventListener('click', e => {
   const b = e.target.closest('[data-item]');
@@ -589,6 +631,11 @@ function mdAct(type, code, label = '✎') {
 
 function renderMdLocPane() {
   const pane = mdLocPane;
+  const qu = ($('#md-loc-q')?.value || '').trim().toLowerCase();
+  const flt = arr => qu
+    ? arr.filter(r => [r.code, r.name, r.place, r.unit_code, r.company_code, r.company_name]
+        .some(x => String(x || '').toLowerCase().includes(qu)))
+    : arr;
   $$('#md-loc-segs .seg').forEach(b => b.classList.toggle('on', b.dataset.pane === pane));
   vis($('#tbl-md-companies'), pane === 'companies');
   vis($('#tbl-md-units'), pane === 'units');
@@ -600,7 +647,7 @@ function renderMdLocPane() {
     { t: 'العملة', k: 'currency' },
     { t: 'وحدات', n: 1, f: r => n0(r.units) },
     ...(can('master') ? [{ t: '', h: true, f: r => mdAct('company', r.code) }] : []),
-  ], mdLoc.companies, { empty: 'لا توجد شركات — اضغط «＋ شركة»' });
+  ], flt(mdLoc.companies), { empty: 'لا توجد شركات — اضغط «＋ شركة»' });
 
   table($('#tbl-md-units'), [
     { t: 'كود الوحدة', k: 'code' },
@@ -609,7 +656,7 @@ function renderMdLocPane() {
     { t: 'العملة', k: 'currency' },
     { t: 'المكان', k: 'place' },
     ...(can('master') ? [{ t: '', h: true, f: r => mdAct('unit', r.code) }] : []),
-  ], mdLoc.units, { empty: 'لا توجد وحدات — اضغط «＋ وحدة»' });
+  ], flt(mdLoc.units), { empty: 'لا توجد وحدات — اضغط «＋ وحدة»' });
 
   table($('#tbl-md-warehouses'), [
     { t: 'كود المخزن', k: 'code' },
@@ -618,10 +665,11 @@ function renderMdLocPane() {
     { t: 'الشركة', h: true, f: r => escHtml(r.company_code || '') },
     { t: 'المكان', k: 'place' },
     ...(can('master') ? [{ t: '', h: true, f: r => mdAct('wh', r.code) }] : []),
-  ], mdLoc.warehouses, { empty: 'لا توجد مخازن — اضغط «＋ مخزن» (أو ارفع البيانات دفعة واحدة لاحقاً)' });
+  ], flt(mdLoc.warehouses), { empty: 'لا توجد مخازن — اضغط «＋ مخزن» (أو ارفع البيانات دفعة واحدة لاحقاً)' });
 }
 
 $$('#md-loc-segs .seg').forEach(b => b.addEventListener('click', () => { mdLocPane = b.dataset.pane; renderMdLocPane(); }));
+$('#md-loc-q')?.addEventListener('input', debounce(() => renderMdLocPane(), 200));
 
 ['#tbl-md-companies', '#tbl-md-units', '#tbl-md-warehouses'].forEach(sel =>
   $(sel)?.addEventListener('click', e => {
@@ -741,14 +789,27 @@ $('#md-wh-form')?.addEventListener('submit', async e => {
 });
 
 /* ---------------- شاشة أنواع الحركات ---------------- */
+let mdMtypeCatsLoaded = false;
 async function loadMdMtypes() {
   vis($('#md-mtype-btn'), can('master'));
+  if (!mdMtypeCatsLoaded) {
+    mdMtypeCatsLoaded = true;
+    const all = await api('/api/md/mtypes?q=').catch(() => []);
+    const cats = [...new Set(all.map(r => (r.category || '').trim()).filter(Boolean))].sort();
+    const el = $('#md-mtype-cat');
+    if (el) {
+      el.innerHTML = '<option value="">كل التصنيفات</option>' +
+        cats.map(c => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('');
+    }
+  }
   await renderMdMtypes();
 }
 
 async function renderMdMtypes() {
   const q = ($('#md-mtype-q')?.value || '').trim();
   mdMtypes = await api('/api/md/mtypes?q=' + encodeURIComponent(q));
+  const cat = $('#md-mtype-cat')?.value || '';
+  const rows = cat ? mdMtypes.filter(r => (r.category || '') === cat) : mdMtypes;
   const canM = can('master');
   table($('#tbl-md-mtypes'), [
     { t: 'نوع الحركة', k: 'code' },
@@ -756,7 +817,7 @@ async function renderMdMtypes() {
     { t: 'وصف السيستم', k: 'system_desc' },
     { t: 'التصنيف', k: 'category' },
     ...(canM ? [{ t: '', h: true, f: r => `<button class="btn sm ghost" data-mtype="${escHtml(r.code)}">✎ تعديل</button>` }] : []),
-  ], mdMtypes, { empty: 'لا توجد أنواع حركات — استورد ملف الحركات أو أضفها يدوياً' });
+  ], rows, { empty: 'لا توجد أنواع حركات — استورد ملف الحركات أو أضفها يدوياً' });
 }
 
 $('#tbl-md-mtypes')?.addEventListener('click', e => {
@@ -768,6 +829,7 @@ $('#md-mtype-q')?.addEventListener('input', () => {
   clearTimeout(mdMtypeTimer);
   mdMtypeTimer = setTimeout(() => renderMdMtypes().catch(() => {}), 300);
 });
+$('#md-mtype-cat')?.addEventListener('change', () => renderMdMtypes().catch(e => toast(e.message)));
 
 function openMdMtype(code) {
   const r = code ? mdMtypes.find(x => x.code === code) : null;
@@ -799,9 +861,22 @@ $('#md-mtype-form')?.addEventListener('submit', async e => {
 });
 
 /* ---------------- المخزون ---------------- */
+/* ---- المخزون: فلاتر (من/إلى/مكان/شركة/وحدة/صنف) ---- */
+const inventoryQS = () => filterQS({ from: 'if-from', to: 'if-to', place: 'if-place', company: 'if-company', unit: 'if-unit', item: 'if-item' });
+let inventoryDimsLoaded = false;
 async function loadInventory() {
+  const qs = inventoryQS();
+  if (!inventoryDimsLoaded) {
+    inventoryDimsLoaded = true;
+    await Promise.all([
+      fillDimSelect('#if-place', '/api/dims?dim=place&src=balances'),
+      fillDimSelect('#if-company', '/api/dims?dim=company&src=balances'),
+      fillDimSelect('#if-unit', '/api/dims?dim=unit&src=balances'),
+    ]);
+  }
   const [ov, rec, ip, ic] = await Promise.all([
-    api('/api/overview'), api('/api/reconcile?limit=100'), api('/api/inventory/place'), api('/api/inventory/class'),
+    api(appendQ('/api/overview', qs)), api(appendQ('/api/reconcile?limit=100', qs)),
+    api(appendQ('/api/inventory/place', qs)), api(appendQ('/api/inventory/class', qs)),
   ]);
   const k = $('#inv-kpis'); k.innerHTML = '';
   kpi(k, { icon: '◐', g: 'g1', label: 'رصيد افتتاحي', value: money(ov.inventory.openVal), sub: n2(ov.inventory.openQty) + ' وحدة' });
@@ -857,19 +932,43 @@ function renderRecon(rec) {
 
 $('#btn-recon')?.addEventListener('click', async () => {
   try {
-    const rec = await api('/api/reconcile?limit=200' + ($('#recon-all').checked ? '&all=1' : ''));
+    const p = new URLSearchParams();
+    p.set('limit', '200');
+    if ($('#recon-all').checked) p.set('all', '1');
+    const qs = inventoryQS();
+    const rec = await api('/api/reconcile?' + p.toString() + (qs ? '&' + qs.slice(1) : ''));
     renderRecon(rec); toast('تم احتساب المطابقة');
   } catch (e) { toast('خطأ: ' + e.message); }
 });
 
+['if-from', 'if-to', 'if-place', 'if-company', 'if-unit'].forEach(id =>
+  $(id)?.addEventListener('change', () => loadInventory().catch(e => toast(e.message))));
+$('#if-item')?.addEventListener('input', debounce(() => loadInventory().catch(() => {}), 400));
+$('#if-clear')?.addEventListener('click', () => {
+  ['if-from', 'if-to', 'if-place', 'if-company', 'if-unit', 'if-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  loadInventory().catch(e => toast(e.message));
+});
+
 /* ---------------- المبيعات ---------------- */
+/* ---- المبيعات: فلاتر (من/إلى/مكان/عميل/وحدة/صنف) ---- */
+const salesQS = () => filterQS({ from: 'sf-from', to: 'sf-to', place: 'sf-place', cust: 'sf-cust', unit: 'sf-unit', item: 'sf-item' });
+let salesDimsLoaded = false;
 async function loadSales() {
+  const qs = salesQS();
+  if (!salesDimsLoaded) {
+    salesDimsLoaded = true;
+    await Promise.all([
+      fillDimSelect('#sf-place', '/api/dims?dim=place&src=sales'),
+      fillDimSelect('#sf-cust', '/api/dims?dim=cust&src=sales'),
+      fillDimSelect('#sf-unit', '/api/dims?dim=unit&src=sales'),
+    ]);
+  }
   const [ov, sp, sm, si, sc, scls] = await Promise.all([
-    api('/api/overview'), api('/api/sales/place'), api('/api/sales/month'),
-    api('/api/sales/item?limit=30'), api('/api/sales/customer?limit=30'), api('/api/sales/class'),
+    api(appendQ('/api/overview', qs)), api(appendQ('/api/sales/place', qs)), api(appendQ('/api/sales/month', qs)),
+    api(appendQ('/api/sales/item?limit=30', qs)), api(appendQ('/api/sales/customer?limit=30', qs)), api(appendQ('/api/sales/class', qs)),
   ]);
   const k = $('#sal-kpis'); k.innerHTML = '';
-  const cust = await api('/api/sales/customer?limit=500');
+  const cust = await api(appendQ('/api/sales/customer?limit=500', qs));
   kpi(k, { icon: '◈', g: 'g1', label: 'قيمة المبيعات الموقّعة', value: money(ov.revenue), sub: pct(ov.marginPct) + ' هامش تقديري' });
   kpi(k, { icon: '▤', g: 'g4', label: 'تكلفة المبيعات', value: money(ov.cogs) });
   kpi(k, { icon: '▲', g: 'g3', label: 'مجمل الربح', value: money(ov.grossProfit), tone: ov.grossProfit >= 0 ? 'good' : 'bad' });
@@ -913,11 +1012,32 @@ async function loadSales() {
   ], scls);
 }
 
+['sf-from', 'sf-to', 'sf-place', 'sf-cust', 'sf-unit'].forEach(id =>
+  $(id)?.addEventListener('change', () => loadSales().catch(e => toast(e.message))));
+$('#sf-item')?.addEventListener('input', debounce(() => loadSales().catch(() => {}), 400));
+$('#sf-clear')?.addEventListener('click', () => {
+  ['sf-from', 'sf-to', 'sf-place', 'sf-cust', 'sf-unit', 'sf-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  loadSales().catch(e => toast(e.message));
+});
+
 /* ---------------- الحركات ---------------- */
+/* ---- الحركات: فلاتر (من/إلى/مكان/نوع حركة/توجيه/وحدة/صنف) ---- */
+const movementsQS = () => filterQS({ from: 'mf-from', to: 'mf-to', place: 'mf-place', mtype: 'mf-mtype', dir: 'mf-dir', unit: 'mf-unit', item: 'mf-item' });
+let movementsDimsLoaded = false;
 async function loadMovements() {
+  const qs = movementsQS();
+  if (!movementsDimsLoaded) {
+    movementsDimsLoaded = true;
+    await Promise.all([
+      fillDimSelect('#mf-place', '/api/dims?dim=place&src=movements'),
+      fillDimSelect('#mf-mtype', '/api/dims?dim=mtype&src=movements'),
+      fillDimSelect('#mf-dir', '/api/dims?dim=dir&src=movements'),
+      fillDimSelect('#mf-unit', '/api/dims?dim=unit&src=movements'),
+    ]);
+  }
   const [md, mm, mp, mi] = await Promise.all([
-    api('/api/movements/direction'), api('/api/movements/month'),
-    api('/api/movements/place'), api('/api/movements/items?limit=30'),
+    api(appendQ('/api/movements/direction', qs)), api(appendQ('/api/movements/month', qs)),
+    api(appendQ('/api/movements/place', qs)), api(appendQ('/api/movements/items?limit=30', qs)),
   ]);
   table($('#tbl-mv-dir'), [
     { t: 'التوجيه', k: 'direction' },
@@ -947,6 +1067,14 @@ async function loadMovements() {
     { t: 'الكمية', k: 'qty', n: 1, f: r => n2(r.qty) },
   ], mi);
 }
+
+['mf-from', 'mf-to', 'mf-place', 'mf-mtype', 'mf-dir', 'mf-unit'].forEach(id =>
+  $(id)?.addEventListener('change', () => loadMovements().catch(e => toast(e.message))));
+$('#mf-item')?.addEventListener('input', debounce(() => loadMovements().catch(() => {}), 400));
+$('#mf-clear')?.addEventListener('click', () => {
+  ['mf-from', 'mf-to', 'mf-place', 'mf-mtype', 'mf-dir', 'mf-unit', 'mf-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  loadMovements().catch(e => toast(e.message));
+});
 
 /* ---------------- البورصة اليومية ---------------- */
 let borseItemsSig = '';
@@ -1661,8 +1789,20 @@ $('#btn-cs-rebuild')?.addEventListener('click', async () => {
 });
 
 /* ---------------- الجودة ---------------- */
+function qualityFilterQS() {
+  const p = new URLSearchParams();
+  const sev = $('#q-sev')?.value;
+  if (sev) p.set('sev', sev);
+  const ent = ($('#q-ent')?.value || '').trim();
+  if (ent) p.set('ent', ent);
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
 async function loadQuality(run) {
-  const qi = await api('/api/quality' + (run ? '?run=1' : ''));
+  const qs = qualityFilterQS();
+  const qi = await api('/api/quality' + (run ? '?run=1' + (qs ? '&' + qs.slice(1) : '') : qs));
+  const csv = $('#q-csv');
+  if (csv) csv.href = '/api/export?name=quality' + (qs ? '&' + qs.slice(1) : '');
   table($('#tbl-quality'), [
     { t: 'الرمز', k: 'code' },
     { t: 'المستوى', h: true, f: r => `<span class="pill ${r.severity}">${r.severity === 'error' ? 'خطورة' : r.severity === 'warning' ? 'تنبيه' : 'معلومة'}</span>` },
@@ -1672,6 +1812,8 @@ async function loadQuality(run) {
   ], qi, { empty: 'لا توجد ملاحظات — البيانات سليمة ✔' });
 }
 $('#btn-qrun')?.addEventListener('click', () => loadQuality(true).then(() => toast('تمت إعادة الفحص')));
+$('#q-sev')?.addEventListener('change', () => loadQuality(false).catch(e => toast(e.message)));
+$('#q-ent')?.addEventListener('input', debounce(() => loadQuality(false).catch(() => {}), 400));
 
 /* ---------------- الاستيراد ---------------- */
 let selectedFile = null;
@@ -2009,17 +2151,22 @@ function drawReportChart(cfg, rows) {
   }
 }
 
+const reportQS = () => filterQS({ from: 'rf-from', to: 'rf-to', place: 'rf-place', item: 'rf-item' });
+let currentReport = null;
+
 async function showReport(name) {
   const meta = reportList.find(r => r.name === name);
   if (!meta) return;
+  currentReport = name;
   $$('#report-list .exp-card').forEach(a => a.classList.toggle('on', a.dataset.name === name));
   $('#rep-title').textContent = meta.label;
   $('#rep-meta').textContent = 'جاري التحميل...';
   $('#rep-csv').style.display = '';
-  $('#rep-csv').href = '/api/export?name=' + encodeURIComponent(name);
+  const qs = reportQS();
+  $('#rep-csv').href = '/api/export?name=' + encodeURIComponent(name) + (qs ? '&' + qs.slice(1) : '');
   $('#rep-table').innerHTML = '<div class="muted" style="padding:16px">جاري التحميل...</div>';
   try {
-    const d = await api('/api/report?name=' + encodeURIComponent(name) + '&limit=500');
+    const d = await api('/api/report?name=' + encodeURIComponent(name) + '&limit=500' + (qs ? '&' + qs.slice(1) : ''));
     const cfg = REP_VIEW[name];
     $('#rep-meta').textContent =
       `${n0(d.total)} صف` + (d.total > d.rows.length ? ` — يُعرض أول ${n0(d.rows.length)} صف` : '') +
@@ -2053,6 +2200,18 @@ async function loadReports() {
   });
   if (!reportList.length) host.innerHTML = '<div class="muted">لا توجد تقارير</div>';
 }
+
+/* معايير التقارير: أي تغيير يعيد تحميل التقرير الحالي */
+['rf-from', 'rf-to'].forEach(id => $(id)?.addEventListener('change', () => {
+  if (currentReport) showReport(currentReport).catch(e => toast(e.message));
+}));
+['rf-place', 'rf-item'].forEach(id => $(id)?.addEventListener('input', debounce(() => {
+  if (currentReport) showReport(currentReport).catch(() => {});
+}, 400)));
+$('#rf-clear')?.addEventListener('click', () => {
+  ['rf-from', 'rf-to', 'rf-place', 'rf-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  if (currentReport) showReport(currentReport).catch(e => toast(e.message));
+});
 
 /* ---------------- المصادقة والمستخدمون ---------------- */
 let me = null;

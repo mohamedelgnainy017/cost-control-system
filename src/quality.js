@@ -194,9 +194,13 @@ async function runRules() {
   return results;
 }
 
-async function listIssues() {
+async function listIssues(filter = {}) {
+  const c = [], p = [];
+  if (filter.sev) { p.push(filter.sev); c.push(`severity = $${p.length}`); }
+  if (filter.ent) { p.push('%' + filter.ent + '%'); c.push(`entity ILIKE $${p.length}`); }
   return all(`SELECT * FROM quality_issues
-              ORDER BY CASE severity WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, code`);
+              ${c.length ? 'WHERE ' + c.join(' AND ') : ''}
+              ORDER BY CASE severity WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, code`, p);
 }
 
 module.exports = { runRules, listIssues };

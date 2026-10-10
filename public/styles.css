@@ -479,6 +479,19 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
 .seg:hover{color:var(--txt);background:rgba(91,140,255,.10)}
 .seg.on{background:var(--grad);color:#04101f;box-shadow:0 6px 18px rgba(91,140,255,.30)}
 
+/* ---------------- شريط الفلاتر ---------------- */
+.filterbar{
+  display:flex;gap:10px;flex-wrap:wrap;align-items:end;padding:12px 14px;
+}
+.filterbar .fl{
+  display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted);font-weight:700;
+}
+.filterbar .fl .input{
+  font-weight:600;color:var(--txt);
+}
+.filterbar input[type=date]{width:150px}
+.filterbar select{max-width:200px}
+
 /* خلايا قابلة للتعديل في جداول التعديل */
 .cellbtn{
   font:inherit;font-family:var(--font-num);font-variant-numeric:tabular-nums;

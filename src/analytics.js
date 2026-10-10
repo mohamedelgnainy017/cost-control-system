@@ -33,24 +33,79 @@ async function costWhere() {
   return `direction LIKE '%صادر%'`;
 }
 
+/* ---------- فلاتر مشتركة: من معاملات URL إلى شروط SQL ---------- */
+/* علامة خاصة تُرسَل من القوائم المنسدلة للقيم الفارغة («غير محدد») */
+const EMPTY = '__EMPTY__';
+
+function parseFilters(q) {
+  const get = k => { const v = q ? String(q.get(k) || '') : ''; return v.trim(); };
+  return {
+    from: get('from'), to: get('to'),
+    place: get('place'), company: get('company'), unit: get('unit'),
+    item: get('item'), cust: get('cust'), dir: get('dir'), mtype: get('mtype'),
+    sev: get('sev'), ent: get('ent'),
+  };
+}
+
+function hasFilters(F = {}) {
+  return ['from', 'to', 'place', 'company', 'unit', 'item', 'cust', 'dir', 'mtype'].some(k => !!F[k]);
+}
+
+/* خريطة الأعمدة لكل جدول (بعامودها المؤهَّل بالاسم المستعار) */
+const SALES_COLS = { date: 's.invoice_date', place: 's.place', item: 's.item', unit: 's.unit_code', cust: 's.beneficiary' };
+const MOV_COLS = { date: 'm.post_date', place: 'm.place', item: 'm.item', unit: 'm.unit_code', company: 'm.company_code', mtype: 'm.move_type', dir: 'm.direction' };
+const BAL_COLS = { date: 'b.balance_date', place: 'b.place', item: 'b.item', unit: 'b.unit_code', company: 'b.company_code' };
+
+/* يبني الشروط من الفلاتر على حسب خريطة الأعمدة.
+   start: رقم أول معامل (لتدمج شروط عدة استعلامات في استعلام واحد). */
+function conds(F = {}, map = {}, start = 1) {
+  const c = [], p = [];
+  let i = start;
+  const add = (col, v) => { if (v) { c.push(`${col} = $${i}`); p.push(v); i++; } };
+  const addOrNone = (col, v) => {
+    if (!col) return;
+    if (v === EMPTY) { c.push(`(COALESCE(${col},'') = '')`); i++; }
+    else add(col, v);
+  };
+  if (F.from) { c.push(`${map.date} >= $${i}`); p.push(F.from); i++; }
+  if (F.to) { c.push(`${map.date} <= $${i}`); p.push(F.to); i++; }
+  addOrNone(map.place, F.place);
+  addOrNone(map.company, F.company);
+  addOrNone(map.unit, F.unit);
+  if (F.item) { c.push(`${map.item} ILIKE $${i}`); p.push('%' + F.item + '%'); i++; }
+  addOrNone(map.cust, F.cust);
+  addOrNone(map.dir, F.dir);
+  add(map.mtype, F.mtype);
+  return { sql: c.length ? c.join(' AND ') : '', params: p };
+}
+
+/* نسخة من الفلاتر بدون التاريخ — تُستخدم حيث التاريخ يكسر المنطق (مطابقة الأزواج) */
+const noDates = F => ({ ...F, from: '', to: '' });
+
 /* ---------- المؤشرات الرئيسية ---------- */
-async function overview() {
+async function overview(F = {}) {
   const cw = await costWhere();
+  const ws = conds(F, SALES_COLS);
+  const wm = conds(F, MOV_COLS);
+  const wb = conds(F, BAL_COLS);
+
   const sales = await get(`
     SELECT COUNT(*)::int lines, COUNT(DISTINCT invoice_doc)::int docs,
            SUM(signed_value)::float value, SUM(signed_qty)::float qty,
            MIN(invoice_date) dmin, MAX(invoice_date) dmax
-    FROM sales`);
+    FROM sales s ${ws.sql ? 'WHERE ' + ws.sql : ''}`, ws.params);
   const costAll = await get(`SELECT COUNT(*)::int lines, COALESCE(SUM(amount),0)::float cost
-                             FROM movements WHERE ${cw}`);
+                             FROM movements m WHERE ${cw}${wm.sql ? ' AND ' + wm.sql : ''}`,
+    wm.params);
   const bal = await get(`
     SELECT COUNT(*)::int lines,
            COALESCE(SUM(open_val),0)::float open_val, COALESCE(SUM(close_val),0)::float close_val,
            COALESCE(SUM(open_qty),0)::float open_qty, COALESCE(SUM(close_qty),0)::float close_qty
-    FROM balances`);
+    FROM balances b ${wb.sql ? 'WHERE ' + wb.sql : ''}`, wb.params);
   const mov = await get(`
     SELECT COUNT(*)::int lines, COALESCE(SUM(qty),0)::float qty, COALESCE(SUM(amount),0)::float amount,
-           MIN(post_date) dmin, MAX(post_date) dmax FROM movements`);
+           MIN(post_date) dmin, MAX(post_date) dmax
+    FROM movements m ${wm.sql ? 'WHERE ' + wm.sql : ''}`, wm.params);
 
   const counts = {
     items: (await get(`SELECT COUNT(*)::int c FROM items WHERE kind='item'`)).c,
@@ -85,7 +140,9 @@ async function overview() {
 }
 
 /* ---------- مطابقة الأرصدة: رصيد نهاية التاريخ السابق ⇐ رصيد بداية التاريخ التالي ---------- */
-async function reconcile({ limit = 100, offset = 0, onlyMismatch = true } = {}) {
+async function reconcile({ limit = 100, offset = 0, onlyMismatch = true, F = {} } = {}) {
+  /* فلاتر غير التاريخية تُطبَّق في SQL؛ والتاريخ يُرشِّح الأزواج في الذاكرة حسب تاريخ الزوج اللاحق */
+  const wb = conds(noDates(F), BAL_COLS);
   const rows = await all(`
     WITH per AS (
       /* المفتاح قد يحمل أكثر من سطر في الملف نفسه (107 مفاتيح مكررة بقيم مختلفة)
@@ -94,7 +151,7 @@ async function reconcile({ limit = 100, offset = 0, onlyMismatch = true } = {}) 
              MAX(item_desc) item_desc, MAX(place) place,
              SUM(open_qty)::float open_qty, SUM(open_val)::float open_val,
              SUM(close_qty)::float close_qty, SUM(close_val)::float close_val
-      FROM balances
+      FROM balances b ${wb.sql ? 'WHERE ' + wb.sql : ''}
       GROUP BY item, company_code, unit_code, storage_loc, balance_date
     ), seq AS (
       SELECT p.*,
@@ -109,9 +166,9 @@ async function reconcile({ limit = 100, offset = 0, onlyMismatch = true } = {}) 
            prev_close_qty, prev_close_val, open_qty, open_val
     FROM seq
     WHERE prev_date IS NOT NULL
-  `);
+  `, wb.params);
 
-  const norm = rows.map(r => ({
+  let norm = rows.map(r => ({
     ...r,
     close_val: r.prev_close_val || 0,    // نهاية التاريخ السابق
     close_qty: r.prev_close_qty || 0,
@@ -119,6 +176,10 @@ async function reconcile({ limit = 100, offset = 0, onlyMismatch = true } = {}) 
     diff_val: (r.prev_close_val || 0) - (r.open_val || 0),
     diff_qty: (r.prev_close_qty || 0) - (r.open_qty || 0),
   }));
+
+  /* فلتر التاريخ: يعرض الأزواج التي يقع تاريخها اللاحق ضمن النطاق */
+  if (F.from) norm = norm.filter(r => !r.next_date || r.next_date >= F.from);
+  if (F.to) norm = norm.filter(r => !r.next_date || r.next_date <= F.to);
 
   const mismatches = norm.filter(r => Math.abs(r.diff_val) > 1 || Math.abs(r.diff_qty) > 0.001);
   const totalDiff = norm.reduce((s, r) => s + r.diff_val, 0);
@@ -159,20 +220,24 @@ async function reconcile({ limit = 100, offset = 0, onlyMismatch = true } = {}) 
 }
 
 /* ---------- تحليل المبيعات ---------- */
-async function salesByPlace() {
+async function salesByPlace(F = {}) {
   const cw = await costWhere();
+  const wm = conds(F, MOV_COLS);                                  // التكلفة من الحركات بنفس الفلاتر
+  const ws = conds(F, SALES_COLS, wm.params.length + 1);
   const rows = await all(`
     WITH cost AS (
-      SELECT place, SUM(amount)::float cost FROM movements
-      WHERE ${cw} GROUP BY place
+      SELECT m.place, SUM(m.amount)::float cost FROM movements m
+      WHERE ${cw}${wm.sql ? ' AND ' + wm.sql : ''} GROUP BY 1
     )
     SELECT COALESCE(NULLIF(s.place,''),'(غير محدد)') place,
-           COUNT(*)::int lines, COUNT(DISTINCT invoice_doc)::int docs,
+           COUNT(*)::int lines, COUNT(DISTINCT s.invoice_doc)::int docs,
            SUM(s.signed_value)::float value, SUM(s.signed_qty)::float qty,
            COALESCE(MAX(ABS(cost.cost)),0)::float cost
     FROM sales s
     LEFT JOIN cost ON cost.place = s.place
-    GROUP BY 1 ORDER BY ABS(COALESCE(SUM(s.signed_value),0)) DESC`);
+    ${ws.sql ? 'WHERE ' + ws.sql : ''}
+    GROUP BY 1 ORDER BY ABS(COALESCE(SUM(s.signed_value),0)) DESC`,
+    [...wm.params, ...ws.params]);
   return rows.map(r => ({
     ...r,
     profit: r.value - (r.cost || 0),
@@ -180,94 +245,137 @@ async function salesByPlace() {
   }));
 }
 
-async function salesByItem(limit = 50) {
+async function salesByItem(F = {}, limit = 50) {
+  const ws = conds(F, SALES_COLS);
   return all(`
     SELECT s.item, MAX(s.item_desc) descr, MAX(s.place) place,
            COUNT(*)::int lines, SUM(s.signed_value)::float value, SUM(s.signed_qty)::float qty
-    FROM sales s GROUP BY s.item ORDER BY ABS(COALESCE(SUM(s.signed_value),0)) DESC LIMIT $1`, [limit]);
+    FROM sales s ${ws.sql ? 'WHERE ' + ws.sql : ''}
+    GROUP BY s.item ORDER BY ABS(COALESCE(SUM(s.signed_value),0)) DESC LIMIT $${ws.params.length + 1}`,
+    [...ws.params, limit]);
 }
 
-async function salesByMonth() {
+async function salesByMonth(F = {}) {
+  const ws = conds(F, SALES_COLS);
   return all(`
-    SELECT SUBSTR(invoice_date,1,7) ym, COUNT(*)::int lines,
-           SUM(signed_value)::float value, SUM(signed_qty)::float qty
-    FROM sales WHERE invoice_date IS NOT NULL
-    GROUP BY 1 ORDER BY 1`);
+    SELECT SUBSTR(s.invoice_date,1,7) ym, COUNT(*)::int lines,
+           SUM(s.signed_value)::float value, SUM(s.signed_qty)::float qty
+    FROM sales s ${ws.sql ? 'WHERE ' + ws.sql : ''}
+    GROUP BY 1 ORDER BY 1`, ws.params);
 }
 
-async function salesByCustomer(limit = 50) {
+async function salesByCustomer(F = {}, limit = 50) {
+  const ws = conds(F, SALES_COLS);
   return all(`
-    SELECT COALESCE(NULLIF(beneficiary,''),'(غير محدد)') customer, COUNT(*)::int lines,
-           SUM(signed_value)::float value, SUM(tax)::float tax
-    FROM sales GROUP BY 1 ORDER BY ABS(COALESCE(SUM(signed_value),0)) DESC LIMIT $1`, [limit]);
+    SELECT COALESCE(NULLIF(s.beneficiary,''),'(غير محدد)') customer, COUNT(*)::int lines,
+           SUM(s.signed_value)::float value, SUM(s.tax)::float tax
+    FROM sales s ${ws.sql ? 'WHERE ' + ws.sql : ''}
+    GROUP BY 1 ORDER BY ABS(COALESCE(SUM(s.signed_value),0)) DESC LIMIT $${ws.params.length + 1}`,
+    [...ws.params, limit]);
 }
 
-async function salesByClass() {
+async function salesByClass(F = {}) {
+  const ws = conds(F, SALES_COLS);
   return all(`
-    SELECT COALESCE(doc_class,'') || COALESCE(doc_status,'') combo, COUNT(*)::int lines,
-           SUM(signed_value)::float value, SUM(signed_qty)::float qty
-    FROM sales GROUP BY 1 ORDER BY ABS(COALESCE(SUM(signed_value),0)) DESC`);
+    SELECT COALESCE(s.doc_class,'') || COALESCE(s.doc_status,'') combo, COUNT(*)::int lines,
+           SUM(s.signed_value)::float value, SUM(s.signed_qty)::float qty
+    FROM sales s ${ws.sql ? 'WHERE ' + ws.sql : ''}
+    GROUP BY 1 ORDER BY ABS(COALESCE(SUM(s.signed_value),0)) DESC`, ws.params);
 }
 
-async function costByMonth() {
+async function costByMonth(F = {}) {
   const cw = await costWhere();
+  const wm = conds(F, MOV_COLS);
   return all(`
-    SELECT SUBSTR(post_date,1,7) ym, ABS(SUM(amount))::float cost, COUNT(*)::int lines
-    FROM movements WHERE ${cw} AND post_date IS NOT NULL
-    GROUP BY 1 ORDER BY 1`);
+    SELECT SUBSTR(m.post_date,1,7) ym, ABS(SUM(m.amount))::float cost, COUNT(*)::int lines
+    FROM movements m WHERE ${cw} AND m.post_date IS NOT NULL${wm.sql ? ' AND ' + wm.sql : ''}
+    GROUP BY 1 ORDER BY 1`, wm.params);
 }
 
 /* ---------- تحليل الحركات ---------- */
-async function movementsByDirection() {
+async function movementsByDirection(F = {}) {
+  const wm = conds(F, MOV_COLS);
   return all(`
-    SELECT COALESCE(NULLIF(direction,''),'(غير محدد)') direction,
-           COUNT(*)::int lines, SUM(qty)::float qty, SUM(amount)::float amount,
-           SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END)::float inbound,
-           SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END)::float outbound
-    FROM movements GROUP BY 1 ORDER BY COUNT(*) DESC`);
+    SELECT COALESCE(NULLIF(m.direction,''),'(غير محدد)') direction,
+           COUNT(*)::int lines, SUM(m.qty)::float qty, SUM(m.amount)::float amount,
+           SUM(CASE WHEN m.amount > 0 THEN m.amount ELSE 0 END)::float inbound,
+           SUM(CASE WHEN m.amount < 0 THEN m.amount ELSE 0 END)::float outbound
+    FROM movements m ${wm.sql ? 'WHERE ' + wm.sql : ''}
+    GROUP BY 1 ORDER BY COUNT(*) DESC`, wm.params);
 }
 
-async function movementsByMonth() {
+async function movementsByMonth(F = {}) {
+  const wm = conds(F, MOV_COLS);
   return all(`
-    SELECT SUBSTR(post_date,1,7) ym,
-           SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END)::float inbound,
-           SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END)::float outbound,
-           SUM(amount)::float net, COUNT(*)::int lines
-    FROM movements WHERE post_date IS NOT NULL
-    GROUP BY 1 ORDER BY 1`);
+    SELECT SUBSTR(m.post_date,1,7) ym,
+           SUM(CASE WHEN m.amount > 0 THEN m.amount ELSE 0 END)::float inbound,
+           SUM(CASE WHEN m.amount < 0 THEN m.amount ELSE 0 END)::float outbound,
+           SUM(m.amount)::float net, COUNT(*)::int lines
+    FROM movements m WHERE m.post_date IS NOT NULL${wm.sql ? ' AND ' + wm.sql : ''}
+    GROUP BY 1 ORDER BY 1`, wm.params);
 }
 
-async function movementsByPlace() {
+async function movementsByPlace(F = {}) {
+  const wm = conds(F, MOV_COLS);
   return all(`
-    SELECT COALESCE(NULLIF(place,''),'(غير محدد)') place, COUNT(*)::int lines,
-           SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END)::float inbound,
-           SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END)::float outbound,
-           SUM(amount)::float net
-    FROM movements GROUP BY 1 ORDER BY COUNT(*) DESC`);
+    SELECT COALESCE(NULLIF(m.place,''),'(غير محدد)') place, COUNT(*)::int lines,
+           SUM(CASE WHEN m.amount > 0 THEN m.amount ELSE 0 END)::float inbound,
+           SUM(CASE WHEN m.amount < 0 THEN m.amount ELSE 0 END)::float outbound,
+           SUM(m.amount)::float net
+    FROM movements m ${wm.sql ? 'WHERE ' + wm.sql : ''}
+    GROUP BY 1 ORDER BY COUNT(*) DESC`, wm.params);
 }
 
-async function topMovementItems(limit = 30) {
+async function topMovementItems(F = {}, limit = 30) {
+  const wm = conds(F, MOV_COLS);
   return all(`
-    SELECT item, MAX(item_desc) descr, MAX(place) place,
-           COUNT(*)::int lines, SUM(qty)::float qty, SUM(amount)::float amount
-    FROM movements GROUP BY item ORDER BY ABS(COALESCE(SUM(amount),0)) DESC LIMIT $1`, [limit]);
+    SELECT m.item, MAX(m.item_desc) descr, MAX(m.place) place,
+           COUNT(*)::int lines, SUM(m.qty)::float qty, SUM(m.amount)::float amount
+    FROM movements m ${wm.sql ? 'WHERE ' + wm.sql : ''}
+    GROUP BY m.item ORDER BY ABS(COALESCE(SUM(m.amount),0)) DESC LIMIT $${wm.params.length + 1}`,
+    [...wm.params, limit]);
 }
 
 /* ---------- توزيع المخزون ---------- */
-async function inventoryByPlace() {
+async function inventoryByPlace(F = {}) {
+  const wb = conds(F, BAL_COLS);
   return all(`
-    SELECT COALESCE(NULLIF(place,''),'(غير محدد)') place,
-           SUM(open_qty)::float open_qty, SUM(close_qty)::float close_qty,
-           SUM(open_val)::float open_val, SUM(close_val)::float close_val
-    FROM balances GROUP BY 1 ORDER BY COALESCE(SUM(close_val),0) DESC`);
+    SELECT COALESCE(NULLIF(b.place,''),'(غير محدد)') place,
+           SUM(b.open_qty)::float open_qty, SUM(b.close_qty)::float close_qty,
+           SUM(b.open_val)::float open_val, SUM(b.close_val)::float close_val
+    FROM balances b ${wb.sql ? 'WHERE ' + wb.sql : ''}
+    GROUP BY 1 ORDER BY COALESCE(SUM(b.close_val),0) DESC`, wb.params);
 }
 
-async function inventoryByClass() {
+async function inventoryByClass(F = {}) {
+  const wb = conds(F, BAL_COLS);
   return all(`
     SELECT COALESCE(i.class_desc,'(غير مصنف)') cls,
            SUM(b.close_val)::float close_val, SUM(b.close_qty)::float close_qty
     FROM balances b LEFT JOIN items i ON i.code = b.item
-    GROUP BY 1 ORDER BY COALESCE(SUM(b.close_val),0) DESC`);
+    ${wb.sql ? 'WHERE ' + wb.sql : ''}
+    GROUP BY 1 ORDER BY COALESCE(SUM(b.close_val),0) DESC`, wb.params);
+}
+
+/* ---------- قوائم الفلاتر: القيم المميزة لبُعد معين في جدول معين ---------- */
+const DIM_TABLES = {
+  sales:     { place: 's.place',        unit: 's.unit_code',    cust: 's.beneficiary' },
+  movements: { place: 'm.place',        unit: 'm.unit_code',    company: 'm.company_code',
+               mtype: 'm.move_type',    dir: 'm.direction' },
+  balances:  { place: 'b.place',        unit: 'b.unit_code',    company: 'b.company_code' },
+};
+const DIM_SRC = { sales: 'sales s', movements: 'movements m', balances: 'balances b' };
+
+async function dims(q) {
+  const dim = String(q.get('dim') || '');
+  const src = String(q.get('src') || '');
+  const map = DIM_TABLES[src];
+  const col = map && map[dim];
+  if (!col) return [];
+  const rows = await all(`
+    SELECT DISTINCT ${col} v FROM ${DIM_SRC[src]}
+    WHERE ${col} IS NOT NULL AND ${col} <> '' ORDER BY 1 LIMIT 1000`);
+  return rows.map(r => r.v);
 }
 
 async function dateSpan() {
@@ -383,6 +491,7 @@ async function borseRecent(limit = 60) {
 
 module.exports = {
   overview, reconcile, detectCostRule, costWhere, dateSpan, sources,
+  parseFilters, hasFilters, dims,
   salesByPlace, salesByItem, salesByMonth, salesByCustomer, salesByClass, costByMonth,
   movementsByDirection, movementsByMonth, movementsByPlace, topMovementItems,
   inventoryByPlace, inventoryByClass,

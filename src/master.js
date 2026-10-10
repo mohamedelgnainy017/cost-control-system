@@ -28,7 +28,7 @@ const CODE9 = /^\d{9}$/;           // كود الصنف: 9 خانات مكتمل
 
 /* ================= الأصناف ================= */
 
-async function listItems({ origin, q, limit = 500 } = {}) {
+async function listItems({ origin, q, limit = 500, group, cls } = {}) {
   const where = ["i.kind = 'item'"], p = [];
   if (origin && origin !== 'all') { p.push(origin); where.push(`i.origin = $${p.length}`); }
   if (q) {
@@ -36,6 +36,8 @@ async function listItems({ origin, q, limit = 500 } = {}) {
     where.push(`(i.code ILIKE $${p.length} OR i.descr ILIKE $${p.length}
               OR i.group_desc ILIKE $${p.length} OR i.class_desc ILIKE $${p.length})`);
   }
+  if (group) { p.push(group); where.push(`i.group_code = $${p.length}`); }
+  if (cls) { p.push(cls); where.push(`i.class_code = $${p.length}`); }
   p.push(Math.min(Number(limit) || 500, 3000));
   return all(`
     SELECT i.code, i.descr, i.uom, i.group_code, i.group_desc, i.class_code, i.class_desc,

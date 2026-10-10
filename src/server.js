@@ -225,18 +225,18 @@ async function overviewCached() {
 
 /* ---------- التقارير: مصدر واحد يخدم العرض في المتصفح والتصدير CSV ---------- */
 const REPORTS = {
-  'sales-place': { label: 'مبيعات وربحية حسب المكان', desc: 'الإيراد • التكلفة • مجمل الربح • الهامش', fn: () => A.salesByPlace() },
-  'sales-item': { label: 'مبيعات حسب الصنف', desc: 'أعلى الأصناف قيمةً وكميةً', fn: () => A.salesByItem(1000) },
-  'sales-month': { label: 'المبيعات شهرياً', desc: 'اتجاه الإيراد والكمية الشهري', fn: () => A.salesByMonth() },
-  'sales-customer': { label: 'المبيعات حسب العميل', desc: 'الإيراد والضريبة لكل عميل', fn: () => A.salesByCustomer(1000) },
-  'sales-class': { label: 'المبيعات حسب فئة المستند', desc: 'الفئة والحالة والقيمة الموقّعة', fn: () => A.salesByClass() },
-  'costs-month': { label: 'تكلفة المبيعات شهرياً', desc: 'الإجمالي الشهري لتكلفة الوحدات المباعة', fn: () => A.costByMonth() },
-  'movements-direction': { label: 'الحركات حسب التوجيه', desc: 'وارد وصادر لكل توجيه', fn: () => A.movementsByDirection() },
-  'movements-month': { label: 'الحركات شهرياً', desc: 'تدفق الوارد والصادر شهرياً', fn: () => A.movementsByMonth() },
-  'movements-place': { label: 'الحركات حسب المكان', desc: 'الوارد والصادر لكل وحدة', fn: () => A.movementsByPlace() },
-  'movements-items': { label: 'أعلى الأصناف حركةً', desc: 'الأصناف الأعلى حركةً بالقيمة', fn: () => A.topMovementItems(200) },
-  'inventory-place': { label: 'المخزون حسب المكان', desc: 'الافتتاحي والختامي لكل مكان', fn: () => A.inventoryByPlace() },
-  'inventory-class': { label: 'المخزون حسب التصنيف', desc: 'توزيع قيمة المخزون على التصنيفات', fn: () => A.inventoryByClass() },
+  'sales-place': { label: 'مبيعات وربحية حسب المكان', desc: 'الإيراد • التكلفة • مجمل الربح • الهامش', fn: F => A.salesByPlace(F) },
+  'sales-item': { label: 'مبيعات حسب الصنف', desc: 'أعلى الأصناف قيمةً وكميةً', fn: F => A.salesByItem(F, 1000) },
+  'sales-month': { label: 'المبيعات شهرياً', desc: 'اتجاه الإيراد والكمية الشهري', fn: F => A.salesByMonth(F) },
+  'sales-customer': { label: 'المبيعات حسب العميل', desc: 'الإيراد والضريبة لكل عميل', fn: F => A.salesByCustomer(F, 1000) },
+  'sales-class': { label: 'المبيعات حسب فئة المستند', desc: 'الفئة والحالة والقيمة الموقّعة', fn: F => A.salesByClass(F) },
+  'costs-month': { label: 'تكلفة المبيعات شهرياً', desc: 'الإجمالي الشهري لتكلفة الوحدات المباعة', fn: F => A.costByMonth(F) },
+  'movements-direction': { label: 'الحركات حسب التوجيه', desc: 'وارد وصادر لكل توجيه', fn: F => A.movementsByDirection(F) },
+  'movements-month': { label: 'الحركات شهرياً', desc: 'تدفق الوارد والصادر شهرياً', fn: F => A.movementsByMonth(F) },
+  'movements-place': { label: 'الحركات حسب المكان', desc: 'الوارد والصادر لكل وحدة', fn: F => A.movementsByPlace(F) },
+  'movements-items': { label: 'أعلى الأصناف حركةً', desc: 'الأصناف الأعلى حركةً بالقيمة', fn: F => A.topMovementItems(F, 200) },
+  'inventory-place': { label: 'المخزون حسب المكان', desc: 'الافتتاحي والختامي لكل مكان', fn: F => A.inventoryByPlace(F) },
+  'inventory-class': { label: 'المخزون حسب التصنيف', desc: 'توزيع قيمة المخزون على التصنيفات', fn: F => A.inventoryByClass(F) },
   'reconcile': { label: 'مطابقة الأرصدة', desc: 'رصيد نهاية كل تاريخ سابق مقابل بداية التاريخ التالي', fn: () => DB.all('SELECT * FROM recon ORDER BY ABS(diff_val) DESC') },
   'quality': { label: 'جودة البيانات', desc: 'كل الملاحظات والفحوص', fn: () => quality.listIssues() },
   'borse-latest': { label: 'أسعار البورصة الأخيرة', desc: 'آخر سعر لكل صنف مع التغير', fn: () => A.borseLatest() },
@@ -338,7 +338,10 @@ const routes = {
 
   /* ---------- البيانات الأساسية: الأصناف (المجموعة والتصنيف أعمدة داخل items) ---------- */
   'GET /api/md/items': check(async (q, res) =>
-    ok(res, await M.listItems({ origin: q.get('origin'), q: q.get('q'), limit: q.get('limit') }))),
+    ok(res, await M.listItems({
+      origin: q.get('origin'), q: q.get('q'), limit: q.get('limit'),
+      group: q.get('group'), cls: q.get('cls'),
+    }))),
 
   'POST /api/md/items/save': check(async (q, res, body) => ok(res, await M.saveItem(body || {}))),
 
@@ -441,11 +444,14 @@ const routes = {
 
   'GET /api/health': async (q, res) => ok(res, { ...(await DB.info()), now: new Date().toISOString() }),
 
-  'GET /api/overview': async (q, res) => ok(res, await overviewCached()),
+  'GET /api/overview': async (q, res) => {
+    const F = A.parseFilters(q);
+    ok(res, A.hasFilters(F) ? await A.overview(F) : await overviewCached());
+  },
 
   'GET /api/quality': async (q, res) => {
     if (q.get('run') === '1') await quality.runRules();
-    ok(res, await quality.listIssues());
+    ok(res, await quality.listIssues(A.parseFilters(q)));
   },
   'POST /api/quality/run': async (q, res) => ok(res, await quality.runRules()),
 
@@ -453,22 +459,25 @@ const routes = {
     limit: Number(q.get('limit') || 100),
     offset: Number(q.get('offset') || 0),
     onlyMismatch: q.get('all') !== '1',
+    F: A.parseFilters(q),
   })),
 
-  'GET /api/sales/place': async (q, res) => ok(res, await A.salesByPlace()),
-  'GET /api/sales/item': async (q, res) => ok(res, await A.salesByItem(Number(q.get('limit') || 50))),
-  'GET /api/sales/month': async (q, res) => ok(res, await A.salesByMonth()),
-  'GET /api/sales/customer': async (q, res) => ok(res, await A.salesByCustomer(Number(q.get('limit') || 50))),
-  'GET /api/sales/class': async (q, res) => ok(res, await A.salesByClass()),
-  'GET /api/costs/month': async (q, res) => ok(res, await A.costByMonth()),
+  'GET /api/dims': async (q, res) => ok(res, await A.dims(q)),
 
-  'GET /api/movements/direction': async (q, res) => ok(res, await A.movementsByDirection()),
-  'GET /api/movements/month': async (q, res) => ok(res, await A.movementsByMonth()),
-  'GET /api/movements/place': async (q, res) => ok(res, await A.movementsByPlace()),
-  'GET /api/movements/items': async (q, res) => ok(res, await A.topMovementItems(Number(q.get('limit') || 30))),
+  'GET /api/sales/place': async (q, res) => ok(res, await A.salesByPlace(A.parseFilters(q))),
+  'GET /api/sales/item': async (q, res) => ok(res, await A.salesByItem(A.parseFilters(q), Number(q.get('limit') || 50))),
+  'GET /api/sales/month': async (q, res) => ok(res, await A.salesByMonth(A.parseFilters(q))),
+  'GET /api/sales/customer': async (q, res) => ok(res, await A.salesByCustomer(A.parseFilters(q), Number(q.get('limit') || 50))),
+  'GET /api/sales/class': async (q, res) => ok(res, await A.salesByClass(A.parseFilters(q))),
+  'GET /api/costs/month': async (q, res) => ok(res, await A.costByMonth(A.parseFilters(q))),
 
-  'GET /api/inventory/place': async (q, res) => ok(res, await A.inventoryByPlace()),
-  'GET /api/inventory/class': async (q, res) => ok(res, await A.inventoryByClass()),
+  'GET /api/movements/direction': async (q, res) => ok(res, await A.movementsByDirection(A.parseFilters(q))),
+  'GET /api/movements/month': async (q, res) => ok(res, await A.movementsByMonth(A.parseFilters(q))),
+  'GET /api/movements/place': async (q, res) => ok(res, await A.movementsByPlace(A.parseFilters(q))),
+  'GET /api/movements/items': async (q, res) => ok(res, await A.topMovementItems(A.parseFilters(q), Number(q.get('limit') || 30))),
+
+  'GET /api/inventory/place': async (q, res) => ok(res, await A.inventoryByPlace(A.parseFilters(q))),
+  'GET /api/inventory/class': async (q, res) => ok(res, await A.inventoryByClass(A.parseFilters(q))),
   'GET /api/span': async (q, res) => ok(res, await A.dateSpan()),
   'GET /api/sources': async (q, res) => ok(res, await A.sources()),
 
@@ -697,7 +706,8 @@ const routes = {
     const def = REPORTS[name];
     if (!def) return bad(res, 'اسم تقرير غير معروف');
     const limit = Math.max(1, Number(q.get('limit') || 500));
-    const rows = await def.fn();
+    const F = A.parseFilters(q);
+    const rows = await def.fn(F);
     ok(res, { name, label: def.label, desc: def.desc, total: rows.length, rows: rows.slice(0, limit) });
   },
 
@@ -705,7 +715,8 @@ const routes = {
     const name = q.get('name') || '';
     const def = REPORTS[name];
     if (!def) return bad(res, 'اسم تقرير غير معروف');
-    const rows = await def.fn();
+    const F = A.parseFilters(q);
+    const rows = await def.fn(F);
     const csv = toCsv(rows);
     res.writeHead(200, {
       'Content-Type': 'text/csv; charset=utf-8',
