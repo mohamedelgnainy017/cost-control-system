@@ -465,10 +465,14 @@ ALTER TABLE items ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'mine';
 ALTER TABLE movement_types ADD COLUMN IF NOT EXISTS system_desc TEXT;
 ALTER TABLE movement_types ADD COLUMN IF NOT EXISTS category TEXT;
 
--- التسلسل داخل جدول items واحد: التصنيف (أعلى) ← مجموعة المواد ← الصنف (أسفل).
--- تُحفظ المجموعات والتصنيفات كقيم على كل صنف، وأيضاً ككتالوجين خفيفين (كود + اسم فقط)
--- حتى «مجموعة من غير أصناف» أو يظهر كودها واسمها مقترنين في قائمة الاختيار بنموذج الصنف
--- (لا يحملان أي بيانات أصناف — بيانات الأصناف كلها في جدول items).
+-- جدول واحد للأصناف: المجموعات والتصنيفات صفوف داخل نفس الجدول بنوع kind:
+--   'class'   تصنيف (أعلى)      — 'group' مجموعة مواد — 'item' صنف فعلي (أسفل، كود 9 خانات)
+-- قيم (group_code / class_code) على كل صنف + صف نوعي واحد لكل مجموعة/تصنيف
+-- يملأ قائمتي الاختيار في نموذج الصنف ويديرهما زرا «＋ مجموعة» و«＋ تصنيف».
+ALTER TABLE items ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'item';
+
+-- (ترقية إصدارات سابقة) كتالوجا المجموعات والتصنيفات المنفصلان: ننشئهما مؤقتاً
+-- فقط لننقل بياناتهما إلى صفوف kind داخل items ثم نحذفهما نهائياً.
 CREATE TABLE IF NOT EXISTS item_groups (
   code       TEXT PRIMARY KEY,
   descr      TEXT,
@@ -498,15 +502,24 @@ CREATE TABLE IF NOT EXISTS warehouses (
   source_file  TEXT
 );
 
--- تهيئة: الأصناف الحالية كلها «مسجّلة»؛ كتالوجا المجموعات والتصنيفات من قيم الأصناف؛
+-- تهيئة: الأصناف الحالية كلها «مسجّلة»؛ والمجموعات والتصنيفات صفوف داخل items
 -- وسجل الشركات من وحدات locations القائمة
 UPDATE items SET origin = 'mine' WHERE origin IS NULL;
-INSERT INTO item_groups(code, descr)
-  SELECT DISTINCT group_code, group_desc FROM items WHERE COALESCE(group_code,'') <> ''
+INSERT INTO items(code, descr, kind, origin, updated_at)
+  SELECT DISTINCT group_code, group_desc, 'group', 'catalog', now() FROM items WHERE COALESCE(group_code,'') <> ''
   ON CONFLICT (code) DO NOTHING;
-INSERT INTO item_classes(code, descr)
-  SELECT DISTINCT class_code, class_desc FROM items WHERE COALESCE(class_code,'') <> ''
+INSERT INTO items(code, descr, kind, origin, updated_at)
+  SELECT DISTINCT class_code, class_desc, 'class', 'catalog', now() FROM items WHERE COALESCE(class_code,'') <> ''
   ON CONFLICT (code) DO NOTHING;
+-- نقل كتالوجي الإصدارات القديمة (حتى مجموعة/تصنيف مسجّل بلا أصناف يبقى موجوداً) ثم حذفهما
+INSERT INTO items(code, descr, kind, origin, updated_at)
+  SELECT code, descr, 'group', 'catalog', now() FROM item_groups
+  ON CONFLICT (code) DO NOTHING;
+INSERT INTO items(code, descr, kind, origin, updated_at)
+  SELECT code, descr, 'class', 'catalog', now() FROM item_classes
+  ON CONFLICT (code) DO NOTHING;
+DROP TABLE IF EXISTS item_groups;
+DROP TABLE IF EXISTS item_classes;
 INSERT INTO companies(company_code, company_name, currency)
   SELECT DISTINCT company_code, company_name, currency FROM locations WHERE COALESCE(company_code,'') <> ''
   ON CONFLICT (company_code) DO NOTHING;

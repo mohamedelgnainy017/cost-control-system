@@ -53,7 +53,7 @@ async function overview() {
            MIN(post_date) dmin, MAX(post_date) dmax FROM movements`);
 
   const counts = {
-    items: (await get('SELECT COUNT(*)::int c FROM items')).c,
+    items: (await get(`SELECT COUNT(*)::int c FROM items WHERE kind='item'`)).c,
     locations: (await get('SELECT COUNT(*)::int c FROM locations')).c,
     movement_types: (await get('SELECT COUNT(*)::int c FROM movement_types')).c,
     movements: mov.lines,

@@ -232,8 +232,8 @@ async function req(method, path, body, cookie) {
   /* 10) تنظيف بيانات الاختبار */
   try {
     await DB.run("DELETE FROM items WHERE code IN ('999888777','999888776','155555555')");
-    await DB.run("DELETE FROM item_groups WHERE code = 'ZZG'");
-    await DB.run("DELETE FROM item_classes WHERE code = 'ZZC'");
+    await DB.run("DELETE FROM items WHERE kind = 'group' AND code = 'ZZG'");
+    await DB.run("DELETE FROM items WHERE kind = 'class' AND code = 'ZZC'");
     await DB.run("DELETE FROM movements WHERE item = '155555555'");
     await DB.run("DELETE FROM locations WHERE unit_code = 'ZZN1'");
     await DB.run("DELETE FROM warehouses WHERE code = 'ZZW1'");

@@ -4,8 +4,8 @@
  *
  * كل بيانات الأصناف في جدول items واحد، والتسلسل داخله:
  *      التصنيف (أعلى)  ←  مجموعة المواد  ←  الصنف (أسفل، كود 9 خانات)
- * ومعها كتالوجان خفيفان (كود + اسم فقط) للمجموعات والتصنيفات يملآن قائمتي
- * الاختيار في نموذج الصنف وتديرهما زرا «＋ مجموعة» و«＋ تصنيف».
+ * والمجموعات والتصنيفات صفوف داخل نفس الجدول بنوع kind ('group' / 'class')
+ * تملآن قائمتي الاختيار في نموذج الصنف وتديرهما زرا «＋ مجموعة» و«＋ تصنيف».
  *
  * سياسة الأصناف (كما اتفقنا):
  *  1) أصنافي أنا (مسجّلة يدوياً أو من شيت الأصناف) تبقى بعلامة origin='mine'.
@@ -29,7 +29,7 @@ const CODE9 = /^\d{9}$/;           // كود الصنف: 9 خانات مكتمل
 /* ================= الأصناف ================= */
 
 async function listItems({ origin, q, limit = 500 } = {}) {
-  const where = [], p = [];
+  const where = ["i.kind = 'item'"], p = [];
   if (origin && origin !== 'all') { p.push(origin); where.push(`i.origin = $${p.length}`); }
   if (q) {
     p.push('%' + q + '%');
@@ -60,9 +60,9 @@ async function saveItem({ code, descr, uom, groupCode, groupDescr, classCode, cl
   if (!code) throw new Error('كود الصنف مطلوب');
   if (!descr) throw new Error('اسم الصنف مطلوب');
   if (!uom) throw new Error('وحدة القياس مطلوبة');
-  const grCat = await get('SELECT descr d FROM item_groups WHERE code=$1', [groupCode]);
+  const grCat = await get(`SELECT descr d FROM items WHERE kind='group' AND code=$1`, [groupCode]);
   if (grCat) groupDescr = grCat.d;
-  const clCat = await get('SELECT descr d FROM item_classes WHERE code=$1', [classCode]);
+  const clCat = await get(`SELECT descr d FROM items WHERE kind='class' AND code=$1`, [classCode]);
   if (clCat) classDescr = clCat.d;
   if (groupCode && !groupDescr) {
     const g = await get('SELECT group_desc d FROM items WHERE group_code=$1 AND COALESCE(group_desc,\'\')<>\'\' LIMIT 1', [groupCode]);
@@ -104,12 +104,17 @@ async function saveItem({ code, descr, uom, groupCode, groupDescr, classCode, cl
   return { code };
 }
 
-/* ضمان وجود الكتالوج (كود + اسم) لكل مجموعة/تصنيف مستخدم حتى يظهر في القوائم المنسدلة */
+/* ضمان وجود صف نوعي (كود + اسم) لكل مجموعة/تصنيف مستخدم حتى يظهر في القوائم المنسدلة —
+   داخل جدول items نفسه؛ لا يُمسح صف صنف فعلي لو تعارض كود المجموعة معه */
 async function ensureCats({ groupCode, groupDescr, classCode, classDescr }) {
-  if (groupCode) await run(`INSERT INTO item_groups(code, descr, updated_at) VALUES($1,$2,now())
-    ON CONFLICT (code) DO UPDATE SET descr=$2, updated_at=now()`, [groupCode, groupDescr]);
-  if (classCode) await run(`INSERT INTO item_classes(code, descr, updated_at) VALUES($1,$2,now())
-    ON CONFLICT (code) DO UPDATE SET descr=$2, updated_at=now()`, [classCode, classDescr]);
+  if (groupCode) await run(`INSERT INTO items(code, descr, kind, origin, updated_at)
+    VALUES($1,$2,'group','catalog',now())
+    ON CONFLICT (code) DO UPDATE SET descr=$2, updated_at=now()
+    WHERE items.kind <> 'item'`, [groupCode, groupDescr]);
+  if (classCode) await run(`INSERT INTO items(code, descr, kind, origin, updated_at)
+    VALUES($1,$2,'class','catalog',now())
+    ON CONFLICT (code) DO UPDATE SET descr=$2, updated_at=now()
+    WHERE items.kind <> 'item'`, [classCode, classDescr]);
 }
 
 /**
@@ -158,14 +163,14 @@ async function syncFromMovements() {
          OR (COALESCE(s.group_code,'')     <> '' AND COALESCE(i.class_code,'') <> s.group_code)
          OR (COALESCE(s.group_desc,'')     <> '' AND COALESCE(i.class_desc,'') <> s.group_desc) )`);
 
-  /* 3) تحديث كتالوجي المجموعات والتصنيفات من أحدث ما في الأصناف
+  /* 3) تحديث صفوف المجموعات والتصنيفات من أحدث ما في الأصناف
         (حتى تظهر أي مجموعة/تصنيف جديد في قوائم الاختيار) */
-  await run(`INSERT INTO item_groups(code, descr, updated_at)
-             SELECT DISTINCT group_code, group_desc, now() FROM items
+  await run(`INSERT INTO items(code, descr, kind, origin, updated_at)
+             SELECT DISTINCT group_code, group_desc, 'group', 'catalog', now() FROM items
              WHERE COALESCE(group_code,'') <> ''
              ON CONFLICT (code) DO NOTHING`);
-  await run(`INSERT INTO item_classes(code, descr, updated_at)
-             SELECT DISTINCT class_code, class_desc, now() FROM items
+  await run(`INSERT INTO items(code, descr, kind, origin, updated_at)
+             SELECT DISTINCT class_code, class_desc, 'class', 'catalog', now() FROM items
              WHERE COALESCE(class_code,'') <> ''
              ON CONFLICT (code) DO NOTHING`);
 
@@ -206,37 +211,38 @@ async function syncFromMovements() {
 }
 
 /* ============ المجموعات والتصنيفات ============
-   الكتالوج (كود + اسم) هو مصدر القوائم المنسدلة؛ وتُعرَض مع العدد وبتصنيفها الأب
-   المُقرأ من الأصناف التي تحملها — بينما كل بيانات الأصناف في جدول items واحد. */
+   صفوف داخل جدول items بنوع kind='group'/'class' — هي مصدر القوائم المنسدلة،
+   وتُعرَض مع العدد وبتصنيفها الأب المُقرأ من الأصناف التي تحملها. */
 
 const listGroups = () => all(`
   SELECT r.code, r.descr,
-         (SELECT COUNT(*)::int FROM items i WHERE i.group_code = r.code) items,
-         (SELECT MAX(i.class_code) FROM items i WHERE i.group_code = r.code) class_code,
-         (SELECT MAX(i.class_desc) FROM items i WHERE i.group_code = r.code) class_desc
-  FROM item_groups r
+         (SELECT COUNT(*)::int FROM items i WHERE i.kind = 'item' AND i.group_code = r.code) items,
+         (SELECT MAX(i.class_code) FROM items i WHERE i.kind = 'item' AND i.group_code = r.code) class_code,
+         (SELECT MAX(i.class_desc) FROM items i WHERE i.kind = 'item' AND i.group_code = r.code) class_desc
+  FROM items r
+  WHERE r.kind = 'group'
   ORDER BY r.code`);
 
 const listClasses = () => all(`
   SELECT r.code, r.descr,
-         (SELECT COUNT(*)::int FROM items i WHERE i.class_code = r.code) items
-  FROM item_classes r
+         (SELECT COUNT(*)::int FROM items i WHERE i.kind = 'item' AND i.class_code = r.code) items
+  FROM items r
+  WHERE r.kind = 'class'
   ORDER BY r.code`);
 
 async function saveGroup({ code, descr, editCode }) {
   code = str(code); descr = str(descr); const editing = str(editCode);
   if (!code) throw new Error('كود المجموعة مطلوب');
   if (!descr) throw new Error('اسم المجموعة مطلوب');
-  if (editing && editing !== code) {
-    const dup = await get('SELECT 1 x FROM item_groups WHERE code=$1', [code]);
-    if (dup) throw new Error('كود المجموعة مستخدم بالفعل');
+  const dup = await get('SELECT kind FROM items WHERE code=$1', [code]);
+  if (dup) {
+    if (dup.kind === 'item') throw new Error('هذا الكود مستخدم لصنف فعلي — اختر كوداً آخر');
+    if (!editing) throw new Error('كود المجموعة موجود بالفعل — استخدم «تعديل»');
+    if (editing !== code) throw new Error('كود المجموعة مستخدم بالفعل');
   }
-  if (!editing) {
-    const dup = await get('SELECT 1 x FROM item_groups WHERE code=$1', [code]);
-    if (dup) throw new Error('كود المجموعة موجود بالفعل — استخدم «تعديل»');
-  }
-  await run(`INSERT INTO item_groups(code, descr, updated_at) VALUES($1,$2,now())
-             ON CONFLICT (code) DO UPDATE SET descr=$2, updated_at=now()`, [code, descr]);
+  await run(`INSERT INTO items(code, descr, kind, origin, updated_at) VALUES($1,$2,'group','catalog',now())
+             ON CONFLICT (code) DO UPDATE SET descr=$2, updated_at=now()
+             WHERE items.kind <> 'item'`, [code, descr]);
   return { code };
 }
 
@@ -244,16 +250,15 @@ async function saveClass({ code, descr, editCode }) {
   code = str(code); descr = str(descr); const editing = str(editCode);
   if (!code) throw new Error('كود التصنيف مطلوب');
   if (!descr) throw new Error('اسم التصنيف مطلوب');
-  if (editing && editing !== code) {
-    const dup = await get('SELECT 1 x FROM item_classes WHERE code=$1', [code]);
-    if (dup) throw new Error('كود التصنيف مستخدم بالفعل');
+  const dup = await get('SELECT kind FROM items WHERE code=$1', [code]);
+  if (dup) {
+    if (dup.kind === 'item') throw new Error('هذا الكود مستخدم لصنف فعلي — اختر كوداً آخر');
+    if (!editing) throw new Error('كود التصنيف موجود بالفعل — استخدم «تعديل»');
+    if (editing !== code) throw new Error('كود التصنيف مستخدم بالفعل');
   }
-  if (!editing) {
-    const dup = await get('SELECT 1 x FROM item_classes WHERE code=$1', [code]);
-    if (dup) throw new Error('كود التصنيف موجود بالفعل — استخدم «تعديل»');
-  }
-  await run(`INSERT INTO item_classes(code, descr, updated_at) VALUES($1,$2,now())
-             ON CONFLICT (code) DO UPDATE SET descr=$2, updated_at=now()`, [code, descr]);
+  await run(`INSERT INTO items(code, descr, kind, origin, updated_at) VALUES($1,$2,'class','catalog',now())
+             ON CONFLICT (code) DO UPDATE SET descr=$2, updated_at=now()
+             WHERE items.kind <> 'item'`, [code, descr]);
   return { code };
 }
 

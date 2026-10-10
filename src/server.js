@@ -562,7 +562,7 @@ const routes = {
   },
 
   'GET /api/tables': async (q, res) => ok(res, {
-    items: (await DB.get('SELECT COUNT(*)::int c FROM items')).c,
+    items: (await DB.get(`SELECT COUNT(*)::int c FROM items WHERE kind='item'`)).c,
     locations: (await DB.get('SELECT COUNT(*)::int c FROM locations')).c,
     movement_types: (await DB.get('SELECT COUNT(*)::int c FROM movement_types')).c,
     movements: (await DB.get('SELECT COUNT(*)::int c FROM movements')).c,
