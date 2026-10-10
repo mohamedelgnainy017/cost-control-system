@@ -13,6 +13,14 @@ const { readWorkbook, readHeaderPreview, excelSerialToISO, num, numx, str } = re
 /* توحيد مسار الملف: نفس الملف بفواصل / و\ يجب أن يكون مصدراً واحداً وإلا تراكمت صفوف مكررة */
 const normPath = p => (p === null || p === undefined || p === '' ? p : path.normalize(String(p)));
 
+/** تاريخ اليوم من اسم الملف (مثل 01-09-2026) — يُستخدم للأرصدة التي بلا عمود تاريخ */
+function dateFromFileName(name) {
+  const m = String(name || '').match(/(\d{1,2})[-_.](\d{1,2})[-_.](\d{2,4})/);
+  if (!m) return null;
+  const y = m[3].length === 2 ? '20' + m[3] : m[3];
+  return `${y}-${String(m[2]).padStart(2, '0')}-${String(m[1]).padStart(2, '0')}`;
+}
+
 /* ---------------- كشف نوع الجدول ---------------- */
 // كل عنصر = نمط يُطبَّق على أي عنصر في صف العناوين (بعدد من الأعمدة المطلوبة)
 const SIGNATURES = {
@@ -20,8 +28,8 @@ const SIGNATURES = {
   locations: [/رمز الشركة/, /اسم الشركة/, /المكان$/],
   movement_types: [/^الحركة$/, /توج.*الحركة/],
   movements: [/تاريخ الترحيل/, /كمية$/, /مبلغ بعملةمحلية/, /نوع الحركة/],
-  sales: [/تاريخ الفاتورة/, /صافي القيمة/, /الكمية المفوترة/, /مستند مبيع/],
-  balances: [/تاريخ الرصيد/, /قيمة المخزون في نهاية الفترة/],
+  sales: [/تاريخ الفاتورة/, /صاف[ىي] القيم[ةه]/, /الكمية المفوترة|كمية الفاتور[ةه]/, /مستند مبيع|المستند المرجع/],
+  balances: [/كمية المخزون في (بداية|نهاية) الفترة/, /إجمالي كمية البضائع|كمية إصدار البضائع/],
   prices: [/تاريخ السعر/, /كود الصنف/, /التكلفة/, /السوق/],
 };
 
@@ -262,11 +270,17 @@ const SALES_COLS = ['invoice_date','invoice_doc','line_no','qty','price_uom','fx
 function salesRows(rows, t, importId, sourceFile) {
   const m = t.map;
   const ci = {
-    date: col(t, 'تاريخ الفاتورة'), inv: col(t, 'مستندفوترة', 'مستند فاتورة'), line: col(t, 'البند'),
-    qty: col(t, 'الكمية المفوترة'), uom: col(t, 'و.م'), rate: col(t, 'سعر الصرف'), net: col(t, 'صافي القيمة'),
-    ccy1: col(t, 'عملة'), ccy2: col(t, 'عملة2'), saleDoc: col(t, 'مستند مبيع'), saleLine: col(t, 'بند'),
-    item: col(t, 'المادة'), itemDesc: col(t, 'وصف البند'), refDoc: col(t, 'مستند مرجع'), refLine: col(t, 'RefItm'),
-    unit: col(t, 'وحدة'), cls: col(t, 'فئة مستند'), status: col(t, 'الحالة'), ben: col(t, 'المستفيد'),
+    date: col(t, 'تاريخ الفاتورة'),
+    inv: col(t, 'مستندفوترة', 'مستند فاتورة', 'المستند المرجع'), line: col(t, 'البند'),
+    qty: col(t, 'الكمية المفوترة', 'كمية الفاتوره'),
+    uom: col(t, 'و.م', 'الوحده', 'الوحدة'), rate: col(t, 'سعر الصرف'),
+    net: col(t, 'صافي القيمة', 'صافى القيمه'),
+    ccy1: col(t, 'عملة المستند', 'عملة'), ccy2: col(t, 'عملة2'),
+    saleDoc: col(t, 'مستند مبيع'), saleLine: col(t, 'بند'),
+    item: col(t, 'كود الصنف', 'المادة'), itemDesc: col(t, 'وصف البند', 'اسم الصنف'),
+    refDoc: col(t, 'مستند مرجع', 'المستند المرجع'), refLine: col(t, 'RefItm'),
+    unit: col(t, 'وحدة'), cls: col(t, 'فئة مستند'), status: col(t, 'الحالة'),
+    ben: col(t, 'المستفيد', 'اسم العميل الاساسي'),
     tax: col(t, 'مبلغ الضريبة'), ccy3: col(t, 'عملة3'), credit: col(t, 'سعر الائتمان'), ccy4: col(t, 'عملة4'),
     sub: col(t, 'الإجمالي الفرعي'), ccy5: col(t, 'عملة5'), cost: col(t, 'التكلفة'), ccy6: col(t, 'عملة6'),
   };
@@ -276,8 +290,11 @@ function salesRows(rows, t, importId, sourceFile) {
     const item = str(row[ci.item]);
     const inv = str(row[ci.inv]);
     if (!item && !inv) { skipped++; continue; }
-    const cls = str(row[ci.cls]), status = str(row[ci.status]);
-    const sign = (cls + status === 'CA' || cls + status === 'HC') ? 1 : -1;
+    const cls = str(ci.cls >= 0 ? row[ci.cls] : ''), status = str(ci.status >= 0 ? row[ci.status] : '');
+    /* بلا عمودي الفئة/الحالة (ملف المبيعات اليومي): كل الصفوف مبيعات موجبة */
+    const sign = (ci.cls < 0 && ci.status < 0)
+      ? 1
+      : (cls + status === 'CA' || cls + status === 'HC') ? 1 : -1;
     const qty = num(row[ci.qty]);
     const net = num(row[ci.net]);
     out.push([
@@ -307,11 +324,13 @@ function balanceRows(rows, t, importId, sourceFile) {
     cq: col(t, 'كمية المخزون في نهاية الفترة'), cv: col(t, 'قيمة المخزون في نهاية الفترة'),
   };
   const out = []; let skipped = 0;
+  const fileDate = dateFromFileName(sourceFile);   // شيت الأرصدة اليومي بلا عمود تاريخ — التاريخ من اسم الملف
   for (let r = t.headerRow + 1; r < rows.length; r++) {
     const row = rows[r] || [];
     const item = str(row[ci.item]);
     if (!item) { skipped++; continue; }
-    out.push([excelSerialToISO(row[ci.date]), item, str(row[ci.desc]), str(row[ci.uom]), str(row[ci.company]),
+    const date = ci.date >= 0 ? excelSerialToISO(row[ci.date]) : (fileDate || '');
+    out.push([date, item, str(row[ci.desc]), str(row[ci.uom]), str(row[ci.company]),
       str(row[ci.unit]), str(row[ci.storage]), str(row[ci.ccy]), str(row[ci.mtype]),
       num(row[ci.oq]), num(row[ci.ov]), num(row[ci.cq]), num(row[ci.cv]), null, r + 1, importId, sourceFile]);
   }
