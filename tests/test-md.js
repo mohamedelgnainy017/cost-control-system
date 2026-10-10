@@ -207,6 +207,26 @@ async function req(method, path, body, cookie) {
     badTag('إعداد المشاهد التجريبي (status=' + vlg.status + ')');
   }
 
+  /* 8) استيراد الملفات اليومية: قائمة + تاريخ اليوم من الاسم + الحذف */
+  const dl = await req('GET', '/api/files/daily?cat=movements', null, ck);
+  chk(dl.status === 200 && Array.isArray(dl.j.data && dl.j.data.files),
+    'GET /api/files/daily?cat=movements = 200 (قائمة ملفات)');
+  const dlSales = await req('GET', '/api/files/daily?cat=sales', null, ck);
+  chk(dlSales.status === 200, 'GET /api/files/daily?cat=sales = 200');
+  const dlBad = await req('GET', '/api/files/daily?cat=xxx', null, ck);
+  chk(dlBad.status === 400, 'فئة يومية غير معروفة → 400');
+  await DB.run(`INSERT INTO imports (file_path, file_name, dataset, sheet_name, rows_total, rows_inserted, status)
+               VALUES ($1, $2, 'movements', 'fake', 5, 5, 'ok')`,
+               ['X:\\DAILY\\01-10-2026.xlsx', '01-10-2026.xlsx']);
+  const listed = await req('GET', '/api/files/daily?cat=movements', null, ck);
+  const fakeRow = (listed.j.data && listed.j.data.files || []).find(f => (f.file_name || '') === '01-10-2026.xlsx');
+  chk(!!fakeRow && fakeRow.date === '2026-10-01', 'قراءة تاريخ اليوم من اسم الملف (01-10-2026)');
+  const del = await req('POST', '/api/files/delete', { cat: 'movements', file: 'X:\\DAILY\\01-10-2026.xlsx' }, ck);
+  chk(del.status === 200, 'حذف ملف يومي = 200');
+  const goneImp = await req('GET', '/api/files/daily?cat=movements', null, ck);
+  chk(!(goneImp.j.data && goneImp.j.data.files || []).some(f => (f.file_name || '').startsWith('01-10-2026')),
+    'الملف المحذوف اختفى من القائمة');
+
   console.log('\nRESULT: ' + pass + ' passed, ' + fail + ' failed');
 
   /* 10) تنظيف بيانات الاختبار */
@@ -222,6 +242,7 @@ async function req(method, path, body, cookie) {
     await DB.run("DELETE FROM companies WHERE company_code = 'ZZT'");
     await DB.run("DELETE FROM movement_types WHERE type_code = 'ZZZ'");
     await DB.delSetting('tab_perms');
+    await DB.run(`DELETE FROM imports WHERE file_path LIKE 'X:%'`);   // سجلات اليوم الوهمية
     console.log('cleanup done');
   } catch (e) { console.log('cleanup error: ' + e.message); }
   process.exit(fail ? 1 : 0);

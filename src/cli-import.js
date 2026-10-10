@@ -16,6 +16,8 @@ const pwArg = args.find(a => a.startsWith('--password='));
 const password = pwArg ? pwArg.split('=').slice(1).join('=') : undefined;
 const onlyArg = args.find(a => a.startsWith('--only='));
 const only = onlyArg ? onlyArg.slice('--only='.length).split(',').map(s => s.trim()).filter(Boolean) : undefined;
+const asArg = args.find(a => a.startsWith('--as='));
+const asSource = asArg ? asArg.slice('--as='.length) : undefined;
 const filePath = path.resolve(file);
 
 (async () => {
@@ -36,7 +38,7 @@ const filePath = path.resolve(file);
     await DB.init();   // تجهيز المخطط (جداول جديدة قد تُضاف لاحقاً)
     console.log('جاري الاستيراد...');
     const t0 = Date.now();
-    const res = await importFile(filePath, { password, only });
+    const res = await importFile(filePath, { password, only, asSource });
     const ms = Date.now() - t0;
 
     // تحديث إحصاءات المُخطط بعد كل استيراد حتى يبقى المخطط ثابت الدقة

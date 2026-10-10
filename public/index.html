@@ -46,14 +46,8 @@
     <button data-tab="dashboard" class="active"><i>◧</i><span>لوحة التحكم</span></button>
 
     <button data-tab="md"><i>▦</i><span>البيانات الأساسية</span></button>
-
-    <div class="nav-label">العمليات</div>
-    <button data-tab="inventory"><i>◫</i><span>المخزون والمطابقة</span></button>
-    <button data-tab="sales"><i>◈</i><span>المبيعات والربحية</span></button>
-    <button data-tab="movements"><i>⇄</i><span>الحركات</span></button>
-    <button data-tab="borse"><i>⌁</i><span>البورصة اليومية</span></button>
-    <button data-tab="prices"><i>¤</i><span>الأسعار اليومية</span></button>
-    <button data-tab="costs"><i>∑</i><span>التكلفة اليومية</span></button>
+    <button data-tab="daily"><i>◫</i><span>البيانات اليومية</span></button>
+    <button data-tab="pricegroup"><i>⌁</i><span>الأسعار اليومية</span></button>
 
     <div class="nav-label">البيانات</div>
     <button data-tab="quality"><i>◇</i><span>جودة البيانات</span></button>
@@ -246,8 +240,65 @@
     </div>
   </section>
 
+  <!-- ============ البيانات اليومية: مهاب ============
+       استيراد ملفات اليوم + متابعة النتائج -->
+  <section id="tab-daily">
+    <div class="card">
+      <div class="card-h">
+        <h3>البيانات اليومية <small>اختر ملف يوم (باسم التاريخ) أو تابع النتائج</small></h3>
+      </div>
+      <div class="md-land">
+        <button class="md-tile" data-sub="movements">
+          <i>⇄</i><b>حركات سيستم يومية</b>
+          <span>زر تحميل ملف الحركات اليومية (باسم اليوم) + وارد وصادر الحركات واتجاهاتها.</span>
+        </button>
+        <button class="md-tile" data-sub="sales">
+          <i>◈</i><b>مبيعات يومية</b>
+          <span>زر تحميل ملف المبيعات اليومية + الإيراد والتكلفة والربحية حسب المكان والصنف.</span>
+        </button>
+        <button class="md-tile" data-sub="inventory">
+          <i>◫</i><b>أرصدة يومية</b>
+          <span>زر تحميل ملف الأرصدة اليومية + المخزون والمطابقة (افتتاحي + حركات = ختامي).</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ الأسعار اليومية: مهاب ============ -->
+  <section id="tab-pricegroup">
+    <div class="card">
+      <div class="card-h">
+        <h3>الأسعار اليومية <small>متابعة البورصة وأسعار السوق وحساب التكلفة اليومية</small></h3>
+      </div>
+      <div class="md-land">
+        <button class="md-tile" data-sub="borse">
+          <i>⌁</i><b>متابعة البورصة اليومية</b>
+          <span>جلب ذاتي للأسعار من Yahoo وبنك مصر + تعديل يدوي مؤرخ وسجل التعديلات.</span>
+        </button>
+        <button class="md-tile" data-sub="prices">
+          <i>¤</i><b>أسعار السوق اليومية</b>
+          <span>أربع قيم لكل صنف/يوم: تكلفة وسوق — أرضه ووصال + تعديل مؤرخ.</span>
+        </button>
+        <button class="md-tile" data-sub="costs">
+          <i>∑</i><b>حساب التكلفة اليومية</b>
+          <span>محرك التكلفة اليومية: شبك صنف × مصنع + تحذيرات + إعادة بناء كاملة.</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ المخزون ============ -->
   <section id="tab-inventory">
+    <div class="card">
+      <div class="card-h">
+        <h3>أرصدة يومية <small>المخزون والمطابقة — افتتاحي + حركات = ختامي</small></h3>
+        <div class="row">
+          <button class="btn sm ghost" data-back="daily">‹ رجوع</button>
+          <button class="btn sm" data-daily-import="balances">⬆ استيراد البيانات</button>
+        </div>
+      </div>
+    </div>
+
     <div class="grid kpis" id="inv-kpis"></div>
 
     <div class="card mt">
@@ -271,6 +322,16 @@
 
   <!-- ============ المبيعات ============ -->
   <section id="tab-sales">
+    <div class="card">
+      <div class="card-h">
+        <h3>مبيعات يومية <small>الإيراد والتكلفة والربحية — مكان المبيعات والربحية</small></h3>
+        <div class="row">
+          <button class="btn sm ghost" data-back="daily">‹ رجوع</button>
+          <button class="btn sm" data-daily-import="sales">⬆ استيراد البيانات</button>
+        </div>
+      </div>
+    </div>
+
     <div class="grid kpis" id="sal-kpis"></div>
 
     <div class="card mt">
@@ -296,6 +357,16 @@
 
   <!-- ============ الحركات ============ -->
   <section id="tab-movements">
+    <div class="card">
+      <div class="card-h">
+        <h3>حركات سيستم يومية <small>تحميل ملف الحركات اليومية + وارد وصادر الحركات</small></h3>
+        <div class="row">
+          <button class="btn sm ghost" data-back="daily">‹ رجوع</button>
+          <button class="btn sm" data-daily-import="movements">⬆ استيراد البيانات</button>
+        </div>
+      </div>
+    </div>
+
     <div class="grid two">
       <div class="card"><div class="card-h"><h3>الحركات حسب التوجيه</h3></div><div id="tbl-mv-dir" class="tblwrap"></div></div>
       <div class="card"><div class="card-h"><h3>وارد / صادر شهرياً</h3></div><div id="ch-mv-month"></div>
@@ -310,6 +381,15 @@
 
   <!-- ============ البورصة اليومية ============ -->
   <section id="tab-borse">
+    <div class="card">
+      <div class="card-h">
+        <h3>متابعة البورصة اليومية</h3>
+        <div class="row">
+          <button class="btn sm ghost" data-back="pricegroup">‹ رجوع</button>
+        </div>
+      </div>
+    </div>
+
     <div class="segs" id="borse-segs">
       <button class="seg on" data-pane="view">نظرة عامة</button>
       <button class="seg" data-pane="edit">✎ تعديل يدوي</button>
@@ -415,6 +495,15 @@
 
   <!-- ============ الأسعار اليومية ============ -->
   <section id="tab-prices">
+    <div class="card">
+      <div class="card-h">
+        <h3>أسعار السوق اليومية</h3>
+        <div class="row">
+          <button class="btn sm ghost" data-back="pricegroup">‹ رجوع</button>
+        </div>
+      </div>
+    </div>
+
     <div class="segs" id="pr-segs">
       <button class="seg on" data-pane="edit">✎ تعديل الأسعار</button>
       <button class="seg" data-pane="hist">سجل التعديلات</button>
@@ -465,6 +554,15 @@
 
   <!-- ============ التكلفة اليومية ============ -->
   <section id="tab-costs">
+    <div class="card">
+      <div class="card-h">
+        <h3>حساب التكلفة اليومية</h3>
+        <div class="row">
+          <button class="btn sm ghost" data-back="pricegroup">‹ رجوع</button>
+        </div>
+      </div>
+    </div>
+
     <div class="segs" id="cs-segs">
       <button class="seg on" data-pane="view">شبكة التكلفة</button>
       <button class="seg" data-pane="status">حالة المحرك</button>
@@ -642,6 +740,35 @@
         <div class="login-err" id="pw-err" hidden></div>
         <button class="btn" type="submit" id="pw-btn">حفظ كلمة المرور</button>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ============ استيراد البيانات اليومية (إضافة/استبدال/حذف/بحث) ============ -->
+<div class="modal" id="daily-files-modal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-h">
+      <h3>استيراد البيانات <small id="dfl-cat">—</small></h3>
+      <button class="icon-btn" data-close="daily-files-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+        <input class="input" id="dfl-q" placeholder="بحث بالاسم أو التاريخ…" style="flex:1;min-width:170px">
+        <button class="btn sm" id="dfl-add">＋ إضافة ملف</button>
+        <button class="btn sm ghost" id="dfl-refresh" title="تحديث القائمة">↻</button>
+        <input type="file" id="dfl-file" accept=".xlsx,.xls" hidden>
+      </div>
+      <div class="hint" style="margin-top:10px">
+        الملف يُسمّى بالتاريخ — مثال <b>01-10-2026.xlsx</b>. إذا رفعت الاسم نفسه مرة أخرى يقوم النظام
+        <b>باستبدال الملف القديم بالجديد</b> (تُمسح بياناته القديمة وتُدرج الجديدة مكانها) —
+        ومن القائمة تستطيع <b>إضافة ملف</b>، <b>استبدال</b> أي ملف قائم، <b>حذفه</b>، أو <b>البحث</b> باسمه.
+      </div>
+      <div id="tbl-dfl" class="tblwrap" style="margin-top:10px;max-height:360px"></div>
+      <div class="muted xs" id="dfl-count" style="margin-top:8px"></div>
+      <div id="dfl-progress" style="display:none;margin-top:10px">
+        <div class="progress"><i></i></div>
+        <div class="muted xs" id="dfl-stage" style="margin-top:8px"></div>
+      </div>
     </div>
   </div>
 </div>

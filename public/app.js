@@ -35,6 +35,8 @@ const dv = v => (Number(v) || 0) < 0 ? 'neg' : '';
 const TITLES = {
   dashboard: ['لوحة التحكم', 'إدارة المستخدمين وصلاحيات الشاشات'],
   md: ['البيانات الأساسية', 'الأصناف • المواقع والمصانع • أنواع الحركات'],
+  daily: ['البيانات اليومية', 'حركات سيستم • مبيعات • أرصدة — ملفات باسم التاريخ'],
+  pricegroup: ['الأسعار اليومية', 'متابعة البورصة • أسعار السوق • تكلفة يومية'],
   'md-items': ['الأصناف الأساسية', 'كود واسم ووحدة + المجموعات والتصنيفات — جلب تلقائي من الحركات'],
   'md-locations': ['المواقع والمصانع', 'الشركة ← الوحدة ← المخزن + المكان'],
   'md-movetypes': ['أنواع الحركات', 'النوع والوصف + وصف السيستم والتصنيف'],
@@ -83,48 +85,200 @@ function animateNum(el, text) {
 let current = 'dashboard';
 const loaders = {};
 
-/* قسم «البيانات الأساسية»: زر واحد في القايمة الجانبية، وجواه الشاشات الثلاث */
-const MD_SUBS = ['md-items', 'md-locations', 'md-movetypes'];
-const mdSubsAllowed = () => {
-  if (!me || !Array.isArray(me.tabs) || !me.tabs.length) return MD_SUBS;
-  return MD_SUBS.filter(t => me.tabs.includes(t));
+/* الأقسام: زر واحد في القايمة الجانبية «مثل البيانات الأساسية» وجواه عدة شاشات فرعية */
+const MD_GROUPS = {
+  md:     { title: 'البيانات الأساسية', crumb: 'الأصناف • المواقع والمصانع • أنواع الحركات',
+            subs: ['md-items', 'md-locations', 'md-movetypes'] },
+  daily:  { title: 'البيانات اليومية',  crumb: 'حركات سيستم • مبيعات • أرصدة',
+            subs: ['movements', 'sales', 'inventory'] },
+  pricegroup: { title: 'الأسعار اليومية',   crumb: 'متابعة البورصة • أسعار السوق • تكلفة يومية',
+            subs: ['borse', 'prices', 'costs'] },
 };
-function showMdLanding() {
-  const allowed = mdSubsAllowed();
+const mdSubsAllowed = id => {
+  const g = MD_GROUPS[id];
+  if (!g) return [];
+  const mine = me && Array.isArray(me.tabs) && me.tabs.length ? me.tabs : g.subs;
+  return g.subs.filter(t => mine.includes(t));
+};
+function showMdLanding(id) {
+  const g = MD_GROUPS[id];
+  if (!g) return;
+  const allowed = mdSubsAllowed(id);
   if (!allowed.length) {
-    toast('شاشة البيانات الأساسية غير مسموحة لدورك');
-    const alt = me && Array.isArray(me.tabs) && me.tabs[0] && me.tabs[0] !== 'md' ? me.tabs[0] : null;
+    toast('هذا القسم غير مسموح لدورك');
+    const alt = me && Array.isArray(me.tabs) && me.tabs[0] && me.tabs[0] !== id ? me.tabs[0] : null;
     if (alt) goTab(alt);
     return;
   }
   $$('section').forEach(s => s.classList.remove('active'));
-  $('#tab-md').classList.add('active');
-  const t = TITLES.md || ['البيانات الأساسية', ''];
-  $('#page-title').textContent = t[0];
-  $('#page-crumb').textContent = t[1];
+  $('#tab-' + id).classList.add('active');
+  $('#page-title').textContent = g.title;
+  $('#page-crumb').textContent = g.crumb;
   $('#sidebar').classList.remove('open');
-  $$('#tab-md [data-sub]').forEach(btn => vis(btn, allowed.includes(btn.dataset.sub)));
+  $$('#tab-' + id + ' [data-sub]').forEach(btn => vis(btn, allowed.includes(btn.dataset.sub)));
 }
-/* أزرار الشاشات داخل قسم البيانات الأساسية */
-$$('#tab-md [data-sub]').forEach(b => {
-  b.addEventListener('click', () => {
-    const name = b.dataset.sub;
-    if (!mdSubsAllowed().includes(name)) { toast('هذه الشاشة غير مسموحة لدورك'); return; }
-    $$('section').forEach(s => s.classList.remove('active'));
-    $('#tab-' + name).classList.add('active');
-    const t = TITLES[name] || [name, ''];
-    $('#page-title').textContent = t[0];
-    $('#page-crumb').textContent = t[1];
-    $('#sidebar').classList.remove('open');
-    loadTab(name).catch(e => toast('خطأ: ' + e.message));
+/* أزرار الشاشات الفرعية داخل الأقسام */
+Object.keys(MD_GROUPS).forEach(id => {
+  $$('#tab-' + id + ' [data-sub]').forEach(b => {
+    b.addEventListener('click', () => {
+      const name = b.dataset.sub;
+      if (!mdSubsAllowed(id).includes(name)) { toast('هذه الشاشة غير مسموحة لدورك'); return; }
+      $$('section').forEach(s => s.classList.remove('active'));
+      $('#tab-' + name).classList.add('active');
+      const t = TITLES[name] || [name, ''];
+      $('#page-title').textContent = t[0];
+      $('#page-crumb').textContent = t[1];
+      $('#sidebar').classList.remove('open');
+      loadTab(name).catch(e => toast('خطأ: ' + e.message));
+    });
   });
 });
-/* زر «‹ رجوع» داخل الشاشات الثلاث يعيدك لصفحة قسم البيانات الأساسية */
-$$('[data-back="md"]').forEach(b => {
+/* زر «‹ رجوع» داخل الشاشات الفرعية يعيدك لصفحة قسمها */
+$$('[data-back]').forEach(b => {
   b.addEventListener('click', () => {
-    const nb = document.querySelector('nav button[data-tab="md"]');
+    const nb = document.querySelector('nav button[data-tab="' + b.dataset.back + '"]');
     if (nb) nb.click();
   });
+});
+
+/* ---------------- استيراد الملفات اليومية: إضافة / استبدال / حذف / بحث ---------------- */
+const DAILY_CATS = {
+  movements: { label: 'الحركات اليومية', reload: () => loadMovements() },
+  sales:     { label: 'المبيعات اليومية', reload: () => loadSales() },
+  balances:  { label: 'الأرصدة اليومية',  reload: () => loadInventory() },
+};
+let dfCat = null;        // الفئة المفتوحة حالياً في نافذة الاستيراد
+let dfBusy = false;
+let dfReplacing = null;  // {file_name, file_path} عند الاستبدال
+
+const dflPill = f => f.stored
+  ? '<span class="pill info">محفوظ</span>'
+  : '<span class="pill">خارجي</span>';
+
+function dflRow(f) {
+  const dateTxt = f.date ? `<span class="pill warning">بتاريخ ${f.date}</span>` : '';
+  const last = f.last_imported ? new Date(f.last_imported).toLocaleString() : '—';
+  return `<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 6px;border-bottom:1px solid var(--line)">
+    <span style="flex:1;min-width:190px">
+      <b>${escHtml(f.file_name)}</b> ${dateTxt} ${dflPill(f)}
+      <div class="muted xs">${n0(f.rows_total)} صف • آخر استيراد ${escHtml(last)}</div>
+    </span>
+    <button class="btn sm" title="اختر ملفاً جديداً ليستبدل هذا الملف وبياناته" data-rep="${escHtml(f.file)}" data-fname="${escHtml(f.file_name)}">استبدال</button>
+    <button class="btn sm ghost" title="مسح صفوف هذا الملف نهائياً" data-del="${escHtml(f.file)}">حذف</button>
+  </div>`;
+}
+
+async function loadDailyFiles() {
+  if (!dfCat) return;
+  const d = await api('/api/files/daily?cat=' + dfCat);
+  const input = $('#dfl-q');
+  const q = ((input && input.value) || '').trim().toLowerCase();
+  const files = (d.files || []).filter(f =>
+    !q
+    || (f.file_name || '').toLowerCase().includes(q)
+    || (f.date || '').includes(q)
+    || (f.file || '').toLowerCase().includes(q)
+  );
+  const host = $('#tbl-dfl');
+  host.innerHTML = files.length
+    ? files.map(dflRow).join('')
+    : '<div class="muted" style="padding:14px 6px">لا توجد ملفات مستوردة لهذه الفئة — اضغط «＋ إضافة ملف».</div>';
+  $('#dfl-count').textContent = files.length + ' ملف' + (q ? ' (نتيجة البحث)' : '');
+  $$('#tbl-dfl [data-rep]').forEach(b => b.addEventListener('click', () => {
+    dfReplacing = { file_name: b.dataset.fname, file_path: b.dataset.rep };
+    $('#dfl-file').click();
+  }));
+  $$('#tbl-dfl [data-del]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('حذف هذا الملف نهائياً؟ تُمسح كل صفوفه من قاعدة البيانات.')) return;
+    try {
+      const r = await api('/api/files/delete', {
+        method: 'POST', headers: hdr,
+        body: JSON.stringify({ cat: dfCat, file: b.dataset.del }),
+      });
+      toast('تم الحذف ✔ حركات ' + n0(r.movements) + ' • مبيعات ' + n0(r.sales) + ' • أرصدة ' + n0(r.balances));
+      await loadDailyFiles();
+      const cfg = DAILY_CATS[dfCat];
+      if (cfg && cfg.reload) cfg.reload().catch(() => {});
+      refreshBadges(); loadImports(); loadToday();
+    } catch (e) { toast('خطأ: ' + e.message); }
+  }));
+}
+
+async function uploadDailyFile(file, name, as, cat) {
+  if (dfBusy) { toast('يوجد استيراد جارٍ — انتظر اكتماله'); return; }
+  dfBusy = true;
+  const pr = $('#dfl-progress');
+  pr.style.display = 'block';
+  $('#dfl-stage').textContent = 'جاري رفع الملف وحفظه…';
+  try {
+    const q = new URLSearchParams({ cat, name });
+    if (as) q.set('as', as);
+    const r = await fetch('/api/import/upload?' + q.toString(), { method: 'POST', body: file });
+    const j = await r.json().catch(() => ({ ok: false, error: 'استجابة غير صالحة' }));
+    if (!j.ok) throw new Error(j.error || j.message || 'فشل رفع الملف');
+    await pollDailyJob(j.data.jobId);
+  } catch (e) {
+    pr.style.display = 'none'; $('#dfl-stage').textContent = '';
+    toast('خطأ: ' + e.message);
+  } finally { dfBusy = false; }
+}
+
+function pollDailyJob(jobId) {
+  return new Promise(resolve => {
+    const pr = $('#dfl-progress');
+    const poll = setInterval(async () => {
+      try {
+        const j = await api('/api/import/status?id=' + jobId);
+        $('#dfl-stage').textContent = 'الحالة: ' + j.stage + ' (' + Math.round((Date.now() - j.started) / 1000) + ' ث)';
+        if (j.status === 'done' || j.status === 'error') {
+          clearInterval(poll);
+          pr.style.display = 'none'; $('#dfl-stage').textContent = '';
+          if (j.status === 'error') { toast('فشل الاستيراد: ' + (j.error || 'خطأ')); return resolve(); }
+          const tables = ((j.result && j.result.tables) || []).filter(t => !t.error);
+          const rows = tables.reduce((s, t) => s + (t.rows || 0), 0);
+          toast('تم الاستيراد ✔ ' + n0(rows) + ' صف في: ' + (tables.map(t => t.label).join('، ') || '—'));
+          await loadDailyFiles();
+          const cfg = DAILY_CATS[dfCat];
+          if (cfg && cfg.reload) cfg.reload().catch(() => {});
+          refreshBadges(); loadImports(); loadToday();
+          resolve();
+        }
+      } catch (e) {
+        clearInterval(poll);
+        pr.style.display = 'none'; $('#dfl-stage').textContent = '';
+        toast('خطأ في متابعة الاستيراد: ' + e.message);
+        resolve();
+      }
+    }, 1500);
+  });
+}
+
+function openDailyImport(cat) {
+  if (!me || !Array.isArray(me.tabs) || !me.tabs.includes('import')) {
+    toast('دورك لا يملك صلاحية الاستيراد — اطلب من المدير تفعيلها');
+    return;
+  }
+  dfCat = cat; dfReplacing = null;
+  $('#dfl-cat').textContent = '— ' + DAILY_CATS[cat].label;
+  $('#dfl-q').value = '';
+  const pr = $('#dfl-progress'); pr.style.display = 'none'; $('#dfl-stage').textContent = '';
+  $('#daily-files-modal').hidden = false;
+  loadDailyFiles().catch(e => toast('خطأ: ' + e.message));
+}
+
+$$('[data-daily-import]').forEach(b => b.addEventListener('click', () => openDailyImport(b.dataset.dailyImport)));
+$('#dfl-add')?.addEventListener('click', () => { dfReplacing = null; $('#dfl-file').click(); });
+$('#dfl-refresh')?.addEventListener('click', () => loadDailyFiles().catch(e => toast('خطأ: ' + e.message)));
+$('#dfl-q')?.addEventListener('input', () => loadDailyFiles().catch(() => {}));
+$('#dfl-file')?.addEventListener('change', async () => {
+  const input = $('#dfl-file');
+  const f = input.files && input.files[0];
+  input.value = '';
+  if (!f || !dfCat) { dfReplacing = null; return; }
+  try {
+    if (dfReplacing) await uploadDailyFile(f, dfReplacing.file_name, dfReplacing.file_path, dfCat);
+    else await uploadDailyFile(f, f.name, '', dfCat);
+  } finally { dfReplacing = null; }
 });
 
 $$('nav button').forEach(b => {
@@ -132,7 +286,7 @@ $$('nav button').forEach(b => {
     $$('nav button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     current = b.dataset.tab;
-    if (current === 'md') { showMdLanding(); return; }
+    if (MD_GROUPS[current]) { showMdLanding(current); return; }
     $$('section').forEach(s => s.classList.remove('active'));
     $('#tab-' + current).classList.add('active');
     const t = TITLES[current] || ['', ''];
@@ -1928,8 +2082,8 @@ function applyRoleUI() {
   /* ظهور الشاشات: محدَّد بصلاحيات الشاشات التي يضبطها المدير */
   const tabs = me && Array.isArray(me.tabs) ? me.tabs : null;
   $$('nav button').forEach(b => {
-    if (b.dataset.tab === 'md')
-      vis(b, !tabs || MD_SUBS.some(t => tabs.includes(t)));
+    const g = MD_GROUPS[b.dataset.tab];
+    if (g) vis(b, !tabs || g.subs.some(t => tabs.includes(t)));
     else vis(b, !tabs || tabs.includes(b.dataset.tab));
   });
   vis($('#btn-borse-fetch'), can('sync'));

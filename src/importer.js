@@ -402,7 +402,9 @@ function progress(stage, extra = {}) {
  * @returns {{fileName, sheets, tables, issues, protected}}
  */
 async function importFile(filePath, opts = {}) {
-  const sourceFile = normPath(filePath);
+  /* asSource: عند استبدال ملفٍ قائم (نفس «اسم اليوم») يُستورد المحتوى الجديد
+     بهوية الملف القديم نفسه حتى يُمسح صفوفه القديمة ثم تُدرج الجديدة مكانها */
+  const sourceFile = opts.asSource ? normPath(opts.asSource) : normPath(filePath);
   const only = Array.isArray(opts.only) && opts.only.length ? opts.only : null;
   progress('قراءة الملف');
   const sheets = readWorkbook(filePath, { password: opts.password });

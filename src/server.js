@@ -31,6 +31,30 @@ const MIME = {
   '.csv': 'text/csv; charset=utf-8',
 };
 
+/* ---------- استيراد الملفات اليومية (حفظ + قائمة + استبدال) ----------
+   الملف يُحفظ باسمه (عادةً تاريخ اليوم مثل 01-10-2026.xlsx) في
+   data/uploads/<الفئة> — ورفع نفس الاسم مرة أخرى يستبدل الملف والبيانات. */
+const UPLOADS_ROOT = path.join(__dirname, '..', 'data', 'uploads');
+const DAILY_CATS = {
+  movements: { table: 'movements', label: 'الحركات اليومية' },
+  sales: { table: 'sales', label: 'المبيعات اليومية' },
+  balances: { table: 'balances', label: 'الأرصدة اليومية' },
+};
+const uploadsDir = cat => path.join(UPLOADS_ROOT, cat);
+const sanitizeFileName = name => {
+  const s = String(name || '').replace(/[\\/:*?"<>|]/g, '_').trim();
+  return s || 'file.xlsx';
+};
+/** يقرى تاريخ اليوم من اسم الملف (مثل 01-10-2026) إن وُجد */
+function dateFromName(name) {
+  const m = String(name || '').match(/(\d{1,2})[-_.](\d{1,2})[-_.](\d{2,4})/);
+  if (!m) return null;
+  const y = m[3].length === 2 ? '20' + m[3] : m[3];
+  const iso = `${y}-${String(m[2]).padStart(2, '0')}-${String(m[1]).padStart(2, '0')}`;
+  const d = new Date(iso + 'T00:00:00Z');
+  return isNaN(d.getTime()) ? null : iso;
+}
+
 function send(res, code, body, headers = {}) {
   const data = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers });
@@ -93,6 +117,7 @@ function startImportJob(filePath, opts = {}) {
   const args = [path.join(__dirname, 'cli-import.js'), filePath];
   if (opts.password) args.push('--password=' + opts.password);
   if (Array.isArray(opts.only) && opts.only.length) args.push('--only=' + opts.only.join(','));
+  if (opts.asSource) args.push('--as=' + opts.asSource);
   const child = spawn(process.execPath, args, { cwd: path.join(__dirname, '..'), windowsHide: true });
   job.pid = child.pid;
 
@@ -615,6 +640,55 @@ const routes = {
     ok(res, analyzePreview(body.path));
   },
 
+  /* قائمة ملفات اليوم المفهرسة حسب الفئة (الحركات/المبيعات/الأرصدة) */
+  'GET /api/files/daily': async (q, res) => {
+    const cat = q.get('cat') || 'movements';
+    if (!DAILY_CATS[cat]) return bad(res, 'فئة يومية غير معروفة');
+    const files = await DB.all(`
+      SELECT file_name, file_path,
+             COUNT(*)::int imports_count,
+             MAX(imported_at) last_imported,
+             SUM(rows_inserted)::int rows_total,
+             SUM(rows_skipped)::int rows_skipped
+      FROM imports WHERE dataset = $1
+      GROUP BY file_name, file_path
+      ORDER BY MAX(imported_at) DESC NULLS LAST`, [cat]);
+    const up = uploadsDir(cat).toLowerCase();
+    const list = (files || []).map(r => {
+      const p = path.normalize(String(r.file_path || ''));
+      const pl = p.toLowerCase();
+      return {
+        ...r,
+        stored: pl.startsWith(up + '\\') || pl.startsWith(up + '/'),
+        date: dateFromName(r.file_name),
+        file: p,
+      };
+    });
+    ok(res, { cat, files: list });
+  },
+
+  /* حذف ملف مستورد سابقاً: صفوفه من الجداول + سجل الاستيراد + نسخته إن كانت محفوظة */
+  'POST /api/files/delete': async (q, res, body) => {
+    const { cat, file } = body || {};
+    if (!DAILY_CATS[cat]) return bad(res, 'فئة يومية غير معروفة');
+    if (!file) return bad(res, 'لم يُحدد الملف');
+    const p = path.normalize(String(file));
+    const cond = tbl => `regexp_replace(COALESCE(${tbl === 'imports' ? 'file_path' : 'source_file'},''), '/', chr(92),'g') =
+      regexp_replace($1, '/', chr(92),'g')`;
+    const agg = { movements: 0, sales: 0, balances: 0, prices: 0 };
+    for (const tbl of ['movements', 'sales', 'balances', 'prices']) {
+      const r = await DB.get(`SELECT COUNT(*)::int c FROM ${tbl} WHERE ${cond(tbl)}`, [p]);
+      if (r.c > 0) { await DB.run(`DELETE FROM ${tbl} WHERE ${cond(tbl)}`, [p]); agg[tbl] = r.c; }
+    }
+    await DB.run(`DELETE FROM imports WHERE ${cond('imports')}`, [p]);
+    let deletedFile = null;
+    const pl = p.toLowerCase();
+    if (pl.startsWith(UPLOADS_ROOT.toLowerCase() + '\\') || pl.startsWith(UPLOADS_ROOT.toLowerCase() + '/')) {
+      try { fs.unlinkSync(p); deletedFile = p; } catch (_) {}
+    }
+    ok(res, { ...agg, deletedFile });
+  },
+
   'GET /api/reports': async (q, res) =>
     ok(res, Object.entries(REPORTS).map(([name, r]) => ({ name, label: r.label, desc: r.desc || '' }))),
 
@@ -722,6 +796,8 @@ const PUBLIC_ROUTES = new Set([
 /* صلاحيات إضافية فوق «تسجيل الدخول» */
 const PERM_ROUTES = {
   'POST /api/import': 'import',
+  'POST /api/import/upload': 'import',
+  'POST /api/files/delete': 'import',
   'POST /api/quality/run': 'quality',
   'POST /api/borse/fetch': 'sync',
   'POST /api/borse/override': 'sync',
@@ -804,6 +880,34 @@ const server = http.createServer((req, res) => {
       catch (e) { console.error(e); bad(res, e.message, 500); }
     });
   };
+
+  if (key === 'POST /api/import/upload') {
+    /* رفع ملف يومي: الـ body هو بايتات الملف مباشرة (cat و name في query)
+       يُحفظ في data/uploads/فئة/اسم — رفع نفس الاسم يكتب فوق الملف القديم */
+    const chunks = [];
+    let size = 0;
+    req.on('data', c => { chunks.push(c); size += c.length; if (size > 300e6) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        const me = await guard();
+        if (me === 'stop') return;
+        const cat = u.searchParams.get('cat');
+        if (!DAILY_CATS[cat]) return bad(res, 'فئة يومية غير معروفة');
+        const dir = uploadsDir(cat);
+        fs.mkdirSync(dir, { recursive: true });
+        const name = sanitizeFileName(u.searchParams.get('name'));
+        const dest = path.join(dir, name);
+        fs.writeFileSync(dest, Buffer.concat(chunks));
+        const asSource = u.searchParams.get('as') || '';
+        const id = startImportJob(dest, {
+          password: u.searchParams.get('pw') || undefined,
+          asSource: asSource || undefined,
+        });
+        ok(res, { jobId: id, path: dest, replacing: !!asSource });
+      } catch (e) { console.error(e); bad(res, e.message, 500); }
+    });
+    return;
+  }
 
   if (route) return finish(route);
 
