@@ -367,14 +367,29 @@ const routes = {
 
   'POST /api/md/locs/company/save': check(async (q, res, body) => ok(res, await M.saveCompany(body || {}))),
 
+  'POST /api/md/locs/company/delete': check(async (q, res, body) => ok(res, await M.deleteCompany(body || {}))),
+
   'POST /api/md/locs/unit/save': check(async (q, res, body) => ok(res, await M.saveUnit(body || {}))),
 
+  'POST /api/md/locs/unit/delete': check(async (q, res, body) => ok(res, await M.deleteUnit(body || {}))),
+
   'POST /api/md/locs/warehouse/save': check(async (q, res, body) => ok(res, await M.saveWarehouse(body || {}))),
+
+  'POST /api/md/locs/warehouse/delete': check(async (q, res, body) => ok(res, await M.deleteWarehouse(body || {}))),
 
   /* ---------- البيانات الأساسية: أنواع الحركات ---------- */
   'GET /api/md/mtypes': check(async (q, res) => ok(res, await M.listMtypes({ q: q.get('q') }))),
 
   'POST /api/md/mtypes/save': check(async (q, res, body) => ok(res, await M.saveMtype(body || {}))),
+
+  'POST /api/md/mtypes/delete': check(async (q, res, body) => ok(res, await M.deleteMtype(body || {}))),
+
+  /* تصنيفات أنواع الحركات (إدارة من نفس الشاشة) */
+  'GET /api/md/mtype-cats': check(async (q, res) => ok(res, await M.listCategories())),
+
+  'POST /api/md/mtype-cats/save': check(async (q, res, body) => ok(res, await M.saveCategory(body || {}))),
+
+  'POST /api/md/mtype-cats/delete': check(async (q, res, body) => ok(res, await M.deleteCategory(body || {}))),
 
   'GET /api/users': async (q, res) => ok(res, await Auth.listUsers()),
 
@@ -774,6 +789,7 @@ const TAB_API = [
   ['/api/md/items', ['md-items']],
   ['/api/md/locs', ['md-locations']],
   ['/api/md/mtypes', ['md-movetypes']],
+  ['/api/md/mtype-cats', ['md-movetypes']],
   ['/api/inventory', ['inventory']],
   ['/api/reconcile', ['inventory']],
   ['/api/sales', ['sales']],
@@ -836,9 +852,15 @@ const PERM_ROUTES = {
   'POST /api/md/items/classes/save': 'master',
   'POST /api/md/items/classes/delete': 'master',
   'POST /api/md/locs/company/save': 'master',
+  'POST /api/md/locs/company/delete': 'master',
   'POST /api/md/locs/unit/save': 'master',
+  'POST /api/md/locs/unit/delete': 'master',
   'POST /api/md/locs/warehouse/save': 'master',
+  'POST /api/md/locs/warehouse/delete': 'master',
   'POST /api/md/mtypes/save': 'master',
+  'POST /api/md/mtypes/delete': 'master',
+  'POST /api/md/mtype-cats/save': 'master',
+  'POST /api/md/mtype-cats/delete': 'master',
 };
 
 const PERM_LABEL = {

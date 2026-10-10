@@ -225,9 +225,32 @@
         <h3>المواقع والمصانع <small>الشركة (أكبر) ← الوحدة ← المخزن (أصغر) + المكان</small></h3>
         <div class="row">
           <button class="btn sm ghost" data-back="md">‹ رجوع</button>
-          <button class="btn sm" id="md-wh-btn">＋ مخزن</button>
-          <button class="btn sm" id="md-unit-btn">＋ وحدة</button>
-          <button class="btn sm" id="md-comp-btn">＋ شركة</button>
+          <div class="cpp" id="md-loc-add-drp">
+            <button class="btn sm" id="md-loc-add-btn" type="button">＋ إضافة بيانات ▾</button>
+            <div class="cpp-menu" id="md-loc-add-menu" hidden>
+              <button class="cpp-item" type="button" data-loc-type="company"><i>▦</i><b>شركة</b>
+                <span class="cpp-acts">
+                  <span class="act" data-act="add">＋ إضافة</span>
+                  <span class="act" data-act="edit">✎ تعديل</span>
+                  <span class="act danger" data-act="del">🗑 حذف</span>
+                </span>
+              </button>
+              <button class="cpp-item" type="button" data-loc-type="unit"><i>⌂</i><b>موقع</b>
+                <span class="cpp-acts">
+                  <span class="act" data-act="add">＋ إضافة</span>
+                  <span class="act" data-act="edit">✎ تعديل</span>
+                  <span class="act danger" data-act="del">🗑 حذف</span>
+                </span>
+              </button>
+              <button class="cpp-item" type="button" data-loc-type="wh"><i>▣</i><b>مخزن</b>
+                <span class="cpp-acts">
+                  <span class="act" data-act="add">＋ إضافة</span>
+                  <span class="act" data-act="edit">✎ تعديل</span>
+                  <span class="act danger" data-act="del">🗑 حذف</span>
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="segs" id="md-loc-segs" style="margin-top:4px">
@@ -259,7 +282,25 @@
         <h3>أنواع الحركات <small>نوع الحركة ووصفها + وصف السيستم والتصنيف</small></h3>
         <div class="row">
           <button class="btn sm ghost" data-back="md">‹ رجوع</button>
-          <button class="btn sm" id="md-mtype-btn">＋ نوع حركة</button>
+          <div class="cpp" id="md-mt-add-drp">
+            <button class="btn sm" id="md-mt-add-btn" type="button">＋ إضافة بيانات ▾</button>
+            <div class="cpp-menu" id="md-mt-add-menu" hidden>
+              <button class="cpp-item" type="button" data-mt-type="mtype"><i>⇅</i><b>حركة</b>
+                <span class="cpp-acts">
+                  <span class="act" data-act="add">＋ إضافة</span>
+                  <span class="act" data-act="edit">✎ تعديل</span>
+                  <span class="act danger" data-act="del">🗑 حذف</span>
+                </span>
+              </button>
+              <button class="cpp-item" type="button" data-mt-type="category"><i>◫</i><b>تصنيف</b>
+                <span class="cpp-acts">
+                  <span class="act" data-act="add">＋ إضافة</span>
+                  <span class="act" data-act="edit">✎ تعديل</span>
+                  <span class="act danger" data-act="del">🗑 حذف</span>
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="hint">
@@ -1114,12 +1155,36 @@
           <input class="input" id="mt-sys" placeholder="ما الذي يفعله السيستم بهذا النوع …">
         </label>
         <label>التصنيف
-          <input class="input" id="mt-cat" placeholder="البند الذي يُصنَّف إليه …">
+          <select class="input" id="mt-cat">
+            <option value="">— بدون تصنيف —</option>
+          </select>
         </label>
         <div class="login-err" id="mt-err" hidden></div>
         <div class="row">
           <button class="btn" type="submit">حفظ</button>
           <button class="btn ghost" type="button" data-close="md-mtype-modal">إلغاء</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- تصنيف أنواع الحركات -->
+<div class="modal" id="md-mtcat-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="md-mtcat-title">إضافة تصنيف</h3>
+      <button class="icon-btn" data-close="md-mtcat-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="md-mtcat-form" autocomplete="off">
+        <label>اسم التصنيف
+          <input class="input" id="mtc-name" required placeholder="البند الذي تُصنَّف إليه الحركات …">
+        </label>
+        <div class="login-err" id="mtc-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit">حفظ</button>
+          <button class="btn ghost" type="button" data-close="md-mtcat-modal">إلغاء</button>
         </div>
       </form>
     </div>

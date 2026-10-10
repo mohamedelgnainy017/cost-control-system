@@ -423,6 +423,96 @@ async function saveMtype({ code, descr, systemDesc, category, editCode }) {
              ON CONFLICT (type_code) DO UPDATE
                SET direction=$2, system_desc=$3, category=$4`,
     [code, descr, systemDesc, category]);
+  if (category) await run(`INSERT INTO movement_categories(name, updated_at) VALUES($1, now())
+                           ON CONFLICT (name) DO NOTHING`, [category]);
+  return { code };
+}
+
+/* ---------- تصنيفات أنواع الحركات (إضافة/تعديل/حذف) ---------- */
+
+const listCategories = () => all(`
+  SELECT name,
+         (SELECT COUNT(*)::int FROM movement_types t WHERE t.category = name) types
+  FROM movement_categories ORDER BY name`);
+
+async function saveCategory({ name, editName }) {
+  name = str(name); const editing = str(editName);
+  if (!name) throw new Error('اسم التصنيف مطلوب');
+  if (editing && editing !== name) {
+    const dup = await get('SELECT 1 x FROM movement_categories WHERE name=$1', [name]);
+    if (dup) throw new Error('التصنيف موجود بالفعل');
+  }
+  if (!editing) {
+    const dup = await get('SELECT 1 x FROM movement_categories WHERE name=$1', [name]);
+    if (dup) throw new Error('التصنيف موجود بالفعل — استخدم «تعديل»');
+  }
+  await run(`INSERT INTO movement_categories(name, updated_at) VALUES($1, now())
+             ON CONFLICT (name) DO UPDATE SET updated_at=now()`, [name]);
+  if (editing && editing !== name) {
+    await run(`UPDATE movement_types SET category=$1 WHERE category=$2`, [name, editing]);
+  }
+  return { name };
+}
+
+async function deleteCategory({ name }) {
+  name = str(name);
+  if (!name) throw new Error('اسم التصنيف مطلوب');
+  const used = await get(`SELECT COUNT(*)::int n FROM movement_types WHERE category=$1`, [name]);
+  if (used && used.n) throw new Error(`لا يمكن حذف التصنيف — مازال مستخدماً في ${used.n} نوع حركة`);
+  const r = await run(`DELETE FROM movement_categories WHERE name=$1`, [name]);
+  if (!r.changes) throw new Error('التصنيف غير موجود — أو حُذف مسبقاً');
+  return { name };
+}
+
+async function deleteMtype({ code }) {
+  code = str(code);
+  if (!code) throw new Error('نوع الحركة مطلوب');
+  const used = await get(`SELECT COUNT(*)::int n FROM movements WHERE move_type=$1`, [code]);
+  if (used && used.n) throw new Error(`لا يمكن حذف نوع الحركة — مستخدم في ${used.n} حركة`);
+  const r = await run(`DELETE FROM movement_types WHERE type_code=$1`, [code]);
+  if (!r.changes) throw new Error('نوع الحركة غير موجود — أو حُذف مسبقاً');
+  return { code };
+}
+
+/* ---------- حذف المواقع (شركة/وحدة/مخزن) مع حماية المرتبطات ---------- */
+
+async function deleteCompany({ code }) {
+  code = str(code);
+  if (!code) throw new Error('كود الشركة مطلوب');
+  const u = await get(`SELECT COUNT(*)::int n FROM locations WHERE company_code=$1`, [code]);
+  const m = await get(`SELECT COUNT(*)::int n FROM movements WHERE company_code=$1`, [code]);
+  const b = await get(`SELECT COUNT(*)::int n FROM balances  WHERE company_code=$1`, [code]);
+  const w = await get(`SELECT COUNT(*)::int n FROM warehouses WHERE company_code=$1`, [code]);
+  if ((u.n || 0) + (m.n || 0) + (b.n || 0) + (w.n || 0))
+    throw new Error(`لا يمكن حذف الشركة — مرتبطة بـ ${u.n} وحدة و ${w.n} مخزن و ${m.n} حركة و ${b.n} رصيد`);
+  const r = await run(`DELETE FROM companies WHERE company_code=$1`, [code]);
+  if (!r.changes) throw new Error('الشركة غير موجودة — أو حُذفت مسبقاً');
+  return { code };
+}
+
+async function deleteUnit({ code }) {
+  code = str(code);
+  if (!code) throw new Error('كود الوحدة مطلوب');
+  const w = await get(`SELECT COUNT(*)::int n FROM warehouses WHERE unit_code=$1`, [code]);
+  const m = await get(`SELECT COUNT(*)::int n FROM movements  WHERE unit_code=$1`, [code]);
+  const b = await get(`SELECT COUNT(*)::int n FROM balances   WHERE unit_code=$1`, [code]);
+  const s = await get(`SELECT COUNT(*)::int n FROM sales      WHERE unit_code=$1`, [code]);
+  if ((w.n || 0) + (m.n || 0) + (b.n || 0) + (s.n || 0))
+    throw new Error(`لا يمكن حذف الوحدة — مرتبطة بـ ${w.n} مخزن و ${m.n} حركة و ${b.n} رصيد و ${s.n} سطر مبيعات`);
+  const r = await run(`DELETE FROM locations WHERE unit_code=$1`, [code]);
+  if (!r.changes) throw new Error('الوحدة غير موجودة — أو حُذفت مسبقاً');
+  return { code };
+}
+
+async function deleteWarehouse({ code }) {
+  code = str(code);
+  if (!code) throw new Error('كود المخزن مطلوب');
+  const m = await get(`SELECT COUNT(*)::int n FROM movements WHERE storage_loc=$1`, [code]);
+  const b = await get(`SELECT COUNT(*)::int n FROM balances  WHERE storage_loc=$1`, [code]);
+  if ((m.n || 0) + (b.n || 0))
+    throw new Error(`لا يمكن حذف المخزن — مستخدم في ${m.n} حركة و ${b.n} رصيد`);
+  const r = await run(`DELETE FROM warehouses WHERE code=$1`, [code]);
+  if (!r.changes) throw new Error('المخزن غير موجود — أو حُذف مسبقاً');
   return { code };
 }
 
@@ -431,5 +521,7 @@ module.exports = {
   listGroups, saveGroup, listClasses, saveClass,
   deleteItem, deleteGroup, deleteClass,
   listLocations, saveCompany, saveUnit, saveWarehouse,
-  listMtypes, saveMtype,
+  deleteCompany, deleteUnit, deleteWarehouse,
+  listMtypes, saveMtype, deleteMtype,
+  listCategories, saveCategory, deleteCategory,
 };

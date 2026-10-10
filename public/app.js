@@ -511,7 +511,7 @@ $('#mi-group')?.addEventListener('change', mdGroupToClass);
 
 function openMdItem(code) {
   const f = $('#md-item-form');
-  const r = code ? mdItemsRows.find(x => x.code === code) : null;
+  const r = code ? (mdItemsRows.find(x => x.code === code) || mdPickItems.find(x => x.code === code)) : null;
   f.dataset.edit = r ? r.code : '';
   $('#md-item-title').textContent = r ? 'تعديل صنف' : 'إضافة صنف';
   $('#mi-code').value = r ? r.code : '';
@@ -600,86 +600,90 @@ $('#md-class-form')?.addEventListener('submit', async e => {
 
 /* --- قائمة «إضافة بيانات»: صنف / مجموعة / تصنيف — كلٌّ بإضافة/تعديل/حذف ---
    تعديل/حذف يفتحان نافذة اختيار للسجل، والجلب من الحركات تلقائي مع كل استيراد */
+let mdPick = null;        /* إعداد النافذة الحالية */
 let mdPickItems = [];     /* سجلات النافذة الحالية */
-let mdPickType = 'item';  /* item | group | class */
+
+/* نافذة اختيار عامة تُستخدمها كل شاشات «إضافة بيانات»:
+   cfg = { title, label, noun, load, nameOf, onEdit, onDelete } */
+async function openPicker(cfg) {
+  mdPick = cfg;
+  const sel = $('#md-pick-sel'), info = $('#md-pick-info');
+  $('#md-pick-title').textContent = cfg.title;
+  const lbl = $('#md-pick-lbl'); if (lbl) lbl.firstChild.textContent = cfg.label + ' ';
+  sel.innerHTML = '<option value="">جارٍ التحميل…</option>';
+  if (info) info.textContent = '';
+  $('#md-pick-modal').hidden = false;
+  try { mdPickItems = await cfg.load(); }
+  catch (err) { mdPickItems = []; if (info) info.textContent = 'تعذّر التحميل: ' + err.message; }
+  const name = cfg.nameOf || (r => r.descr || r.name || '');
+  sel.innerHTML = mdPickItems.length
+    ? mdPickItems.map(r => `<option value="${escHtml(r.code)}">${escHtml(r.code)} — ${escHtml(name(r))}</option>`).join('')
+    : '<option value="">لا توجد بيانات</option>';
+  if (info) info.textContent = `${n0(mdPickItems.length)} ${cfg.noun} متاح — اختر ثم اضغط «تعديل» أو «حذف»`;
+}
+
+$('#md-pick-edit')?.addEventListener('click', () => {
+  const code = $('#md-pick-sel').value;
+  if (!code || !mdPickItems.some(r => r.code === code)) { toast('اختر عنصراً أولاً'); return; }
+  $('#md-pick-modal').hidden = true;
+  mdPick.onEdit(code);
+});
+
+$('#md-pick-del')?.addEventListener('click', async () => {
+  const code = $('#md-pick-sel').value;
+  if (!code || !mdPickItems.some(r => r.code === code)) { toast('اختر عنصراً أولاً'); return; }
+  if (!confirm(`حذف ${mdPick.noun} «${code}» نهائياً؟`)) return;
+  const btn = $('#md-pick-del'); if (btn) btn.disabled = true;
+  try { await mdPick.onDelete(code); $('#md-pick-modal').hidden = true; }
+  catch (err) { toast('خطأ: ' + err.message); }
+  finally { if (btn) btn.disabled = false; }
+});
 
 $('#md-add-btn')?.addEventListener('click', e => {
   e.stopPropagation();
   const m = $('#md-add-menu'); if (m) m.hidden = !m.hidden;
 });
-document.addEventListener('click', () => { const m = $('#md-add-menu'); if (m && !m.hidden) m.hidden = true; });
+document.addEventListener('click', () => {
+  ['#md-add-menu', '#md-loc-add-menu', '#md-mt-add-menu'].forEach(s => {
+    const m = $(s); if (m && !m.hidden) m.hidden = true;
+  });
+});
 
 $('#md-add-menu')?.addEventListener('click', e => {
   const it = e.target.closest('[data-type]');
   const act = e.target.closest('[data-act]');
   if (!it || !act) return;
-  const m = $('#md-add-menu'); if (m) m.hidden = true;
+  $('#md-add-menu').hidden = true;
   const type = it.dataset.type, a = act.dataset.act;
   if (a === 'add') {
     if (type === 'item') openMdItem(null);
     else if (type === 'group') openMdGroup(null);
     else openMdClass(null);
-  } else {
-    openPicker(type);
+    return;
   }
-});
-
-async function openPicker(type) {
-  mdPickType = type;
-  const noun = { item: 'صنف', group: 'مجموعة', class: 'تصنيف' }[type];
-  $('#md-pick-title').textContent = 'إدارة ال' + { item: 'أصناف', group: 'مجموعات', class: 'تصنيفات' }[type];
-  const lbl = $('#md-pick-lbl'); if (lbl) lbl.firstChild.textContent = 'اختر ال' + noun + ' المطلوب ';
-  const sel = $('#md-pick-sel'), info = $('#md-pick-info');
-  sel.innerHTML = '<option value="">جارٍ التحميل…</option>';
-  if (info) info.textContent = '';
-  $('#md-pick-modal').hidden = false;
-  try {
-    mdPickItems = type === 'item'
-      ? await api('/api/md/items?limit=3000')
-      : type === 'group' ? await api('/api/md/items/groups') : await api('/api/md/items/classes');
-  } catch (err) {
-    mdPickItems = [];
-    if (info) info.textContent = 'تعذّر التحميل: ' + err.message;
-  }
-  const name = r => r.descr || r.name || '';
-  sel.innerHTML = mdPickItems.length
-    ? mdPickItems.map(r => `<option value="${escHtml(r.code)}">${escHtml(r.code)} — ${escHtml(name(r))}</option>`).join('')
-    : '<option value="">لا توجد بيانات</option>';
-  if (info) info.textContent = `${n0(mdPickItems.length)} ${noun} متاح — اختر ثم اضغط «تعديل» أو «حذف»`;
-}
-
-$('#md-pick-edit')?.addEventListener('click', () => {
-  const sel = $('#md-pick-sel'); const code = sel.value;
-  if (!code || !mdPickItems.some(r => r.code === code)) { toast('اختر عنصراً أولاً'); return; }
-  $('#md-pick-modal').hidden = true;
-  if (mdPickType === 'item') openMdItem(code);
-  else if (mdPickType === 'group') openMdGroup(code);
-  else openMdClass(code);
-});
-
-$('#md-pick-del')?.addEventListener('click', async () => {
-  const sel = $('#md-pick-sel'); const code = sel.value;
-  if (!code || !mdPickItems.some(r => r.code === code)) { toast('اختر عنصراً أولاً'); return; }
-  const noun = { item: 'الصنف', group: 'المجموعة', class: 'التصنيف' }[mdPickType];
-  if (!confirm(`حذف ${noun} «${code}» نهائياً؟`)) return;
-  const btn = $('#md-pick-del'); if (btn) btn.disabled = true;
-  try {
-    const url = '/api/md/items'
-      + (mdPickType === 'group' ? '/groups' : mdPickType === 'class' ? '/classes' : '') + '/delete';
-    await api(url, { method: 'POST', headers: hdr, body: JSON.stringify({ code }) });
-    toast(`تم حذف ${noun} «${code}» ✔`);
-    $('#md-pick-modal').hidden = true;
-    await loadMdItems();
-  } catch (err) { toast('خطأ: ' + err.message); }
-  finally { if (btn) btn.disabled = false; }
+  const noun = { item: 'الصنف', group: 'المجموعة', class: 'التصنيف' }[type];
+  openPicker({
+    title: 'إدارة ' + { item: 'الأصناف', group: 'المجموعات', class: 'التصنيفات' }[type],
+    label: 'اختر ' + noun + ' المطلوب',
+    noun: noun,
+    nameOf: r => r.descr || r.name || '',
+    load: () => type === 'item' ? api('/api/md/items?limit=3000')
+      : type === 'group' ? api('/api/md/items/groups') : api('/api/md/items/classes'),
+    onEdit: code => { if (type === 'item') openMdItem(code); else if (type === 'group') openMdGroup(code); else openMdClass(code); },
+    onDelete: async code => {
+      const url = '/api/md/items'
+        + (type === 'group' ? '/groups' : type === 'class' ? '/classes' : '') + '/delete';
+      await api(url, { method: 'POST', headers: hdr, body: JSON.stringify({ code }) });
+      toast(`تم حذف ${noun} «${code}» ✔`);
+      await loadMdItems();
+    },
+  });
 });
 
 /* ---------------- شاشة المواقع والمصانع ---------------- */
 async function loadMdLocations() {
   const canM = can('master');
-  vis($('#md-comp-btn'), canM);
-  vis($('#md-unit-btn'), canM);
-  vis($('#md-wh-btn'), canM);
+  vis($('#md-loc-add-drp'), canM);
   mdLoc = await api('/api/md/locs');
   renderMdLocPane();
 }
@@ -793,9 +797,35 @@ function openMdLoc(type, code) {
   mdErr('mw-err', null);
   mdOpen('md-wh-modal');
 }
-$('#md-comp-btn')?.addEventListener('click', () => openMdLoc('company', null));
-$('#md-unit-btn')?.addEventListener('click', () => openMdLoc('unit', null));
-$('#md-wh-btn')?.addEventListener('click', () => openMdLoc('wh', null));
+/* قائمة «إضافة بيانات» في المواقع: شركة / موقع / مخزن — كلٌّ بإضافة/تعديل/حذف */
+$('#md-loc-add-btn')?.addEventListener('click', e => {
+  e.stopPropagation();
+  const m = $('#md-loc-add-menu'); if (m) m.hidden = !m.hidden;
+});
+$('#md-loc-add-menu')?.addEventListener('click', e => {
+  const it = e.target.closest('[data-loc-type]');
+  const act = e.target.closest('[data-act]');
+  if (!it || !act) return;
+  $('#md-loc-add-menu').hidden = true;
+  const type = it.dataset.locType, a = act.dataset.act;
+  if (a === 'add') { openMdLoc(type, null); return; }
+  const noun = { company: 'الشركة', unit: 'الموقع', wh: 'المخزن' }[type];
+  const listKey = { company: 'companies', unit: 'units', wh: 'warehouses' }[type];
+  const ep = { company: 'company', unit: 'unit', wh: 'warehouse' }[type];
+  openPicker({
+    title: 'إدارة ' + { company: 'الشركات', unit: 'المواقع', wh: 'المخازن' }[type],
+    label: 'اختر ' + noun + ' المطلوب',
+    noun: noun,
+    nameOf: r => r.name || '',
+    load: () => api('/api/md/locs').then(d => d[listKey] || []),
+    onEdit: code => openMdLoc(type, code),
+    onDelete: async code => {
+      await api(`/api/md/locs/${ep}/delete`, { method: 'POST', headers: hdr, body: JSON.stringify({ code }) });
+      toast(`تم حذف ${noun} «${code}» ✔`);
+      await loadMdLocations();
+    },
+  });
+});
 
 /* اختيار الوحدة: يعرض الشركة، ويملأ المكان إن كان فارغاً */
 $('#mw-unit')?.addEventListener('change', () => {
@@ -856,16 +886,16 @@ $('#md-wh-form')?.addEventListener('submit', async e => {
 
 /* ---------------- شاشة أنواع الحركات ---------------- */
 let mdMtypeCatsLoaded = false;
+let mdCats = [];
 async function loadMdMtypes() {
-  vis($('#md-mtype-btn'), can('master'));
+  vis($('#md-mt-add-drp'), can('master'));
   if (!mdMtypeCatsLoaded) {
     mdMtypeCatsLoaded = true;
-    const all = await api('/api/md/mtypes?q=').catch(() => []);
-    const cats = [...new Set(all.map(r => (r.category || '').trim()).filter(Boolean))].sort();
+    mdCats = await api('/api/md/mtype-cats').catch(() => []);
     const el = $('#md-mtype-cat');
     if (el) {
       el.innerHTML = '<option value="">كل التصنيفات</option>' +
-        cats.map(c => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('');
+        mdCats.map(c => `<option value="${escHtml(c.name)}">${escHtml(c.name)}</option>`).join('');
     }
   }
   await renderMdMtypes();
@@ -898,19 +928,27 @@ $('#md-mtype-clear')?.addEventListener('click', () => {
 });
 $('#md-mtype-q')?.addEventListener('keydown', e => { if (e.key === 'Enter') renderMdMtypes().catch(() => {}); });
 
+function fillMtCat(val) {
+  const el = $('#mt-cat'); if (!el) return;
+  const names = mdCats.map(c => c.name);
+  if (val && !names.includes(val)) names.push(val);
+  el.innerHTML = '<option value="">— بدون تصنيف —</option>' +
+    names.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join('');
+  el.value = val || '';
+}
+
 function openMdMtype(code) {
-  const r = code ? mdMtypes.find(x => x.code === code) : null;
+  const r = code ? (mdMtypes.find(x => x.code === code) || mdPickItems.find(x => x.code === code)) : null;
   const f = $('#md-mtype-form');
   f.dataset.edit = r ? r.code : '';
   $('#md-mtype-title').textContent = r ? 'تعديل نوع حركة' : 'إضافة نوع حركة';
   $('#mt-code').value = r ? r.code : '';
   $('#mt-descr').value = r ? (r.descr || '') : '';
   $('#mt-sys').value = r ? (r.system_desc || '') : '';
-  $('#mt-cat').value = r ? (r.category || '') : '';
+  fillMtCat(r ? (r.category || '') : '');
   mdErr('mt-err', null);
   mdOpen('md-mtype-modal');
 }
-$('#md-mtype-btn')?.addEventListener('click', () => openMdMtype(null));
 $('#md-mtype-form')?.addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target;
@@ -919,12 +957,78 @@ $('#md-mtype-form')?.addEventListener('submit', async e => {
   try {
     await api('/api/md/mtypes/save', { method: 'POST', headers: hdr, body: JSON.stringify({
       code: $('#mt-code').value.trim(), descr: $('#mt-descr').value.trim(),
-      systemDesc: $('#mt-sys').value.trim(), category: $('#mt-cat').value.trim(), editCode: editing }) });
+      systemDesc: $('#mt-sys').value.trim(), category: $('#mt-cat').value, editCode: editing }) });
     $('#md-mtype-modal').hidden = true;
     f.dataset.edit = '';
     toast(editing ? 'تم تعديل نوع الحركة ✔' : 'تمت إضافة نوع الحركة ✔');
-    await renderMdMtypes();
+    mdMtypeCatsLoaded = false;
+    await loadMdMtypes();
   } catch (err) { mdErr('mt-err', err.message); }
+});
+
+/* قائمة «إضافة بيانات» في أنواع الحركات: حركة / تصنيف — كلٌّ بإضافة/تعديل/حذف */
+$('#md-mt-add-btn')?.addEventListener('click', e => {
+  e.stopPropagation();
+  const m = $('#md-mt-add-menu'); if (m) m.hidden = !m.hidden;
+});
+$('#md-mt-add-menu')?.addEventListener('click', e => {
+  const it = e.target.closest('[data-mt-type]');
+  const act = e.target.closest('[data-act]');
+  if (!it || !act) return;
+  $('#md-mt-add-menu').hidden = true;
+  const type = it.dataset.mtType, a = act.dataset.act;
+  if (a === 'add') { if (type === 'mtype') openMdMtype(null); else openMdCategory(null); return; }
+  if (type === 'mtype') {
+    openPicker({
+      title: 'إدارة أنواع الحركات', label: 'اختر نوع الحركة المطلوب', noun: 'نوع الحركة',
+      nameOf: r => r.descr || '',
+      load: () => api('/api/md/mtypes?q='),
+      onEdit: code => openMdMtype(code),
+      onDelete: async code => {
+        await api('/api/md/mtypes/delete', { method: 'POST', headers: hdr, body: JSON.stringify({ code }) });
+        toast(`تم حذف نوع الحركة «${code}» ✔`);
+        await renderMdMtypes();
+      },
+    });
+  } else {
+    openPicker({
+      title: 'إدارة التصنيفات', label: 'اختر التصنيف المطلوب', noun: 'التصنيف',
+      nameOf: r => r.descr || '',
+      load: () => api('/api/md/mtype-cats').then(rows => rows.map(r => ({ code: r.name, descr: r.name }))),
+      onEdit: name => openMdCategory(name),
+      onDelete: async name => {
+        await api('/api/md/mtype-cats/delete', { method: 'POST', headers: hdr, body: JSON.stringify({ name }) });
+        toast(`تم حذف التصنيف «${name}» ✔`);
+        mdMtypeCatsLoaded = false;
+        await loadMdMtypes();
+      },
+    });
+  }
+});
+
+/* --- نافذة تصنيف أنواع الحركات: اسم فقط --- */
+function openMdCategory(name) {
+  const f = $('#md-mtcat-form');
+  f.dataset.edit = name || '';
+  $('#md-mtcat-title').textContent = name ? 'تعديل تصنيف' : 'إضافة تصنيف';
+  $('#mtc-name').value = name || '';
+  mdErr('mtc-err', null);
+  mdOpen('md-mtcat-modal');
+}
+$('#md-mtcat-form')?.addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.target;
+  const editing = f.dataset.edit || '';
+  mdErr('mtc-err', null);
+  try {
+    await api('/api/md/mtype-cats/save', { method: 'POST', headers: hdr, body: JSON.stringify({
+      name: $('#mtc-name').value.trim(), editName: editing }) });
+    $('#md-mtcat-modal').hidden = true;
+    f.dataset.edit = '';
+    toast(editing ? 'تم تعديل التصنيف ✔' : 'تمت إضافة التصنيف ✔');
+    mdMtypeCatsLoaded = false;
+    await loadMdMtypes();
+  } catch (err) { mdErr('mtc-err', err.message); }
 });
 
 /* ---------------- المخزون ---------------- */

@@ -465,6 +465,17 @@ ALTER TABLE items ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'mine';
 ALTER TABLE movement_types ADD COLUMN IF NOT EXISTS system_desc TEXT;
 ALTER TABLE movement_types ADD COLUMN IF NOT EXISTS category TEXT;
 
+/* تصنيفات أنواع الحركات — مصدر قائمة «التصنيف» وشاشة إدارتها (إضافة/تعديل/حذف)
+   تُهيّأ من القيم الموجودة حالياً في movement_types.category حتى لا تضيع */
+CREATE TABLE IF NOT EXISTS movement_categories (
+  name       TEXT PRIMARY KEY,
+  updated_at TIMESTAMP
+);
+INSERT INTO movement_categories(name)
+  SELECT DISTINCT TRIM(category) FROM movement_types
+  WHERE COALESCE(TRIM(category),'') <> ''
+  ON CONFLICT (name) DO NOTHING;
+
 -- جدول واحد للأصناف: المجموعات والتصنيفات صفوف داخل نفس الجدول بنوع kind:
 --   'class'   تصنيف (أعلى)      — 'group' مجموعة مواد — 'item' صنف فعلي (أسفل، كود 9 خانات)
 -- قيم (group_code / class_code) على كل صنف + صف نوعي واحد لكل مجموعة/تصنيف
