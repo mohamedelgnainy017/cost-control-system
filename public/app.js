@@ -156,6 +156,7 @@ Object.keys(MD_GROUPS).forEach(id => {
       $('#page-title').textContent = t[0];
       $('#page-crumb').textContent = t[1];
       $('#sidebar').classList.remove('open');
+      rememberScreen(name);
       loadTab(name).catch(e => toast('خطأ: ' + e.message));
     });
   });
@@ -313,6 +314,7 @@ $$('nav button').forEach(b => {
     $$('nav button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     current = b.dataset.tab;
+    rememberScreen(current);
     if (MD_GROUPS[current]) { showMdLanding(current); return; }
     $$('section').forEach(s => s.classList.remove('active'));
     $('#tab-' + current).classList.add('active');
@@ -2341,7 +2343,10 @@ function enterApp(user) {
   applyRoleUI();
   refreshBadges().catch(() => {});
   dbStatus();
-  loadTab(current).catch(e => toast('خطأ: ' + e.message));
+  const saved = (() => { try { return localStorage.getItem('ccs-screen'); } catch (_) { return null; } })();
+  const okSaved = saved && (!me.tabs || !me.tabs.length || me.tabs.includes(saved)
+    || (MD_GROUPS[saved] && mdSubsAllowed(saved).length));
+  if (!(okSaved && showScreenByName(saved))) loadTab(current).catch(e => toast('خطأ: ' + e.message));
   if (user.mustChange) openPwModal(true);
 }
 
@@ -2525,7 +2530,7 @@ $('#btn-theme')?.addEventListener('click', () => {
   html.dataset.theme = html.dataset.theme === 'light' ? 'dark' : 'light';
   localStorage.setItem('ccs-theme', html.dataset.theme);
   syncThemeBtn();
-  if (me) loadTab(current).catch(() => {});
+  if (me) { const n = activeScreen(); if (!MD_GROUPS[n]) loadTab(n).catch(() => {}); }
 });
 
 $('#btn-menu')?.addEventListener('click', () => $('#sidebar').classList.toggle('open'));
@@ -2548,8 +2553,38 @@ async function dbStatus() {
 }
 
 /* ---------------- بدء التشغيل ---------------- */
-$('#btn-refresh')?.addEventListener('click', () => loadTab(current).then(() => toast('تم التحديث')).catch(e => toast(e.message)));
-window.addEventListener('resize', () => { if (!me) return; clearTimeout(window._rt); window._rt = setTimeout(() => loadTab(current).catch(() => {}), 300); });
+/* الشاشة المعروضة فعلياً: قد تكون شاشة فرعية داخل قسم (md-items …). لا نعتمد على `current`
+   لأنه يحمل معرّف القسم الأب (md/daily/pricegroup) وهو ليس من صلاحيات الشاشات، فيؤدي
+   loadTab إلى حماية الصلاحيات وتحويلك لشاشة أخرى. */
+function activeScreen() {
+  const s = document.querySelector('section.active');
+  const id = s && s.id ? s.id.replace(/^tab-/, '') : '';
+  return id || current;
+}
+/* تذكّر آخر شاشة (حتى بعد تحديث الصفحة) مع مراعاة صلاحيات الدور */
+function rememberScreen(name) {
+  try { if (me && name) localStorage.setItem('ccs-screen', name); } catch (_) {}
+}
+function showScreenByName(name) {
+  if (!name) return false;
+  if (MD_GROUPS[name]) { goTab(name); return true; }
+  const el = document.querySelector(`nav button[data-tab="${name}"]`)
+    || document.querySelector(`[data-sub="${name}"]`);
+  if (el) { el.click(); return true; }
+  return false;
+}
+$('#btn-refresh')?.addEventListener('click', async () => {
+  const name = activeScreen();
+  if (MD_GROUPS[name]) { showMdLanding(name); toast('تم التحديث'); return; }
+  try { await loadTab(name); toast('تم التحديث'); } catch (e) { toast(e.message); }
+});
+window.addEventListener('resize', () => {
+  if (!me) return;
+  const name = activeScreen();
+  if (MD_GROUPS[name]) return;
+  clearTimeout(window._rt);
+  window._rt = setTimeout(() => loadTab(name).catch(() => {}), 300);
+});
 
 dbStatus();
 
