@@ -181,6 +181,7 @@
         <input class="input" id="md-items-q" placeholder="بحث بالكود أو الاسم أو المجموعة…" style="max-width:260px">
         <select class="input" id="md-items-group" style="max-width:220px"><option value="">كل المجموعات</option></select>
         <select class="input" id="md-items-class" style="max-width:220px"><option value="">كل التصنيفات</option></select>
+        <button class="btn sm" id="md-items-apply">تطبيق الفلتر</button>
       </div>
       <div class="hint" style="margin-top:10px">
         التسلسل: <b>التصنيف (أعلى) ← مجموعة المواد ← الصنف (أسفل)</b> — كلها أعمدة داخل جدول الأصناف واحد.
@@ -211,7 +212,11 @@
         <button class="seg" data-pane="units">الوحدات</button>
         <button class="seg" data-pane="warehouses">المخازن</button>
       </div>
-      <input class="input" id="md-loc-q" placeholder="بحث بالكود أو الاسم أو المكان…" style="max-width:300px;margin-top:8px">
+      <div class="row filterbar" style="margin-top:8px">
+        <input class="input" id="md-loc-q" placeholder="بحث بالكود أو الاسم أو المكان…" style="max-width:300px">
+        <button class="btn sm" id="md-loc-apply">تطبيق الفلتر</button>
+        <button class="btn sm ghost" id="md-loc-clear">↺ مسح</button>
+      </div>
       <div class="hint" style="margin-top:10px">
         <b>الشركة</b>: كود + اسم + عملة — تعدّل مرة واحدة فتتبدّل وحداتها معها.
         <b>الوحدة</b>: كود + اسم + شركة + مكان. <b>المخزن</b>: كود + اسم،
@@ -238,8 +243,12 @@
         حركة واحدة قد تُصنَّف ببند آخر بناءً على <b>وصف السيستم</b> — املأ وصف النظام والتصنيف لكل نوع
         ليعمل التجميع في التقارير على الصنف الصحيح. (البيانات النهائية تُرفع لاحقاً دفعة واحدة)
       </div>
-      <input class="input" id="md-mtype-q" placeholder="بحث بالكود أو الوصف أو التصنيف…" style="max-width:280px;margin-top:8px">
-      <select class="input" id="md-mtype-cat" style="max-width:220px;margin-top:8px"><option value="">كل التصنيفات</option></select>
+      <div class="row filterbar" style="margin-top:8px">
+        <input class="input" id="md-mtype-q" placeholder="بحث بالكود أو الوصف أو التصنيف…" style="max-width:280px">
+        <select class="input" id="md-mtype-cat" style="max-width:200px"><option value="">كل التصنيفات</option></select>
+        <button class="btn sm" id="md-mtype-apply">تطبيق الفلتر</button>
+        <button class="btn sm ghost" id="md-mtype-clear">↺ مسح</button>
+      </div>
       <div id="tbl-md-mtypes" class="tblwrap" style="margin-top:10px"></div>
     </div>
   </section>
@@ -310,6 +319,7 @@
       <label class="fl">الشركة<select id="if-company" class="input"><option value="">الكل</option></select></label>
       <label class="fl">الوحدة<select id="if-unit" class="input"><option value="">الكل</option></select></label>
       <label class="fl">الصنف<input id="if-item" class="input" placeholder="كود الصنف"></label>
+      <button class="btn sm" id="if-apply">تطبيق الفلتر</button>
       <button class="btn sm ghost" id="if-clear">↺ مسح الفلاتر</button>
     </div>
 
@@ -353,6 +363,7 @@
       <label class="fl">العميل<select id="sf-cust" class="input"><option value="">الكل</option></select></label>
       <label class="fl">الوحدة<select id="sf-unit" class="input"><option value="">الكل</option></select></label>
       <label class="fl">الصنف<input id="sf-item" class="input" placeholder="كود الصنف"></label>
+      <button class="btn sm" id="sf-apply">تطبيق الفلتر</button>
       <button class="btn sm ghost" id="sf-clear">↺ مسح الفلاتر</button>
     </div>
 
@@ -399,6 +410,7 @@
       <label class="fl">التوجيه<select id="mf-dir" class="input"><option value="">الكل</option></select></label>
       <label class="fl">الوحدة<select id="mf-unit" class="input"><option value="">الكل</option></select></label>
       <label class="fl">الصنف<input id="mf-item" class="input" placeholder="كود الصنف"></label>
+      <button class="btn sm" id="mf-apply">تطبيق الفلتر</button>
       <button class="btn sm ghost" id="mf-clear">↺ مسح الفلاتر</button>
     </div>
 
@@ -658,7 +670,7 @@
           <a class="exp" id="q-csv" href="/api/export?name=quality">⬇ تصدير CSV</a>
         </div>
       </div>
-      <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+      <div class="row filterbar" style="margin-top:10px">
         <select class="input" id="q-sev" style="width:auto">
           <option value="">كل المستويات</option>
           <option value="error">خطورة فقط</option>
@@ -666,6 +678,8 @@
           <option value="info">معلومات فقط</option>
         </select>
         <input class="input" id="q-ent" placeholder="بحث في الفحص… (جزء من اسم الفحص)" style="width:240px">
+        <button class="btn sm" id="q-apply">تطبيق الفلتر</button>
+        <button class="btn sm ghost" id="q-clear">↺ مسح</button>
       </div>
       <div id="tbl-quality" class="tblwrap" style="margin-top:6px"></div>
     </div>
@@ -751,11 +765,12 @@
           <a class="exp" id="rep-csv" href="#" style="display:none">⬇ تصدير CSV</a>
         </div>
       </div>
-      <div class="row" style="gap:10px;align-items:end;flex-wrap:wrap;margin-top:10px">
+      <div class="row filterbar" style="gap:10px;align-items:end;margin-top:10px">
         <label class="fl">من<input type="date" id="rf-from" class="input"></label>
         <label class="fl">إلى<input type="date" id="rf-to" class="input"></label>
         <label class="fl">المكان<input id="rf-place" class="input" placeholder="المكان" style="width:180px"></label>
         <label class="fl">الصنف<input id="rf-item" class="input" placeholder="كود الصنف" style="width:180px"></label>
+        <button class="btn sm" id="rf-apply">تطبيق الفلتر</button>
         <button class="btn sm ghost" id="rf-clear">↺ مسح</button>
         <span class="muted xs">الفلاتر تنطبق على تقارير التحليل (مبيعات / حركات / مخزون / تكلفة)</span>
       </div>

@@ -476,13 +476,8 @@ $$('#md-items-segs .seg').forEach(b => b.addEventListener('click', () => {
   renderMdItems().catch(e => toast(e.message));
 }));
 
-let mdItemsTimer = null;
-$('#md-items-q')?.addEventListener('input', () => {
-  clearTimeout(mdItemsTimer);
-  mdItemsTimer = setTimeout(() => renderMdItems().catch(() => {}), 300);
-});
-['#md-items-group', '#md-items-class'].forEach(sel =>
-  $(sel)?.addEventListener('change', () => renderMdItems().catch(e => toast(e.message))));
+$('#md-items-apply')?.addEventListener('click', () => renderMdItems().catch(e => toast(e.message)));
+$('#md-items-q')?.addEventListener('keydown', e => { if (e.key === 'Enter') renderMdItems().catch(() => {}); });
 
 $('#tbl-md-items')?.addEventListener('click', e => {
   const b = e.target.closest('[data-item]');
@@ -669,7 +664,12 @@ function renderMdLocPane() {
 }
 
 $$('#md-loc-segs .seg').forEach(b => b.addEventListener('click', () => { mdLocPane = b.dataset.pane; renderMdLocPane(); }));
-$('#md-loc-q')?.addEventListener('input', debounce(() => renderMdLocPane(), 200));
+$('#md-loc-apply')?.addEventListener('click', () => renderMdLocPane());
+$('#md-loc-clear')?.addEventListener('click', () => {
+  const el = $('#md-loc-q'); if (el) el.value = '';
+  renderMdLocPane();
+});
+$('#md-loc-q')?.addEventListener('keydown', e => { if (e.key === 'Enter') renderMdLocPane(); });
 
 ['#tbl-md-companies', '#tbl-md-units', '#tbl-md-warehouses'].forEach(sel =>
   $(sel)?.addEventListener('click', e => {
@@ -824,12 +824,13 @@ $('#tbl-md-mtypes')?.addEventListener('click', e => {
   const b = e.target.closest('[data-mtype]');
   if (b && can('master')) openMdMtype(b.dataset.mtype);
 });
-let mdMtypeTimer = null;
-$('#md-mtype-q')?.addEventListener('input', () => {
-  clearTimeout(mdMtypeTimer);
-  mdMtypeTimer = setTimeout(() => renderMdMtypes().catch(() => {}), 300);
+$('#md-mtype-apply')?.addEventListener('click', () => renderMdMtypes().catch(e => toast(e.message)));
+$('#md-mtype-clear')?.addEventListener('click', () => {
+  const q = $('#md-mtype-q'); if (q) q.value = '';
+  const c = $('#md-mtype-cat'); if (c) c.value = '';
+  renderMdMtypes().catch(e => toast(e.message));
 });
-$('#md-mtype-cat')?.addEventListener('change', () => renderMdMtypes().catch(e => toast(e.message)));
+$('#md-mtype-q')?.addEventListener('keydown', e => { if (e.key === 'Enter') renderMdMtypes().catch(() => {}); });
 
 function openMdMtype(code) {
   const r = code ? mdMtypes.find(x => x.code === code) : null;
@@ -941,13 +942,14 @@ $('#btn-recon')?.addEventListener('click', async () => {
   } catch (e) { toast('خطأ: ' + e.message); }
 });
 
-['if-from', 'if-to', 'if-place', 'if-company', 'if-unit'].forEach(id =>
-  $(id)?.addEventListener('change', () => loadInventory().catch(e => toast(e.message))));
-$('#if-item')?.addEventListener('input', debounce(() => loadInventory().catch(() => {}), 400));
+$('#if-apply')?.addEventListener('click', () => loadInventory().catch(e => toast(e.message)));
 $('#if-clear')?.addEventListener('click', () => {
   ['if-from', 'if-to', 'if-place', 'if-company', 'if-unit', 'if-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
   loadInventory().catch(e => toast(e.message));
 });
+['if-item', 'if-from', 'if-to'].forEach(id => $(id)?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadInventory().catch(() => {});
+}));
 
 /* ---------------- المبيعات ---------------- */
 /* ---- المبيعات: فلاتر (من/إلى/مكان/عميل/وحدة/صنف) ---- */
@@ -1012,13 +1014,14 @@ async function loadSales() {
   ], scls);
 }
 
-['sf-from', 'sf-to', 'sf-place', 'sf-cust', 'sf-unit'].forEach(id =>
-  $(id)?.addEventListener('change', () => loadSales().catch(e => toast(e.message))));
-$('#sf-item')?.addEventListener('input', debounce(() => loadSales().catch(() => {}), 400));
+$('#sf-apply')?.addEventListener('click', () => loadSales().catch(e => toast(e.message)));
 $('#sf-clear')?.addEventListener('click', () => {
   ['sf-from', 'sf-to', 'sf-place', 'sf-cust', 'sf-unit', 'sf-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
   loadSales().catch(e => toast(e.message));
 });
+['sf-item', 'sf-from', 'sf-to'].forEach(id => $(id)?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadSales().catch(() => {});
+}));
 
 /* ---------------- الحركات ---------------- */
 /* ---- الحركات: فلاتر (من/إلى/مكان/نوع حركة/توجيه/وحدة/صنف) ---- */
@@ -1068,13 +1071,14 @@ async function loadMovements() {
   ], mi);
 }
 
-['mf-from', 'mf-to', 'mf-place', 'mf-mtype', 'mf-dir', 'mf-unit'].forEach(id =>
-  $(id)?.addEventListener('change', () => loadMovements().catch(e => toast(e.message))));
-$('#mf-item')?.addEventListener('input', debounce(() => loadMovements().catch(() => {}), 400));
+$('#mf-apply')?.addEventListener('click', () => loadMovements().catch(e => toast(e.message)));
 $('#mf-clear')?.addEventListener('click', () => {
   ['mf-from', 'mf-to', 'mf-place', 'mf-mtype', 'mf-dir', 'mf-unit', 'mf-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
   loadMovements().catch(e => toast(e.message));
 });
+['mf-item', 'mf-from', 'mf-to'].forEach(id => $(id)?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadMovements().catch(() => {});
+}));
 
 /* ---------------- البورصة اليومية ---------------- */
 let borseItemsSig = '';
@@ -1812,8 +1816,13 @@ async function loadQuality(run) {
   ], qi, { empty: 'لا توجد ملاحظات — البيانات سليمة ✔' });
 }
 $('#btn-qrun')?.addEventListener('click', () => loadQuality(true).then(() => toast('تمت إعادة الفحص')));
-$('#q-sev')?.addEventListener('change', () => loadQuality(false).catch(e => toast(e.message)));
-$('#q-ent')?.addEventListener('input', debounce(() => loadQuality(false).catch(() => {}), 400));
+$('#q-apply')?.addEventListener('click', () => loadQuality(false).catch(e => toast(e.message)));
+$('#q-clear')?.addEventListener('click', () => {
+  const sev = $('#q-sev'); if (sev) sev.value = '';
+  const ent = $('#q-ent'); if (ent) ent.value = '';
+  loadQuality(false).catch(e => toast(e.message));
+});
+$('#q-ent')?.addEventListener('keydown', e => { if (e.key === 'Enter') loadQuality(false).catch(() => {}); });
 
 /* ---------------- الاستيراد ---------------- */
 let selectedFile = null;
@@ -2201,17 +2210,15 @@ async function loadReports() {
   if (!reportList.length) host.innerHTML = '<div class="muted">لا توجد تقارير</div>';
 }
 
-/* معايير التقارير: أي تغيير يعيد تحميل التقرير الحالي */
-['rf-from', 'rf-to'].forEach(id => $(id)?.addEventListener('change', () => {
-  if (currentReport) showReport(currentReport).catch(e => toast(e.message));
-}));
-['rf-place', 'rf-item'].forEach(id => $(id)?.addEventListener('input', debounce(() => {
-  if (currentReport) showReport(currentReport).catch(() => {});
-}, 400)));
+/* معايير التقارير: تُطبَّق بالضغط على «تطبيق الفلتر» أو «مسح» */
+$('#rf-apply')?.addEventListener('click', () => { if (currentReport) showReport(currentReport).catch(e => toast(e.message)); });
 $('#rf-clear')?.addEventListener('click', () => {
   ['rf-from', 'rf-to', 'rf-place', 'rf-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
   if (currentReport) showReport(currentReport).catch(e => toast(e.message));
 });
+['rf-place', 'rf-item', 'rf-from', 'rf-to'].forEach(id => $(id)?.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && currentReport) showReport(currentReport).catch(() => {});
+}));
 
 /* ---------------- المصادقة والمستخدمون ---------------- */
 let me = null;
