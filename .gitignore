@@ -1,0 +1,11 @@
+# Node
+node_modules/
+
+# الإعدادات المحلية — كلمة سر اتصال قاعدة البيانات لا تُرفع
+data/*
+!data/config.example.json
+
+# سجلات وملفات مؤقتة
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>نظام متابعة الاستهلاك والتكاليف</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<!-- ============ تسجيل الدخول ============ -->
+<div class="login-wrap" id="login-screen">
+  <div class="login-card">
+    <div class="login-mark"><span></span>م</div>
+    <h2>الاستهلاك والتكاليف</h2>
+    <p class="sub">سجّل الدخول للمتابعة — كل التبويبات محمية بالدور</p>
+    <form id="login-form" autocomplete="off">
+      <label>اسم المستخدم
+        <input class="input" id="login-user" type="text" autocomplete="username" autofocus placeholder="admin">
+      </label>
+      <label>كلمة المرور
+        <input class="input" id="login-pass" type="password" autocomplete="current-password" placeholder="••••••••">
+      </label>
+      <div class="login-err" id="login-err" hidden></div>
+      <button class="btn login-btn" type="submit" id="login-btn">دخول</button>
+    </form>
+    <div class="login-hint" id="login-hint" hidden></div>
+  </div>
+</div>
+
+<!-- ============ الشريط الجانبي ============ -->
+<aside class="sidebar" id="sidebar">
+  <div class="brand">
+    <div class="mark"><span></span>م</div>
+    <div class="brand-txt">
+      <b>الاستهلاك والتكاليف</b>
+      <small>Cost Control Suite</small>
+    </div>
+  </div>
+
+  <nav>
+    <div class="nav-label">الرئيسية</div>
+    <button data-tab="dashboard" class="active"><i>◧</i><span>لوحة التحكم</span></button>
+
+    <button data-tab="md"><i>▦</i><span>البيانات الأساسية</span></button>
+
+    <div class="nav-label">العمليات</div>
+    <button data-tab="inventory"><i>◫</i><span>المخزون والمطابقة</span></button>
+    <button data-tab="sales"><i>◈</i><span>المبيعات والربحية</span></button>
+    <button data-tab="movements"><i>⇄</i><span>الحركات</span></button>
+    <button data-tab="borse"><i>⌁</i><span>البورصة اليومية</span></button>
+    <button data-tab="prices"><i>¤</i><span>الأسعار اليومية</span></button>
+    <button data-tab="costs"><i>∑</i><span>التكلفة اليومية</span></button>
+
+    <div class="nav-label">البيانات</div>
+    <button data-tab="quality"><i>◇</i><span>جودة البيانات</span></button>
+    <button data-tab="import"><i>⇪</i><span>الاستيراد</span></button>
+    <button data-tab="reports"><i>⤓</i><span>التقارير</span></button>
+  </nav>
+
+  <div class="side-foot">
+    <div class="dbchip" id="dbchip" title="قاعدة البيانات">
+      <span class="dot"></span>
+      <span class="txt">PostgreSQL</span>
+    </div>
+    <div class="ver">v1.0 • محلي</div>
+  </div>
+</aside>
+<div class="scrim" id="scrim"></div>
+
+<!-- ============ المحتوى ============ -->
+<div class="shell">
+
+  <header class="topbar">
+    <button class="icon-btn only-mobile" id="btn-menu" title="القائمة">☰</button>
+    <div class="page">
+      <h1 id="page-title">لوحة التحكم</h1>
+      <div class="crumb" id="page-crumb">نظرة عامة على الأداء والمؤشرات</div>
+    </div>
+    <div class="spacer"></div>
+
+    <span class="chip" title="حركات المخزون"><i>⇄</i> <b id="b-mov">—</b></span>
+    <span class="chip" title="بنود المبيعات"><i>◈</i> <b id="b-sal">—</b></span>
+    <span class="chip" title="دليل الأصناف"><i>◇</i> <b id="b-itm">—</b></span>
+
+    <button class="btn sm ghost" id="btn-users" hidden>👥 المستخدمون</button>
+    <span class="me" id="me-chip" hidden>
+      <span class="avatar" id="me-avatar">م</span>
+      <span class="who">
+        <b id="me-name">—</b>
+        <small id="me-role">—</small>
+      </span>
+    </span>
+
+    <button class="icon-btn" id="btn-theme" title="تبديل المظهر">☾</button>
+    <button class="btn sm ghost" id="btn-refresh">↻ تحديث</button>
+    <button class="icon-btn" id="btn-logout" title="تسجيل الخروج">⏻</button>
+  </header>
+
+  <main>
+
+  <!-- ============ لوحة التحكم — إدارة المستخدمين والصلاحيات ============ -->
+  <section id="tab-dashboard" class="active">
+    <!-- رسالة للدور المُصرَّح له بالدخول بلا صلاحية إدارة -->
+    <div class="hint" id="dash-hint" hidden>
+      هذه الشاشة مخصصة لإدارة المستخدمين وصلاحيات الأدوار — لا تملك صلاحية التعديل عليها.
+      تواصل مع مدير النظام.
+    </div>
+
+    <!-- صلاحيات الشاشات (للمدير فقط) -->
+    <div class="card" id="card-tabperms" hidden>
+      <div class="card-h">
+        <h3>🔐 صلاحيات الشاشات <small>حدّد أي شاشة يراها كل دور — المدير يملك كل الشاشات دائماً</small></h3>
+        <button class="btn sm" id="btn-tabperms-save">💾 حفظ الصلاحيات</button>
+      </div>
+      <div class="tblwrap" id="tbl-tabperms"></div>
+      <div class="hint" style="margin-top:10px">
+        التغيير يسري فوراً: تختفي الشاشة الممنوعة من قائمة المستخدم، ويُمنع الخادم عن قراءة بياناتها أيضاً.
+        المستخدم الحالي لا يحتاج إعادة دخول — يكفي إعادة تحميل الصفحة.
+      </div>
+    </div>
+
+    <!-- المستخدمون (للمدير فقط) -->
+    <div class="card" id="card-users" hidden>
+      <div class="card-h"><h3>👥 المستخدمون <small>إضافة وتعطيل وتعيين الأدوار وإعادة التعيين</small></h3></div>
+      <form class="row" id="user-form" autocomplete="off">
+        <input class="input" id="u-name" placeholder="اسم المستخدم (لاتيني)" required>
+        <input class="input" id="u-full" placeholder="الاسم بالعربي (اختياري)">
+        <select class="input" id="u-role"></select>
+        <input class="input" id="u-pass" type="password" placeholder="كلمة المرور (6+)" required>
+        <button class="btn sm" type="submit">＋ إضافة مستخدم</button>
+      </form>
+      <div class="tblwrap" id="tbl-users" style="margin-top:12px"></div>
+      <div class="hint" style="margin-top:12px">
+        إلغاء تفعيل أو إعادة تعيين كلمة المرور يُنهي جلسات ذلك المستخدم فوراً —
+        وتُضبط شاشات كل دور من بطاقة <b>صلاحيات الشاشات</b> أعلاه.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ البيانات الأساسية: مهاب ============
+       قسم واحد في القايمة الجانبية، وجواه الشاشات الثلاث -->
+  <section id="tab-md">
+    <div class="card">
+      <div class="card-h">
+        <h3>البيانات الأساسية <small>اختر الشاشة التي تريد إدارتها</small></h3>
+      </div>
+      <div class="md-land">
+        <button class="md-tile" data-sub="md-items">
+          <i>▦</i><b>الأصناف الأساسية</b>
+          <span>كود الصنف (9 خانات) واسمه ووحدته + المجموعة والتصنيف — بقوائم اختيار، وجلب تلقائي من الحركات.</span>
+        </button>
+        <button class="md-tile" data-sub="md-locations">
+          <i>⌂</i><b>المواقع والمصانع</b>
+          <span>الشركة ← الوحدة ← المخزن + المكان — والوحدات والمخازن الجدد يُجلبون تلقائياً من الحركات.</span>
+        </button>
+        <button class="md-tile" data-sub="md-movetypes">
+          <i>⇅</i><b>أنواع الحركات</b>
+          <span>نوع الحركة ووصفها + وصف السيستم والتصنيف — والبيانات النهائية تُرفع لاحقاً دفعة واحدة.</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ البيانات الأساسية: الأصناف ============ -->
+  <section id="tab-md-items">
+    <div class="card">
+      <div class="card-h">
+        <h3>الأصناف الأساسية <small>كود الصنف (9 خانات) واسمه ووحدته ومجموعته وتصنيفه — في جدول واحد</small></h3>
+        <div class="row">
+          <button class="btn sm ghost" data-back="md">‹ رجوع</button>
+          <button class="btn sm" id="md-sync">↻ جلب من الحركات</button>
+          <button class="btn sm" id="md-class-btn">＋ تصنيف</button>
+          <button class="btn sm" id="md-group-btn">＋ مجموعة</button>
+          <button class="btn sm" id="md-item-btn">＋ صنف</button>
+        </div>
+      </div>
+      <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px">
+        <div class="segs" id="md-items-segs">
+          <button class="seg on" data-origin="all">الكل</button>
+          <button class="seg" data-origin="mine">مسجّلي</button>
+          <button class="seg" data-origin="movement">المجلوبة من الحركات</button>
+        </div>
+        <input class="input" id="md-items-q" placeholder="بحث بالكود أو الاسم أو المجموعة…" style="max-width:260px">
+      </div>
+      <div class="hint" style="margin-top:10px">
+        التسلسل: <b>التصنيف (أعلى) ← مجموعة المواد ← الصنف (أسفل)</b> — كلها أعمدة داخل جدول الأصناف واحد.
+        مع <b>كل استيراد للحركات</b> يُفحص جدول الحركات آنياً: الصنف الجديد يُجلب هنا بكوده ووصفه ووحدته كما هي،
+        ثم تُسكَّن <b>مجموعة المواد ووصفها على التصنيف</b>، و<b>المجموعة الخارجية ووصفها على مجموعة المواد</b> —
+        وأيضاً تُجلب الوحدات الجديدة إلى المواقع، ومواقع التخزين الجديدة إلى المخازن.
+        المجموعة والتصنيف يُختاران يدوياً أيضاً من نموذج الصنف.
+      </div>
+      <div id="tbl-md-items" class="tblwrap" style="margin-top:10px"></div>
+      <div class="muted xs" id="md-items-count" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <!-- ============ البيانات الأساسية: المواقع والمصانع ============ -->
+  <section id="tab-md-locations">
+    <div class="card">
+      <div class="card-h">
+        <h3>المواقع والمصانع <small>الشركة (أكبر) ← الوحدة ← المخزن (أصغر) + المكان</small></h3>
+        <div class="row">
+          <button class="btn sm ghost" data-back="md">‹ رجوع</button>
+          <button class="btn sm" id="md-wh-btn">＋ مخزن</button>
+          <button class="btn sm" id="md-unit-btn">＋ وحدة</button>
+          <button class="btn sm" id="md-comp-btn">＋ شركة</button>
+        </div>
+      </div>
+      <div class="segs" id="md-loc-segs" style="margin-top:4px">
+        <button class="seg on" data-pane="companies">الشركات</button>
+        <button class="seg" data-pane="units">الوحدات</button>
+        <button class="seg" data-pane="warehouses">المخازن</button>
+      </div>
+      <div class="hint" style="margin-top:10px">
+        <b>الشركة</b>: كود + اسم + عملة — تعدّل مرة واحدة فتتبدّل وحداتها معها.
+        <b>الوحدة</b>: كود + اسم + شركة + مكان. <b>المخزن</b>: كود + اسم،
+        ويُسند عليه الشركة والوحدة تلقائياً من اختيارك إضافة إلى المكان (يُرثه من الوحدة إن لم تُحدّده).
+        بيانات المخازن يمكن رفعها دفعة واحدة عند جهوزيتها.
+      </div>
+      <div id="tbl-md-companies" class="tblwrap" style="margin-top:10px"></div>
+      <div id="tbl-md-units" class="tblwrap" style="margin-top:10px" hidden></div>
+      <div id="tbl-md-warehouses" class="tblwrap" style="margin-top:10px" hidden></div>
+    </div>
+  </section>
+
+  <!-- ============ البيانات الأساسية: أنواع الحركات ============ -->
+  <section id="tab-md-movetypes">
+    <div class="card">
+      <div class="card-h">
+        <h3>أنواع الحركات <small>نوع الحركة ووصفها + وصف السيستم والتصنيف</small></h3>
+        <div class="row">
+          <button class="btn sm ghost" data-back="md">‹ رجوع</button>
+          <button class="btn sm" id="md-mtype-btn">＋ نوع حركة</button>
+        </div>
+      </div>
+      <div class="hint">
+        حركة واحدة قد تُصنَّف ببند آخر بناءً على <b>وصف السيستم</b> — املأ وصف النظام والتصنيف لكل نوع
+        ليعمل التجميع في التقارير على الصنف الصحيح. (البيانات النهائية تُرفع لاحقاً دفعة واحدة)
+      </div>
+      <input class="input" id="md-mtype-q" placeholder="بحث بالكود أو الوصف أو التصنيف…" style="max-width:280px;margin-top:8px">
+      <div id="tbl-md-mtypes" class="tblwrap" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <!-- ============ المخزون ============ -->
+  <section id="tab-inventory">
+    <div class="grid kpis" id="inv-kpis"></div>
+
+    <div class="card mt">
+      <div class="card-h">
+        <h3>نتيجة مطابقة الأرصدة <small>رصيد نهاية اليوم السابق = رصيد بداية اليوم التالي</small></h3>
+        <div class="row">
+          <button class="btn sm" id="btn-recon">احسب المطابقة</button>
+          <label class="chk"><input type="checkbox" id="recon-all"> عرض المطابقة أيضاً</label>
+        </div>
+      </div>
+      <div id="recon-sum" class="hint">جاري الحساب...</div>
+      <div id="tbl-recon" class="tblwrap" style="margin-top:12px"></div>
+      <div class="muted xs" id="recon-count" style="margin-top:8px"></div>
+    </div>
+
+    <div class="grid two">
+      <div class="card"><div class="card-h"><h3>المخزون حسب المكان</h3></div><div id="tbl-inv-place" class="tblwrap"></div></div>
+      <div class="card"><div class="card-h"><h3>المخزون حسب التصنيف</h3></div><div id="tbl-inv-class" class="tblwrap"></div></div>
+    </div>
+  </section>
+
+  <!-- ============ المبيعات ============ -->
+  <section id="tab-sales">
+    <div class="grid kpis" id="sal-kpis"></div>
+
+    <div class="card mt">
+      <div class="card-h">
+        <h3>المبيعات والربحية حسب المكان <small>التكلفة من حركات الوحدات المباعة</small></h3>
+        <a class="exp" href="/api/export?name=sales-place">⬇ CSV</a>
+      </div>
+      <div id="tbl-sales-place" class="tblwrap"></div>
+    </div>
+
+    <div class="grid two">
+      <div class="card"><div class="card-h"><h3>المبيعات شهرياً</h3></div><div id="ch-sales-month"></div>
+        <div class="legend"><span><i class="c1"></i>قيمة</span><span><i class="c3"></i>كمية</span></div>
+      </div>
+      <div class="card"><div class="card-h"><h3>أعلى الأصناف مبيعاً</h3></div><div id="tbl-sales-item" class="tblwrap"></div></div>
+    </div>
+
+    <div class="grid two">
+      <div class="card"><div class="card-h"><h3>أعلى العملاء</h3></div><div id="tbl-sales-cust" class="tblwrap"></div></div>
+      <div class="card"><div class="card-h"><h3>توزيع حسب فئة المستند <small>قيمة موقّعة</small></h3></div><div id="tbl-sales-class" class="tblwrap"></div></div>
+    </div>
+  </section>
+
+  <!-- ============ الحركات ============ -->
+  <section id="tab-movements">
+    <div class="grid two">
+      <div class="card"><div class="card-h"><h3>الحركات حسب التوجيه</h3></div><div id="tbl-mv-dir" class="tblwrap"></div></div>
+      <div class="card"><div class="card-h"><h3>وارد / صادر شهرياً</h3></div><div id="ch-mv-month"></div>
+        <div class="legend"><span><i class="c3"></i>وارد</span><span><i class="c4"></i>صادر</span></div>
+      </div>
+    </div>
+    <div class="grid two">
+      <div class="card"><div class="card-h"><h3>الحركات حسب المكان</h3></div><div id="tbl-mv-place" class="tblwrap"></div></div>
+      <div class="card"><div class="card-h"><h3>أعلى الأصناف حركة بالقيمة</h3></div><div id="tbl-mv-items" class="tblwrap"></div></div>
+    </div>
+  </section>
+
+  <!-- ============ البورصة اليومية ============ -->
+  <section id="tab-borse">
+    <div class="segs" id="borse-segs">
+      <button class="seg on" data-pane="view">نظرة عامة</button>
+      <button class="seg" data-pane="edit">✎ تعديل يدوي</button>
+      <button class="seg" data-pane="hist">سجل التعديلات</button>
+    </div>
+
+    <div id="borse-pane-view">
+    <div class="grid kpis" id="borse-kpis"></div>
+
+    <div class="card mt">
+      <div class="card-h">
+        <h3>آخر أسعار البورصة <small id="borse-src">—</small></h3>
+        <div class="row">
+          <span class="pill" id="borse-pending" style="display:none">—</span>
+          <button class="btn sm" id="btn-borse-fetch">⚡ جلب الآن</button>
+          <a class="exp" href="/api/export?name=borse-latest">⬇ CSV</a>
+        </div>
+      </div>
+      <div id="tbl-borse-latest" class="tblwrap"></div>
+      <div class="hint" style="margin-top:10px">
+        <b>جلب ذاتي</b>: يجلب النظام أسعار الإغلاق من <b>Yahoo Finance</b> وريت الدولار من
+        <b>بنك مصر</b> يومياً الساعة <b id="borse-fetchat">—</b> ويكتبها في قاعدة البيانات —
+        <b>بلا أي ارتباط بملف Excel</b> (لا قراءة ولا كتابة). زر <b>جلب الآن</b> يشغّل الجلب فوراً
+        سواء لجلب صف اليوم أو لتعويض أي يوم فائت.
+      </div>
+    </div>
+
+    <div class="grid two">
+      <div class="card">
+        <div class="card-h">
+          <h3>اتجاه أسعار الإغلاق <small>بالدولار الأمريكي</small></h3>
+          <div class="row">
+            <select class="input sm" id="borse-item"></select>
+            <select class="input sm" id="borse-range">
+              <option value="30">آخر 30 يوم</option>
+              <option value="90">آخر 90 يوم</option>
+              <option value="180" selected>آخر 180 يوم</option>
+              <option value="365">آخر سنة</option>
+              <option value="3000">الكل</option>
+            </select>
+          </div>
+        </div>
+        <div id="ch-borse"></div>
+        <div class="legend" id="borse-legend"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>سعر صرف الدولار <small>كما يُسجَّل يومياً مع البورصة</small></h3></div>
+        <div id="ch-usd"></div>
+      </div>
+    </div>
+
+    <div class="card mt">
+      <div class="card-h">
+        <h3>سجل التسجيلات اليومية <small>آخر الصفوف كما هي مسجَّلة في القاعدة</small></h3>
+        <a class="exp" href="/api/export?name=borse-raw">⬇ CSV كامل</a>
+      </div>
+      <div id="tbl-borse" class="tblwrap"></div>
+    </div>
+    </div><!-- /borse-pane-view -->
+
+    <!-- ---------- التعديل اليدوي ---------- -->
+    <div id="borse-pane-edit" hidden>
+      <div class="card">
+        <div class="card-h">
+          <h3>تعديل أسعار البورصة <small>التعديل يسري من تاريخه على كل الأيام بعده</small></h3>
+          <div class="row">
+            <select class="input sm" id="be-item"></select>
+            <input class="input sm" type="date" id="be-from">
+            <input class="input sm" type="date" id="be-to">
+            <label class="chk"><input type="checkbox" id="be-onlyov"> المعدَّل فقط</label>
+            <button class="btn sm" id="btn-be-load">↻ تحميل</button>
+            <button class="btn sm sec" id="btn-be-fetch">⚡ جلب الآن</button>
+          </div>
+        </div>
+        <div id="tbl-borse-edit" class="tblwrap" style="max-height:560px"></div>
+        <div class="hint" style="margin-top:10px">
+          <b>القاعدة</b>: أي تعديل بتاريخ <b id="be-effdate">—</b> يسري على كل الأيام من هذا التاريخ
+          ولغاية ما ييجي تعديل أحدث بعده. الخلايا المعلّمة <b class="ovmark">●</b> عليها تعديل يدوي —
+          النقر عليها يفتح التعديل أو الإلغاء، والتلميح يبيّن القيمة الأساسية (المجلوبة) ومن عدّلها.
+          أعمدة <b>منخفض / عالي / إغلاق</b> و<b>ريت الدولار</b> يجلبها النظام يومياً وتُعدَّل بتعديل يدوي فوقها.
+          <br><b>القيمة الأساسية</b>: الجلب اليومي يكتب التاريخ/المنخفض/العالي/الإغلاق/الريت،
+          ويمسك باقي الأعمدة (العقد، البريم، سعر البورصة، النولون، المصاريف، المعامل، سعر التكلفة)
+          من آخر صف موجود — فتعديلاتك لا يمسّها الجلب أبداً، وتنتقل تلقائياً للأيام الجديدة.
+          عند انتهاء العقد يمرّر النظام للأقرب تلقائياً ويحدّث عمود <b>العقد</b> مع أسعاره.
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- سجل التعديلات ---------- -->
+    <div id="borse-pane-hist" hidden>
+      <div class="card">
+        <div class="card-h">
+          <h3>سجل التعديلات <small>كل تعديل بتاريخ سريان ومن قام به</small></h3>
+          <button class="btn sm" id="btn-bo-hist">↻ تحديث</button>
+        </div>
+        <div id="tbl-bo-hist" class="tblwrap"></div>
+        <div class="hint" style="margin-top:10px">
+          الإلغاء = حذف هذا السطر، فترجع الخلية إلى القيمة الأساسية (المجلوبة) في هذا التاريخ وما بعده.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ الأسعار اليومية ============ -->
+  <section id="tab-prices">
+    <div class="segs" id="pr-segs">
+      <button class="seg on" data-pane="edit">✎ تعديل الأسعار</button>
+      <button class="seg" data-pane="hist">سجل التعديلات</button>
+    </div>
+
+    <div id="pr-pane-edit">
+    <div class="grid kpis" id="pr-kpis"></div>
+
+    <div class="card mt">
+      <div class="card-h">
+        <h3>أسعار الأصناف <small>أربع قيم لكل صنف/يوم — التعديل يسري من تاريخه فما بعد</small></h3>
+        <div class="row">
+          <select class="input sm" id="pr-item"></select>
+          <input class="input sm" type="date" id="pr-from">
+          <input class="input sm" type="date" id="pr-to">
+          <label class="chk"><input type="checkbox" id="pr-onlyov"> المعدَّل فقط</label>
+          <button class="btn sm" id="btn-pr-load">↻ تحميل</button>
+        </div>
+      </div>
+      <div id="tbl-prices" class="tblwrap" style="max-height:600px"></div>
+      <div class="hint" style="margin-top:10px">
+        <b>القاعدة</b>: أي تعديل بتاريخ <b id="pr-effdate">—</b> يسري على كل الأيام من هذا التاريخ
+        ولغاية ما ييجي تعديل أحدث بعده. الخلايا المعلّمة <b class="ovmark">●</b> عليها تعديل يدوي —
+        النقر عليها يفتح التعديل أو الإلغاء، والتلميح يبيّن القيمة الأساسية (المستوردة) ومن عدّلها.
+        <br><b>القيمة الأساسية</b>: تصل من استيراد شيت <b>الاسعار</b> في ملف اليوم، والنظام يحمّلها
+        للأمام تلقائياً لكل يوم جديد حتى لو لم يُضَف صف في الملف — فتعديلك لا يمسّه الاستيراد أبداً.
+        <br><b>النولون</b>: يأتي من شاشة <b>البورصة</b> (عمود النولون) وهو مسجَّل على الأصناف الثلاثة
+        (الذرة/الصويا/البذرة) فقط، ف<b>تكلفة وصال = تكلفة أرضه + النولون</b> و<b>سوق وصال = سوق أرضه + النولون</b> —
+        وتساوي القيمتين لكل صنف آخر لا نولون عليه.
+      </div>
+    </div>
+    </div><!-- /pr-pane-edit -->
+
+    <!-- ---------- سجل تعديلات الأسعار ---------- -->
+    <div id="pr-pane-hist" hidden>
+      <div class="card">
+        <div class="card-h">
+          <h3>سجل تعديلات الأسعار <small>كل تعديل بتاريخ سريان ومن قام به</small></h3>
+          <button class="btn sm" id="btn-pr-hist">↻ تحديث</button>
+        </div>
+        <div id="tbl-pr-hist" class="tblwrap"></div>
+        <div class="hint" style="margin-top:10px">
+          الإلغاء = حذف هذا السطر، فترجع الخلية إلى القيمة الأساسية (المستوردة) في هذا التاريخ وما بعده.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ التكلفة اليومية ============ -->
+  <section id="tab-costs">
+    <div class="segs" id="cs-segs">
+      <button class="seg on" data-pane="view">شبكة التكلفة</button>
+      <button class="seg" data-pane="status">حالة المحرك</button>
+    </div>
+
+    <div id="cs-pane-view">
+      <div class="grid kpis" id="cs-kpis"></div>
+
+      <div class="card mt">
+        <div class="card-h">
+          <h3>التكلفة اليومية <small>مبنية من مصدرين: البورصة (3 أصناف) والأرصدة (باقي الأصناف)</small></h3>
+          <div class="row">
+            <label class="muted xs">مستوى العرض
+              <select class="input sm" id="cs-level">
+                <option value="detail">تفصيلي — صنف × مصنع</option>
+                <option value="total">إجمالي — صنف</option>
+              </select>
+            </label>
+            <select class="input sm" id="cs-item"></select>
+            <select class="input sm" id="cs-unit"></select>
+            <input class="input sm" type="date" id="cs-from">
+            <input class="input sm" type="date" id="cs-to">
+            <button class="btn sm" id="btn-cs-load">↻ تحميل</button>
+          </div>
+        </div>
+        <div id="tbl-costs" class="tblwrap" style="max-height:600px"></div>
+        <div class="hint" style="margin-top:10px">
+          <b>لمن هذه التكلفة؟</b> الأصناف الثلاثة المدرجة في البورصة (الذرة 1001 / الصويا 1002 / البذرة 1004):
+          تكلفتها = <b>سعر التكلفة × ريت الدولار + المصاريف</b> حيث سعر التكلفة (بالدولار) = (سعر البورصة + متوسط البريم) × معامل التحويل —
+          بنفس معادلة شاشة البورصة تماماً، وتتبع تعديلاتها المؤرخة لحظياً. باقي الأصناف (أكواد المخزون):
+          تكلفة الوحدة = <b>قيمة الرصيد ÷ كمية الرصيد</b> لكل مصنع، محمولة للأمام حتى يصل رصيد أحدث.
+          <br><b>الإجمالي</b> = المتوسط المرجّح عبر مصانع الصنف الواحد (مجموع القيم ÷ مجموع الكميات).
+          <span id="cs-warn"></span>
+        </div>
+      </div>
+    </div>
+
+    <div id="cs-pane-status" hidden>
+      <div class="grid kpis" id="cs-skpis"></div>
+      <div class="card mt">
+        <div class="card-h">
+          <h3>حالة محرك التكلفة <small>المصدران والتنبيهات والبناء</small></h3>
+          <button class="btn sm" id="btn-cs-rebuild">↻ إعادة البناء الكامل</button>
+        </div>
+        <div id="cs-status" style="margin-top:6px"></div>
+        <div id="cs-warnings" style="margin-top:10px"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ الجودة ============ -->
+  <section id="tab-quality">
+    <div class="card">
+      <div class="card-h">
+        <h3>فحص جودة البيانات <small>كل ما وُجد في ملفك الأصلي يُفحص تلقائياً</small></h3>
+        <div class="row">
+          <button class="btn sm" id="btn-qrun">↻ إعادة الفحص</button>
+          <a class="exp" href="/api/export?name=quality">⬇ تصدير CSV</a>
+        </div>
+      </div>
+      <div id="tbl-quality" class="tblwrap" style="margin-top:6px"></div>
+    </div>
+  </section>
+
+  <!-- ============ الاستيراد ============ -->
+  <section id="tab-import">
+
+    <div class="card">
+      <div class="card-h"><h3>الاستيراد اليومي <small>افتح التطبيق يومياً ← ضغطة واحدة تكفي</small></h3></div>
+      <div class="row" style="align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="btn" id="btn-import-today">📥 استيراد اليوم</button>
+        <span class="muted xs" id="today-file">—</span>
+      </div>
+      <div id="today-status" class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap"></div>
+      <div class="muted xs" id="today-note" style="margin-top:8px"></div>
+      <div class="hint" style="margin-top:10px">
+        الزر يستورد <b>آخر ملف استوردته</b> (معروفاً بالاسم أعلى) بكل شيتاته دفعة واحدة، ثم يعرض النتيجة
+        وملاحظات الجودة. لاستيراد ملف آخر (مثل الملف المحمي) استخدم المتصفح بالأسفل.
+      </div>
+    </div>
+
+    <div class="grid two">
+      <div class="card">
+        <div class="card-h"><h3>اختر مجلداً ثم ملف Excel</h3></div>
+        <div class="row">
+          <input class="input" id="dir" value="D:\متابعة الاستهلاك والتكاليف">
+          <button class="btn sm" id="btn-dirs">فتح</button>
+        </div>
+        <div class="filelist" id="filelist"></div>
+        <div class="muted xs" id="files-meta" style="margin-top:6px"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><h3>معاينة واختيار الجداول</h3></div>
+        <div class="row">
+          <button class="btn sec sm" id="btn-preview">🔎 معاينة</button>
+          <button class="btn sm" id="btn-import" disabled>📥 استيراد إلى قاعدة البيانات</button>
+          <label class="muted xs">كلمة مرور (إن وجدت)
+            <input class="input sm" id="pw" type="password" placeholder="••••••">
+          </label>
+        </div>
+        <div id="preview" style="margin-top:12px"></div>
+        <div id="job" style="display:none">
+          <div class="progress"><i></i></div>
+          <div class="muted xs" id="job-stage" style="margin-top:8px"></div>
+        </div>
+        <div id="import-result" style="margin-top:12px"></div>
+        <div class="hint" style="margin-top:12px">
+          الملفات المحمية بكلمة مرور تُقرأ تلقائياً عبر برنامج Excel المفتوح على الجهاز.
+          الجداول تُكتشف بحسب عناوين الأعمدة: الأصناف، المواقع، أنواع الحركات، الحركات، المبيعات، الأرصدة.
+          <b>أسعار البورصة ليست من الملف</b> — تُجلب يومياً من Yahoo وبنك مصر داخل النظام.
+        </div>
+      </div>
+    </div>
+
+    <div class="card mt">
+      <div class="card-h">
+        <h3>المصادر المحملة <small>يمكن ربط ملفات/شيتات أخرى — كل ملف يستبدل بياناته فقط</small></h3>
+        <a class="exp" href="/api/sources">⬇ JSON</a>
+      </div>
+      <div id="tbl-sources" class="tblwrap" style="max-height:220px"></div>
+      <div class="card-h" style="margin-top:20px"><h3>سجل الاستيراد</h3></div>
+      <div id="tbl-imports" class="tblwrap"></div>
+    </div>
+  </section>
+
+  <!-- ============ التقارير ============ -->
+  <section id="tab-reports">
+    <div class="card">
+      <div class="card-h">
+        <h3>مركز التقارير <small>اختر تقريراً ليُعرض داخل المتصفح — ثم صدّره CSV عند الحاجة</small></h3>
+        <span class="muted xs" id="rep-count"></span>
+      </div>
+      <div class="grid three" id="report-list"></div>
+    </div>
+
+    <div class="card mt" id="report-view">
+      <div class="card-h">
+        <h3 id="rep-title">اختر تقريراً من الأعلى لعرضه</h3>
+        <div class="row">
+          <span class="muted xs" id="rep-meta"></span>
+          <a class="exp" id="rep-csv" href="#" style="display:none">⬇ تصدير CSV</a>
+        </div>
+      </div>
+      <div id="rep-chart"></div>
+      <div class="legend" id="rep-legend"></div>
+      <div id="rep-table" class="tblwrap" style="margin-top:12px"></div>
+    </div>
+  </section>
+
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ============ تغيير كلمة المرور ============ -->
+<div class="modal" id="pw-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="pw-title">تغيير كلمة المرور</h3>
+      <button class="icon-btn" data-close="pw-modal" title="إغلاق" id="pw-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" id="pw-why" style="margin-bottom:14px">حسابك يستخدم كلمة مرور مؤقتة — غيّرها الآن.</div>
+      <form id="pw-form" autocomplete="off">
+        <label id="pw-old-row">كلمة المرور الحالية
+          <input class="input" id="pw-old" type="password" autocomplete="current-password">
+        </label>
+        <label>كلمة المرور الجديدة
+          <input class="input" id="pw-new" type="password" autocomplete="new-password" placeholder="6 أحرف على الأقل">
+        </label>
+        <label>تأكيد كلمة المرور
+          <input class="input" id="pw-new2" type="password" autocomplete="new-password">
+        </label>
+        <div class="login-err" id="pw-err" hidden></div>
+        <button class="btn" type="submit" id="pw-btn">حفظ كلمة المرور</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ============ تعديل خلية البورصة ============ -->
+<div class="modal" id="be-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="be-title">تعديل</h3>
+      <button class="icon-btn" data-close="be-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" id="be-meta" style="margin-bottom:14px"></div>
+      <form id="be-form" autocomplete="off">
+        <label>القيمة الجديدة
+          <input class="input" id="be-val" required>
+        </label>
+        <label>ملاحظة (اختياري)
+          <input class="input" id="be-note" placeholder="سبب التعديل…">
+        </label>
+        <div class="hint" id="be-eff"></div>
+        <div class="be-warn" id="be-warn" hidden></div>
+        <div class="login-err" id="be-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit" id="be-btn">حفظ</button>
+          <button class="btn ghost" type="button" id="be-revert">↩ إلغاء التعديل</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ============ تعديل خلية سعر ============ -->
+<div class="modal" id="pr-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="pr-title">تعديل</h3>
+      <button class="icon-btn" data-close="pr-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" id="pr-meta" style="margin-bottom:14px"></div>
+      <form id="pr-form" autocomplete="off">
+        <label>القيمة الجديدة
+          <input class="input" id="pr-val" required>
+        </label>
+        <label>ملاحظة (اختياري)
+          <input class="input" id="pr-note" placeholder="سبب التعديل…">
+        </label>
+        <div class="hint" id="pr-eff"></div>
+        <div class="be-warn" id="pr-warn" hidden></div>
+        <div class="login-err" id="pr-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit" id="pr-btn">حفظ</button>
+          <button class="btn ghost" type="button" id="pr-revert">↩ إلغاء التعديل</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ============ البيانات الأساسية: نوافذ الإضافة والتعديل ============ -->
+<!-- صنف -->
+<div class="modal" id="md-item-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="md-item-title">إضافة صنف</h3>
+      <button class="icon-btn" data-close="md-item-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="md-item-form" autocomplete="off">
+        <label>كود الصنف <span class="muted xs">— 9 خانات مكتملة</span>
+          <input class="input" id="mi-code" inputmode="numeric" maxlength="9" placeholder="000000000" required>
+          <div class="hint" id="mi-count">0 / 9 — لا تُقبل الإضافة قبل اكتمال الـ9 خانات</div>
+        </label>
+        <label>اسم الصنف
+          <input class="input" id="mi-descr" required>
+        </label>
+        <label>وحدة القياس
+          <input class="input" id="mi-uom" placeholder="TO / KG / CS …" required>
+        </label>
+        <div class="row" style="gap:10px">
+          <label style="flex:1">المجموعة <span class="muted xs">— أسفل التصنيف</span>
+            <select class="input" id="mi-group">
+              <option value="">— بدون مجموعة —</option>
+            </select>
+          </label>
+          <label style="flex:1">التصنيف <span class="muted xs">— الأعلى</span>
+            <select class="input" id="mi-class">
+              <option value="">— بدون تصنيف —</option>
+            </select>
+          </label>
+        </div>
+        <div class="login-err" id="mi-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit" id="mi-btn">حفظ</button>
+          <button class="btn ghost" type="button" data-close="md-item-modal">إلغاء</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- مجموعة -->
+<div class="modal" id="md-group-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="md-group-title">إضافة مجموعة</h3>
+      <button class="icon-btn" data-close="md-group-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="md-group-form" autocomplete="off">
+        <label>كود المجموعة<input class="input" id="mg-code" required></label>
+        <label>اسم المجموعة<input class="input" id="mg-descr" required></label>
+        <div class="login-err" id="mg-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit">حفظ</button>
+          <button class="btn ghost" type="button" data-close="md-group-modal">إلغاء</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- تصنيف -->
+<div class="modal" id="md-class-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="md-class-title">إضافة تصنيف</h3>
+      <button class="icon-btn" data-close="md-class-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="md-class-form" autocomplete="off">
+        <label>كود التصنيف<input class="input" id="mc-code" required></label>
+        <label>اسم التصنيف<input class="input" id="mc-descr" required></label>
+        <div class="login-err" id="mc-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit">حفظ</button>
+          <button class="btn ghost" type="button" data-close="md-class-modal">إلغاء</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- شركة -->
+<div class="modal" id="md-comp-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="md-comp-title">إضافة شركة</h3>
+      <button class="icon-btn" data-close="md-comp-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="md-comp-form" autocomplete="off">
+        <label>كود الشركة<input class="input" id="mco-code" required></label>
+        <label>اسم الشركة<input class="input" id="mco-name" required></label>
+        <label>عملة الشركة<input class="input" id="mco-ccy" placeholder="EGP / USD …" required></label>
+        <div class="login-err" id="mco-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit">حفظ</button>
+          <button class="btn ghost" type="button" data-close="md-comp-modal">إلغاء</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- وحدة -->
+<div class="modal" id="md-unit-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="md-unit-title">إضافة وحدة</h3>
+      <button class="icon-btn" data-close="md-unit-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="md-unit-form" autocomplete="off">
+        <label>كود الوحدة<input class="input" id="mu-code" required></label>
+        <label>اسم الوحدة<input class="input" id="mu-name" required></label>
+        <label>الشركة
+          <select class="input" id="mu-company" required></select>
+        </label>
+        <label>المكان<input class="input" id="mu-place" placeholder="المصنع / الموقع …"></label>
+        <div class="login-err" id="mu-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit">حفظ</button>
+          <button class="btn ghost" type="button" data-close="md-unit-modal">إلغاء</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- مخزن -->
+<div class="modal" id="md-wh-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="md-wh-title">إضافة مخزن</h3>
+      <button class="icon-btn" data-close="md-wh-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="md-wh-form" autocomplete="off">
+        <label>كود المخزن<input class="input" id="mw-code" required></label>
+        <label>اسم المخزن<input class="input" id="mw-name" required></label>
+        <label>الوحدة (تُسكَّن الشركة تلقائياً)
+          <select class="input" id="mw-unit" required></select>
+        </label>
+        <div class="hint" id="mw-company-hint">اختر الوحدة لعرض الشركة التابعة</div>
+        <label>المكان<input class="input" id="mw-place" placeholder="يُرثه من الوحدة إن لم تُحدّده"></label>
+        <div class="login-err" id="mw-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit">حفظ</button>
+          <button class="btn ghost" type="button" data-close="md-wh-modal">إلغاء</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- نوع حركة -->
+<div class="modal" id="md-mtype-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="md-mtype-title">إضافة نوع حركة</h3>
+      <button class="icon-btn" data-close="md-mtype-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="md-mtype-form" autocomplete="off">
+        <label>نوع الحركة <span class="muted xs">(الكود)</span>
+          <input class="input" id="mt-code" required>
+        </label>
+        <label>وصف الحركة<input class="input" id="mt-descr"></label>
+        <label>وصف السيستم
+          <input class="input" id="mt-sys" placeholder="ما الذي يفعله السيستم بهذا النوع …">
+        </label>
+        <label>التصنيف
+          <input class="input" id="mt-cat" placeholder="البند الذي يُصنَّف إليه …">
+        </label>
+        <div class="login-err" id="mt-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit">حفظ</button>
+          <button class="btn ghost" type="button" data-close="md-mtype-modal">إلغاء</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script src="/charts.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
