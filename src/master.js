@@ -88,7 +88,7 @@ async function saveItem({ code, descr, uom, groupCode, groupDescr, classCode, cl
       if (dup) throw new Error('الكود الجديد مستخدم لصنف آخر');
     }
     const r = await run(`UPDATE items SET code=$1, descr=$2, uom=$3,
-        group_code=$4, group_desc=$5, class_code=$6, class_desc=$7, updated_at=now()
+        group_code=$4, group_desc=$5, class_code=$6, class_desc=$7, origin='mine', updated_at=now()
       WHERE code=$8`,
       [code, descr, uom, groupCode, groupDescr, classCode, classDescr, editing]);
     if (!r.changes) throw new Error('الصنف غير موجود — حُذف أو تغيّر كوده');
@@ -160,6 +160,7 @@ async function syncFromMovements() {
       updated_at = now()
     FROM src s
     WHERE i.code = s.code
+      AND i.origin = 'movement'
       AND ( (COALESCE(s.ext_group_code,'') <> '' AND COALESCE(i.group_code,'') <> s.ext_group_code)
          OR (COALESCE(s.ext_group_desc,'') <> '' AND COALESCE(i.group_desc,'') <> s.ext_group_desc)
          OR (COALESCE(s.group_code,'')     <> '' AND COALESCE(i.class_code,'') <> s.group_code)
@@ -261,6 +262,36 @@ async function saveClass({ code, descr, editCode }) {
   await run(`INSERT INTO items(code, descr, kind, origin, updated_at) VALUES($1,$2,'class','catalog',now())
              ON CONFLICT (code) DO UPDATE SET descr=$2, updated_at=now()
              WHERE items.kind <> 'item'`, [code, descr]);
+  return { code };
+}
+
+/* ============ الحذف (من قائمة «إضافة بيانات») ============ */
+
+async function deleteItem({ code }) {
+  code = str(code);
+  if (!code) throw new Error('كود الصنف مطلوب');
+  const r = await run(`DELETE FROM items WHERE code=$1 AND kind='item'`, [code]);
+  if (!r.changes) throw new Error('الصنف غير موجود — أو حُذف مسبقاً');
+  return { code };
+}
+
+async function deleteGroup({ code }) {
+  code = str(code);
+  if (!code) throw new Error('كود المجموعة مطلوب');
+  const used = await get(`SELECT COUNT(*)::int n FROM items WHERE kind='item' AND group_code=$1`, [code]);
+  if (used && used.n) throw new Error(`لا يمكن حذف المجموعة — مازالت مستخدمة من ${used.n} صنف (غيّر مجموعاتها أولاً)`);
+  const r = await run(`DELETE FROM items WHERE code=$1 AND kind='group'`, [code]);
+  if (!r.changes) throw new Error('المجموعة غير موجودة — أو حُذفت مسبقاً');
+  return { code };
+}
+
+async function deleteClass({ code }) {
+  code = str(code);
+  if (!code) throw new Error('كود التصنيف مطلوب');
+  const used = await get(`SELECT COUNT(*)::int n FROM items WHERE kind='item' AND class_code=$1`, [code]);
+  if (used && used.n) throw new Error(`لا يمكن حذف التصنيف — مازال مستخدماً من ${used.n} صنف (غيّر تصنيفاتها أولاً)`);
+  const r = await run(`DELETE FROM items WHERE code=$1 AND kind='class'`, [code]);
+  if (!r.changes) throw new Error('التصنيف غير موجود — أو حُذف مسبقاً');
   return { code };
 }
 
@@ -398,6 +429,7 @@ async function saveMtype({ code, descr, systemDesc, category, editCode }) {
 module.exports = {
   listItems, saveItem, syncFromMovements,
   listGroups, saveGroup, listClasses, saveClass,
+  deleteItem, deleteGroup, deleteClass,
   listLocations, saveCompany, saveUnit, saveWarehouse,
   listMtypes, saveMtype,
 };

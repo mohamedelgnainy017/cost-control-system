@@ -499,6 +499,35 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
 .filterbar .segs{flex:0 0 auto;white-space:nowrap}
 .filterbar span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
+/* ---------------- القائمة المنسدلة «إضافة بيانات» ---------------- */
+.cpp{position:relative}
+.cpp-menu{
+  position:absolute;top:calc(100% + 6px);left:0;z-index:70;min-width:350px;
+  background:var(--surface);border:1px solid var(--line-strong);border-radius:14px;
+  box-shadow:0 18px 44px rgba(0,0,0,.45);padding:6px;display:grid;gap:4px;
+  max-height:70vh;overflow:auto;
+}
+.cpp-menu[hidden]{display:none}
+.cpp-item{
+  display:flex;align-items:center;gap:10px;width:100%;text-align:right;
+  background:transparent;border:0;border-radius:10px;padding:8px 10px;
+  font:inherit;color:var(--txt);cursor:pointer;transition:.15s;
+}
+.cpp-item:hover{background:var(--surface-2)}
+.cpp-item i{font-style:normal;color:var(--accent);font-size:15px;flex:0 0 auto}
+.cpp-item b{font-size:13px;font-weight:800;flex:0 0 auto}
+.cpp-acts{flex:1;display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+.act{
+  font-family:var(--font-body);font-size:11px;font-weight:700;padding:5px 9px;border-radius:8px;
+  cursor:pointer;white-space:nowrap;transition:.15s;
+  background:rgba(91,140,255,.12);color:var(--accent);
+}
+.act:hover{background:var(--grad);color:#04101f}
+.act.danger{background:rgba(251,113,133,.12);color:var(--err)}
+.act.danger:hover{background:var(--err);color:#fff}
+.btn.danger{background:rgba(251,113,133,.14);color:var(--err);border-color:rgba(251,113,133,.4)}
+.btn.danger:hover{background:var(--err);color:#fff;border-color:var(--err)}
+
 /* خلايا قابلة للتعديل في جداول التعديل */
 .cellbtn{
   font:inherit;font-family:var(--font-num);font-variant-numeric:tabular-nums;

@@ -347,14 +347,20 @@ const routes = {
 
   'POST /api/md/items/sync': check(async (q, res) => ok(res, await M.syncFromMovements())),
 
+  'POST /api/md/items/delete': check(async (q, res, body) => ok(res, await M.deleteItem(body || {}))),
+
   /* قوائم الكتالوج (تُستخدم أيضاً لملء القوائم المنسدلة في نموذج الصنف) */
   'GET /api/md/items/groups': check(async (q, res) => ok(res, await M.listGroups())),
 
   'POST /api/md/items/groups/save': check(async (q, res, body) => ok(res, await M.saveGroup(body || {}))),
 
+  'POST /api/md/items/groups/delete': check(async (q, res, body) => ok(res, await M.deleteGroup(body || {}))),
+
   'GET /api/md/items/classes': check(async (q, res) => ok(res, await M.listClasses())),
 
   'POST /api/md/items/classes/save': check(async (q, res, body) => ok(res, await M.saveClass(body || {}))),
+
+  'POST /api/md/items/classes/delete': check(async (q, res, body) => ok(res, await M.deleteClass(body || {}))),
 
   /* ---------- البيانات الأساسية: المواقع والمصانع (شركة ← وحدة ← مخزن) ---------- */
   'GET /api/md/locs': check(async (q, res) => ok(res, await M.listLocations())),
@@ -824,8 +830,11 @@ const PERM_ROUTES = {
   /* البيانات الأساسية: الإضافة والتعديل بصلاحية master */
   'POST /api/md/items/save': 'master',
   'POST /api/md/items/sync': 'master',
+  'POST /api/md/items/delete': 'master',
   'POST /api/md/items/groups/save': 'master',
+  'POST /api/md/items/groups/delete': 'master',
   'POST /api/md/items/classes/save': 'master',
+  'POST /api/md/items/classes/delete': 'master',
   'POST /api/md/locs/company/save': 'master',
   'POST /api/md/locs/unit/save': 'master',
   'POST /api/md/locs/warehouse/save': 'master',

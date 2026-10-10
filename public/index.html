@@ -163,25 +163,48 @@
   <section id="tab-md-items">
     <div class="card">
       <div class="card-h">
-        <h3>الأصناف الأساسية <small>كود الصنف (9 خانات) واسمه ووحدته ومجموعته وتصنيفه — في جدول واحد</small></h3>
+        <h3>الأصناف الأساسية <small>كود الصنف (9 خانات) واسمه ووحدته ومجموعته وتصنيفه — والجلب من الحركات تلقائي مع كل استيراد</small></h3>
         <div class="row">
           <button class="btn sm ghost" data-back="md">‹ رجوع</button>
-          <button class="btn sm" id="md-sync">↻ جلب من الحركات</button>
-          <button class="btn sm" id="md-class-btn">＋ تصنيف</button>
-          <button class="btn sm" id="md-group-btn">＋ مجموعة</button>
-          <button class="btn sm" id="md-item-btn">＋ صنف</button>
+          <div class="cpp" id="md-add-drp">
+            <button class="btn sm" id="md-add-btn" type="button">＋ إضافة بيانات ▾</button>
+            <div class="cpp-menu" id="md-add-menu" hidden>
+              <button class="cpp-item" type="button" data-type="item"><i>▤</i><b>صنف</b>
+                <span class="cpp-acts">
+                  <span class="act" data-act="add">＋ إضافة</span>
+                  <span class="act" data-act="edit">✎ تعديل</span>
+                  <span class="act danger" data-act="del">🗑 حذف</span>
+                </span>
+              </button>
+              <button class="cpp-item" type="button" data-type="group"><i>▦</i><b>مجموعة</b>
+                <span class="cpp-acts">
+                  <span class="act" data-act="add">＋ إضافة</span>
+                  <span class="act" data-act="edit">✎ تعديل</span>
+                  <span class="act danger" data-act="del">🗑 حذف</span>
+                </span>
+              </button>
+              <button class="cpp-item" type="button" data-type="class"><i>◫</i><b>تصنيف</b>
+                <span class="cpp-acts">
+                  <span class="act" data-act="add">＋ إضافة</span>
+                  <span class="act" data-act="edit">✎ تعديل</span>
+                  <span class="act danger" data-act="del">🗑 حذف</span>
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
-      <div class="row filterbar" style="gap:6px;align-items:center;margin-top:4px">
-        <div class="segs" id="md-items-segs">
-          <button class="seg on" data-origin="all">الكل</button>
-          <button class="seg" data-origin="mine">مسجّلي</button>
-          <button class="seg" data-origin="movement">المجلوبة من الحركات</button>
-        </div>
-        <input class="input" id="md-items-q" placeholder="بحث بالكود أو الاسم أو المجموعة…" style="max-width:260px">
-        <select class="input" id="md-items-group" style="max-width:220px"><option value="">كل المجموعات</option></select>
-        <select class="input" id="md-items-class" style="max-width:220px"><option value="">كل التصنيفات</option></select>
+      <div class="row filterbar" style="gap:6px;align-items:center;margin-top:4px;flex-wrap:nowrap">
+        <select class="input" id="md-items-origin" style="max-width:210px">
+          <option value="all">تفصيل البيانات: الكل</option>
+          <option value="mine">تفصيل البيانات: تم تسجيلها</option>
+          <option value="movement">تفصيل البيانات: مجلوبة من الحركات</option>
+        </select>
+        <input class="input" id="md-items-q" placeholder="بحث بالكود أو الاسم أو المجموعة…" style="max-width:210px">
+        <select class="input" id="md-items-group" style="max-width:200px"><option value="">كل المجموعات</option></select>
+        <select class="input" id="md-items-class" style="max-width:200px"><option value="">كل التصنيفات</option></select>
         <button class="btn sm" id="md-items-apply">تطبيق الفلتر</button>
+        <button class="btn sm ghost" id="md-items-clear">↺ مسح الفلتر</button>
       </div>
       <div class="hint" style="margin-top:10px">
         التسلسل: <b>التصنيف (أعلى) ← مجموعة المواد ← الصنف (أسفل)</b> — كلها أعمدة داخل جدول الأصناف واحد.
@@ -976,6 +999,27 @@
           <button class="btn ghost" type="button" data-close="md-class-modal">إلغاء</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- اختيار سجل (تعديل/حذف) من قائمة «إضافة بيانات» -->
+<div class="modal" id="md-pick-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="md-pick-title">اختر عنصراً</h3>
+      <button class="icon-btn" data-close="md-pick-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <label id="md-pick-lbl">العنصر المطلوب
+        <select class="input" id="md-pick-sel" style="width:100%"></select>
+      </label>
+      <div class="hint" id="md-pick-info" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn" type="button" id="md-pick-edit">✎ تعديل</button>
+        <button class="btn danger" type="button" id="md-pick-del">🗑 حذف</button>
+        <button class="btn ghost" type="button" data-close="md-pick-modal">إلغاء</button>
+      </div>
     </div>
   </div>
 </div>

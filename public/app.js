@@ -401,10 +401,7 @@ const mdErr = (id, msg) => { const el = $('#' + id); if (el) { el.hidden = !msg;
 /* ---------------- شاشة الأصناف ---------------- */
 async function loadMdItems() {
   const canM = can('master');
-  vis($('#md-sync'), canM);
-  vis($('#md-item-btn'), canM);
-  vis($('#md-group-btn'), canM);
-  vis($('#md-class-btn'), canM);
+  vis($('#md-add-drp'), canM);
   const [g, c] = await Promise.all([
     api('/api/md/items/groups').catch(() => []),
     api('/api/md/items/classes').catch(() => []),
@@ -466,17 +463,24 @@ async function renderMdItems() {
     { t: 'المصدر', h: true, f: r => r.origin === 'movement'
         ? '<span class="pill info">من الحركات</span>' : '<span class="pill">مسجّل</span>' },
     ...(canM ? [{ t: '', h: true, f: r => `<button class="btn sm ghost" data-item="${escHtml(r.code)}">✎ تعديل</button>` }] : []),
-  ], d, { empty: 'لا توجد أصناف — استورد ملف الحركات ثم اضغط «جلب من الحركات»' });
+  ], d, { empty: 'لا توجد أصناف — استورد ملف الحركات وسيُجلب الموجود منها تلقائياً' });
 }
 
-/* فلترة: الكل / مسجّلي / المجلوبة من الحركات */
-$$('#md-items-segs .seg').forEach(b => b.addEventListener('click', () => {
-  $$('#md-items-segs .seg').forEach(x => x.classList.toggle('on', x === b));
-  mdItemsOrigin = b.dataset.origin;
-  renderMdItems().catch(e => toast(e.message));
-}));
+/* تفصيل البيانات: الكل / تم تسجيلها / مجلوبة من الحركات */
+$('#md-items-origin')?.addEventListener('change', e => {
+  mdItemsOrigin = e.target.value;
+  renderMdItems().catch(x => toast(x.message));
+});
 
 $('#md-items-apply')?.addEventListener('click', () => renderMdItems().catch(e => toast(e.message)));
+$('#md-items-clear')?.addEventListener('click', () => {
+  const q = $('#md-items-q'); if (q) q.value = '';
+  const g = $('#md-items-group'); if (g) g.value = '';
+  const c = $('#md-items-class'); if (c) c.value = '';
+  const o = $('#md-items-origin'); if (o) o.value = 'all';
+  mdItemsOrigin = 'all';
+  renderMdItems().catch(e => toast(e.message));
+});
 $('#md-items-q')?.addEventListener('keydown', e => { if (e.key === 'Enter') renderMdItems().catch(() => {}); });
 
 $('#tbl-md-items')?.addEventListener('click', e => {
@@ -517,8 +521,6 @@ function openMdItem(code) {
   updMiCount();
   mdOpen('md-item-modal');
 }
-$('#md-item-btn')?.addEventListener('click', () => openMdItem(null));
-
 $('#md-item-form')?.addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target;
@@ -551,7 +553,6 @@ function openMdGroup(code) {
   mdErr('mg-err', null);
   mdOpen('md-group-modal');
 }
-$('#md-group-btn')?.addEventListener('click', () => openMdGroup(null));
 $('#md-group-form')?.addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target;
@@ -579,7 +580,6 @@ function openMdClass(code) {
   mdErr('mc-err', null);
   mdOpen('md-class-modal');
 }
-$('#md-class-btn')?.addEventListener('click', () => openMdClass(null));
 $('#md-class-form')?.addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target;
@@ -596,16 +596,80 @@ $('#md-class-form')?.addEventListener('submit', async e => {
   } catch (err) { mdErr('mc-err', err.message); }
 });
 
-/* --- جلب الأصناف من الحركات يدوياً --- */
-$('#md-sync')?.addEventListener('click', async () => {
-  const b = $('#md-sync');
-  b.disabled = true; b.textContent = '… جارٍ الجلب';
+/* --- قائمة «إضافة بيانات»: صنف / مجموعة / تصنيف — كلٌّ بإضافة/تعديل/حذف ---
+   تعديل/حذف يفتحان نافذة اختيار للسجل، والجلب من الحركات تلقائي مع كل استيراد */
+let mdPickItems = [];     /* سجلات النافذة الحالية */
+let mdPickType = 'item';  /* item | group | class */
+
+$('#md-add-btn')?.addEventListener('click', e => {
+  e.stopPropagation();
+  const m = $('#md-add-menu'); if (m) m.hidden = !m.hidden;
+});
+document.addEventListener('click', () => { const m = $('#md-add-menu'); if (m && !m.hidden) m.hidden = true; });
+
+$('#md-add-menu')?.addEventListener('click', e => {
+  const it = e.target.closest('[data-type]');
+  const act = e.target.closest('[data-act]');
+  if (!it || !act) return;
+  const m = $('#md-add-menu'); if (m) m.hidden = true;
+  const type = it.dataset.type, a = act.dataset.act;
+  if (a === 'add') {
+    if (type === 'item') openMdItem(null);
+    else if (type === 'group') openMdGroup(null);
+    else openMdClass(null);
+  } else {
+    openPicker(type);
+  }
+});
+
+async function openPicker(type) {
+  mdPickType = type;
+  const noun = { item: 'صنف', group: 'مجموعة', class: 'تصنيف' }[type];
+  $('#md-pick-title').textContent = 'إدارة ال' + { item: 'أصناف', group: 'مجموعات', class: 'تصنيفات' }[type];
+  const lbl = $('#md-pick-lbl'); if (lbl) lbl.firstChild.textContent = 'اختر ال' + noun + ' المطلوب ';
+  const sel = $('#md-pick-sel'), info = $('#md-pick-info');
+  sel.innerHTML = '<option value="">جارٍ التحميل…</option>';
+  if (info) info.textContent = '';
+  $('#md-pick-modal').hidden = false;
   try {
-    const r = await api('/api/md/items/sync', { method: 'POST', headers: hdr, body: JSON.stringify({}) });
-    toast(`تم الجلب: ${n0(r.inserted)} صنف جديد • ${n0(r.settled)} صنف تسكينة • ${n0(r.locations)} موقع جديد • ${n0(r.warehouses)} مخزن جديد`);
-    await renderMdItems();
-  } catch (e) { toast('خطأ: ' + e.message); }
-  finally { b.disabled = false; b.textContent = '↻ جلب من الحركات'; }
+    mdPickItems = type === 'item'
+      ? await api('/api/md/items?limit=3000')
+      : type === 'group' ? await api('/api/md/items/groups') : await api('/api/md/items/classes');
+  } catch (err) {
+    mdPickItems = [];
+    if (info) info.textContent = 'تعذّر التحميل: ' + err.message;
+  }
+  const name = r => r.descr || r.name || '';
+  sel.innerHTML = mdPickItems.length
+    ? mdPickItems.map(r => `<option value="${escHtml(r.code)}">${escHtml(r.code)} — ${escHtml(name(r))}</option>`).join('')
+    : '<option value="">لا توجد بيانات</option>';
+  if (info) info.textContent = `${n0(mdPickItems.length)} ${noun} متاح — اختر ثم اضغط «تعديل» أو «حذف»`;
+}
+
+$('#md-pick-edit')?.addEventListener('click', () => {
+  const sel = $('#md-pick-sel'); const code = sel.value;
+  if (!code || !mdPickItems.some(r => r.code === code)) { toast('اختر عنصراً أولاً'); return; }
+  $('#md-pick-modal').hidden = true;
+  if (mdPickType === 'item') openMdItem(code);
+  else if (mdPickType === 'group') openMdGroup(code);
+  else openMdClass(code);
+});
+
+$('#md-pick-del')?.addEventListener('click', async () => {
+  const sel = $('#md-pick-sel'); const code = sel.value;
+  if (!code || !mdPickItems.some(r => r.code === code)) { toast('اختر عنصراً أولاً'); return; }
+  const noun = { item: 'الصنف', group: 'المجموعة', class: 'التصنيف' }[mdPickType];
+  if (!confirm(`حذف ${noun} «${code}» نهائياً؟`)) return;
+  const btn = $('#md-pick-del'); if (btn) btn.disabled = true;
+  try {
+    const url = '/api/md/items'
+      + (mdPickType === 'group' ? '/groups' : mdPickType === 'class' ? '/classes' : '') + '/delete';
+    await api(url, { method: 'POST', headers: hdr, body: JSON.stringify({ code }) });
+    toast(`تم حذف ${noun} «${code}» ✔`);
+    $('#md-pick-modal').hidden = true;
+    await loadMdItems();
+  } catch (err) { toast('خطأ: ' + err.message); }
+  finally { if (btn) btn.disabled = false; }
 });
 
 /* ---------------- شاشة المواقع والمصانع ---------------- */
