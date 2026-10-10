@@ -479,21 +479,25 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
 .seg:hover{color:var(--txt);background:rgba(91,140,255,.10)}
 .seg.on{background:var(--grad);color:#04101f;box-shadow:0 6px 18px rgba(91,140,255,.30)}
 
-/* ---------------- شريط الفلاتر (سطر واحد) ---------------- */
+/* ---------------- شريط الفلاتر (سطر واحد مدمج — بلا تمرير أفقي) ---------------- */
 .filterbar{
-  display:flex;gap:10px;align-items:end;flex-wrap:nowrap;overflow-x:auto;
-  padding:12px 14px;
+  display:flex;gap:6px;align-items:end;flex-wrap:nowrap;
+  padding:8px 10px;
+}
+.filterbar > :not(.btn){
+  flex:1 1 0;min-width:0;
 }
 .filterbar .fl{
-  display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted);font-weight:700;
-  flex:0 0 auto;
+  display:flex;flex-direction:column;gap:3px;font-size:10px;color:var(--muted);font-weight:700;
 }
 .filterbar .fl .input{
-  font-weight:600;color:var(--txt);flex:0 0 auto;
+  width:100%;font-weight:600;color:var(--txt);padding:5px 8px;font-size:12.5px;
 }
-.filterbar input[type=date]{width:138px}
-.filterbar select{max-width:170px}
-.filterbar .btn{flex:0 0 auto;white-space:nowrap;margin:0}
+.filterbar .fl:has(>input[type=date]){flex:0 0 120px}
+.filterbar select{min-width:0}
+.filterbar .btn{flex:0 0 auto;white-space:nowrap;margin:0;padding:5px 9px;font-size:12px}
+.filterbar .segs{flex:0 0 auto;white-space:nowrap}
+.filterbar span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* خلايا قابلة للتعديل في جداول التعديل */
 .cellbtn{
