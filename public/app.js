@@ -25,11 +25,12 @@ const hdr = { 'Content-Type': 'application/json' };
 function debounce(fn, ms = 300) {
   let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
-/* يجمع قيم حقول الفلاتر في استعلام URL */
+/* يجمع قيم حقول الفلاتر في استعلام URL
+   ملاحظة: الـ ids تُمرَّر عارية بلا «#» — نجلبها بـ getElementById لا querySelector */
 function filterQS(ids) {
   const p = new URLSearchParams();
   for (const [k, id] of Object.entries(ids)) {
-    const el = $(id); if (!el) continue;
+    const el = document.getElementById(id); if (!el) continue;
     const v = (el.value || '').trim();
     if (v) p.set(k, v);
   }
@@ -353,16 +354,63 @@ async function loadTab(name) {
 async function loadDashboard() {
   const isAdmin = !!me && me.role === 'admin';
   const canUsers = can('users');
+  const canSee = isAdmin || canUsers;
+  vis($('#dash-hero'), canSee);
+  vis($('#dash-stats'), canSee);
   vis($('#card-tabperms'), isAdmin);
   vis($('#card-users'), canUsers);
-  vis($('#dash-hint'), !isAdmin && !canUsers);  // دور مُصرَّح له بالدخول بلا إدارة
+  vis($('#dash-hint'), !canSee);
 
+  fillDashGreeting();
   if (canUsers) await initUsersForm();
+  let tabsData = null, usersData = null;
   const jobs = [];
-  if (isAdmin) jobs.push(loadTabPerms().catch(e => toast(e.message)));
-  if (canUsers) jobs.push(renderUsers().catch(() => {}));
+  if (isAdmin) jobs.push(loadTabPerms().then(d => { tabsData = d; }).catch(e => toast(e.message)));
+  if (canUsers) jobs.push(renderUsers().then(u => { usersData = u; }).catch(() => {}));
   await Promise.all(jobs);
+  renderDashStats(usersData, tabsData);
 }
+
+/* ---- التحية حسب الوقت + التاريخ + دور المستخدم ---- */
+function fillDashGreeting() {
+  const g = $('#dash-greeting');
+  if (g && me) {
+    const h = new Date().getHours();
+    const hello = h < 12 ? 'صباح الخير' : h < 18 ? 'مساء الخير' : 'ليلة سعيدة';
+    g.textContent = hello + '، ' + (me.full_name || me.username);
+  }
+  const d = $('#dash-date');
+  if (d) d.textContent = new Intl.DateTimeFormat('ar-EG-u-nu-latn', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  }).format(new Date());
+  const rn = $('#dash-role-name');
+  if (rn && me) rn.textContent = me.roleLabel || roleLabels[me.role] || 'مدير';
+}
+
+/* ---- إحصاءات لوحة التحكم (عدّادة تصاعدية) ---- */
+function renderDashStats(users, tabs) {
+  const anim = (id, v) => { const el = $(id); if (el) animateNum(el, String(v)); };
+  if (users) {
+    anim('#st-users', users.length);
+    anim('#st-active', users.filter(u => u.active).length);
+    anim('#st-must', users.filter(u => u.must_change).length);
+  }
+  if (tabs) anim('#st-tabs', tabs.length);
+}
+
+/* ---- أيقونات الشاشات (مطابقة للشريط الجانبي) ---- */
+const TAB_ICONS = {
+  dashboard: '◧', 'md-items': '▦', 'md-locations': '⌂', 'md-movetypes': '⇅',
+  inventory: '◫', sales: '◈', movements: '⇄', borse: '⌁', prices: '¤',
+  costs: '∑', quality: '◇', import: '⇪', reports: '⤓',
+};
+/* لون صورة المستخدم حسب اسمه */
+const AVC = ['a1', 'a2', 'a3', 'a4', 'a5'];
+const avc = s => {
+  let n = 0;
+  for (const c of String(s || '')) n = (n * 31 + c.charCodeAt(0)) >>> 0;
+  return AVC[n % AVC.length];
+};
 
 /* ---- صلاحيات الشاشات: جدول (شاشة × أدوار) للمدير ---- */
 async function loadTabPerms() {
@@ -370,11 +418,12 @@ async function loadTabPerms() {
   const acc = new Set(d.perms.accountant || []);
   const view = new Set(d.perms.viewer || []);
   table($('#tbl-tabperms'), [
-    { t: 'الشاشة', h: true, f: r => `<b>${escHtml(r.label)}</b>` },
+    { t: 'الشاشة', h: true, f: r => `<div class="scr"><i>${TAB_ICONS[r.id] || '◈'}</i><b>${escHtml(r.label)}</b></div>` },
     { t: 'مدير', h: true, f: () => '<span class="pill info">✓ دائماً</span>' },
-    { t: 'محاسب', h: true, f: r => `<input type="checkbox" data-role="accountant" data-tab="${r.id}" ${acc.has(r.id) ? 'checked' : ''}>` },
-    { t: 'مشاهد', h: true, f: r => `<input type="checkbox" data-role="viewer" data-tab="${r.id}" ${view.has(r.id) ? 'checked' : ''}>` },
+    { t: 'محاسب', h: true, f: r => `<label class="psw" title="محاسب"><input type="checkbox" data-role="accountant" data-tab="${r.id}" ${acc.has(r.id) ? 'checked' : ''}><i></i></label>` },
+    { t: 'مشاهد', h: true, f: r => `<label class="psw" title="مشاهد"><input type="checkbox" data-role="viewer" data-tab="${r.id}" ${view.has(r.id) ? 'checked' : ''}><i></i></label>` },
   ], d.tabs, { empty: '—' });
+  return d.tabs;
 }
 $('#btn-tabperms-save')?.addEventListener('click', async () => {
   const btn = $('#btn-tabperms-save');
@@ -643,8 +692,9 @@ $('#md-add-btn')?.addEventListener('click', e => {
   e.stopPropagation();
   const m = $('#md-add-menu'); if (m) m.hidden = !m.hidden;
 });
-document.addEventListener('click', () => {
-  ['#md-add-menu', '#md-loc-add-menu', '#md-mt-add-menu'].forEach(s => {
+document.addEventListener('click', e => {
+  if (e.target.closest('.filters-mv-menu')) return;   /* الضغط جوه القائمة متقفلّهاش */
+  ['#md-add-menu', '#md-loc-add-menu', '#md-mt-add-menu', '#mf-more-menu'].forEach(s => {
     const m = $(s); if (m && !m.hidden) m.hidden = true;
   });
 });
@@ -885,25 +935,23 @@ $('#md-wh-form')?.addEventListener('submit', async e => {
 });
 
 /* ---------------- شاشة أنواع الحركات ---------------- */
-let mdMtypeCatsLoaded = false;
-let mdCats = [];
 async function loadMdMtypes() {
   vis($('#md-mt-add-drp'), can('master'));
-  if (!mdMtypeCatsLoaded) {
-    mdMtypeCatsLoaded = true;
-    mdCats = await api('/api/md/mtype-cats').catch(() => []);
-    const el = $('#md-mtype-cat');
-    if (el) {
-      el.innerHTML = '<option value="">كل التصنيفات</option>' +
-        mdCats.map(c => `<option value="${escHtml(c.name)}">${escHtml(c.name)}</option>`).join('');
-    }
-  }
   await renderMdMtypes();
 }
 
 async function renderMdMtypes() {
   const q = ($('#md-mtype-q')?.value || '').trim();
   mdMtypes = await api('/api/md/mtypes?q=' + encodeURIComponent(q));
+  /* نملأ فلتر التصنيفات من القيم الموجودة فعلاً (مع الحفاظ على الاختيار الحالي) */
+  const catSel = $('#md-mtype-cat');
+  if (catSel) {
+    const cur = catSel.value;
+    const cats = [...new Set(mdMtypes.map(r => String(r.category || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar'));
+    catSel.innerHTML = '<option value="">كل التصنيفات</option>' +
+      cats.map(c => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('');
+    if ([...catSel.options].some(o => o.value === cur)) catSel.value = cur;
+  }
   const cat = $('#md-mtype-cat')?.value || '';
   const rows = cat ? mdMtypes.filter(r => (r.category || '') === cat) : mdMtypes;
   const canM = can('master');
@@ -930,10 +978,6 @@ $('#md-mtype-q')?.addEventListener('keydown', e => { if (e.key === 'Enter') rend
 
 function fillMtCat(val) {
   const el = $('#mt-cat'); if (!el) return;
-  const names = mdCats.map(c => c.name);
-  if (val && !names.includes(val)) names.push(val);
-  el.innerHTML = '<option value="">— بدون تصنيف —</option>' +
-    names.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join('');
   el.value = val || '';
 }
 
@@ -961,7 +1005,6 @@ $('#md-mtype-form')?.addEventListener('submit', async e => {
     $('#md-mtype-modal').hidden = true;
     f.dataset.edit = '';
     toast(editing ? 'تم تعديل نوع الحركة ✔' : 'تمت إضافة نوع الحركة ✔');
-    mdMtypeCatsLoaded = false;
     await loadMdMtypes();
   } catch (err) { mdErr('mt-err', err.message); }
 });
@@ -977,58 +1020,18 @@ $('#md-mt-add-menu')?.addEventListener('click', e => {
   if (!it || !act) return;
   $('#md-mt-add-menu').hidden = true;
   const type = it.dataset.mtType, a = act.dataset.act;
-  if (a === 'add') { if (type === 'mtype') openMdMtype(null); else openMdCategory(null); return; }
-  if (type === 'mtype') {
-    openPicker({
-      title: 'إدارة أنواع الحركات', label: 'اختر نوع الحركة المطلوب', noun: 'نوع الحركة',
-      nameOf: r => r.descr || '',
-      load: () => api('/api/md/mtypes?q='),
-      onEdit: code => openMdMtype(code),
-      onDelete: async code => {
-        await api('/api/md/mtypes/delete', { method: 'POST', headers: hdr, body: JSON.stringify({ code }) });
-        toast(`تم حذف نوع الحركة «${code}» ✔`);
-        await renderMdMtypes();
-      },
-    });
-  } else {
-    openPicker({
-      title: 'إدارة التصنيفات', label: 'اختر التصنيف المطلوب', noun: 'التصنيف',
-      nameOf: r => r.descr || '',
-      load: () => api('/api/md/mtype-cats').then(rows => rows.map(r => ({ code: r.name, descr: r.name }))),
-      onEdit: name => openMdCategory(name),
-      onDelete: async name => {
-        await api('/api/md/mtype-cats/delete', { method: 'POST', headers: hdr, body: JSON.stringify({ name }) });
-        toast(`تم حذف التصنيف «${name}» ✔`);
-        mdMtypeCatsLoaded = false;
-        await loadMdMtypes();
-      },
-    });
-  }
-});
-
-/* --- نافذة تصنيف أنواع الحركات: اسم فقط --- */
-function openMdCategory(name) {
-  const f = $('#md-mtcat-form');
-  f.dataset.edit = name || '';
-  $('#md-mtcat-title').textContent = name ? 'تعديل تصنيف' : 'إضافة تصنيف';
-  $('#mtc-name').value = name || '';
-  mdErr('mtc-err', null);
-  mdOpen('md-mtcat-modal');
-}
-$('#md-mtcat-form')?.addEventListener('submit', async e => {
-  e.preventDefault();
-  const f = e.target;
-  const editing = f.dataset.edit || '';
-  mdErr('mtc-err', null);
-  try {
-    await api('/api/md/mtype-cats/save', { method: 'POST', headers: hdr, body: JSON.stringify({
-      name: $('#mtc-name').value.trim(), editName: editing }) });
-    $('#md-mtcat-modal').hidden = true;
-    f.dataset.edit = '';
-    toast(editing ? 'تم تعديل التصنيف ✔' : 'تمت إضافة التصنيف ✔');
-    mdMtypeCatsLoaded = false;
-    await loadMdMtypes();
-  } catch (err) { mdErr('mtc-err', err.message); }
+  if (a === 'add') { openMdMtype(null); return; }
+  openPicker({
+    title: 'إدارة أنواع الحركات', label: 'اختر نوع الحركة المطلوب', noun: 'نوع الحركة',
+    nameOf: r => r.descr || '',
+    load: () => api('/api/md/mtypes?q='),
+    onEdit: code => openMdMtype(code),
+    onDelete: async code => {
+      await api('/api/md/mtypes/delete', { method: 'POST', headers: hdr, body: JSON.stringify({ code }) });
+      toast(`تم حذف نوع الحركة «${code}» ✔`);
+      await renderMdMtypes();
+    },
+  });
 });
 
 /* ---------------- المخزون ---------------- */
@@ -1249,6 +1252,12 @@ $('#mf-clear')?.addEventListener('click', () => {
 ['mf-item', 'mf-from', 'mf-to'].forEach(id => $(id)?.addEventListener('keydown', e => {
   if (e.key === 'Enter') loadMovements().catch(() => {});
 }));
+
+/* قائمة الفلاتر الإضافية (المكان/النوع/التوجيه/الوحدة/الصنف) */
+$('#mf-more-btn')?.addEventListener('click', e => {
+  e.stopPropagation();
+  const m = $('#mf-more-menu'); if (m) m.hidden = !m.hidden;
+});
 
 /* ---------------- البورصة اليومية ---------------- */
 let borseItemsSig = '';
@@ -2516,12 +2525,20 @@ async function initUsersForm() {
 async function renderUsers() {
   try {
     const users = await api('/api/users');
+    const cnt = $('#users-count');
+    if (cnt) cnt.textContent = users.length ? users.length + ' مستخدم' : '';
     const sel = id => `<select class="input sm" data-act="role" data-id="${id}">` +
       Object.keys(roleLabels).map(r => `<option value="${r}">${roleLabels[r]}</option>`).join('') + '</select>';
     table($('#tbl-users'), [
-      { t: 'المستخدم', h: true, f: r => `<b>${escHtml(r.username)}</b>` +
-          (r.full_name ? `<div class="muted xs">${escHtml(r.full_name)}</div>` : '') +
-          (me && r.id === me.id ? '<div class="muted xs">◂ حسابك</div>' : '') },
+      { t: 'المستخدم', h: true, f: r => {
+          const ch = (r.full_name || r.username || '؟').trim().charAt(0) || '؟';
+          return `<div class="urow">` +
+            `<span class="u-avatar ${avc(r.username)}">${escHtml(ch)}</span>` +
+            `<span><b>${escHtml(r.username)}</b>` +
+            (r.full_name ? `<div class="muted xs">${escHtml(r.full_name)}</div>` : '') +
+            (me && r.id === me.id ? '<div class="muted xs">◂ حسابك</div>' : '') +
+            `</span></div>`;
+        } },
       { t: 'الدور', h: true, f: r => sel(r.id).replace(`<option value="${r.role}">`, `<option value="${r.role}" selected>`) },
       { t: 'الحالة', h: true, f: r => (r.active ? '<span class="pill info">نشط</span>' : '<span class="pill error">معطّل</span>') +
           (r.must_change ? ' <span class="pill warning">كلمة افتراضية</span>' : '') },
@@ -2532,7 +2549,8 @@ async function renderUsers() {
           `<button class="btn sm ghost" title="حذف المستخدم" data-act="del" data-id="${r.id}">🗑</button>` +
         `</div>` },
     ], users, { empty: 'لا يوجد مستخدمون' });
-  } catch (e) { toast(e.message); }
+    return users;
+  } catch (e) { toast(e.message); return null; }
 }
 
 $('#user-form')?.addEventListener('submit', async ev => {

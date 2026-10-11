@@ -384,13 +384,6 @@ const routes = {
 
   'POST /api/md/mtypes/delete': check(async (q, res, body) => ok(res, await M.deleteMtype(body || {}))),
 
-  /* تصنيفات أنواع الحركات (إدارة من نفس الشاشة) */
-  'GET /api/md/mtype-cats': check(async (q, res) => ok(res, await M.listCategories())),
-
-  'POST /api/md/mtype-cats/save': check(async (q, res, body) => ok(res, await M.saveCategory(body || {}))),
-
-  'POST /api/md/mtype-cats/delete': check(async (q, res, body) => ok(res, await M.deleteCategory(body || {}))),
-
   'GET /api/users': async (q, res) => ok(res, await Auth.listUsers()),
 
   'POST /api/users': async (q, res, body, req, me) => {
@@ -789,7 +782,6 @@ const TAB_API = [
   ['/api/md/items', ['md-items']],
   ['/api/md/locs', ['md-locations']],
   ['/api/md/mtypes', ['md-movetypes']],
-  ['/api/md/mtype-cats', ['md-movetypes']],
   ['/api/inventory', ['inventory']],
   ['/api/reconcile', ['inventory']],
   ['/api/sales', ['sales']],
@@ -859,8 +851,6 @@ const PERM_ROUTES = {
   'POST /api/md/locs/warehouse/delete': 'master',
   'POST /api/md/mtypes/save': 'master',
   'POST /api/md/mtypes/delete': 'master',
-  'POST /api/md/mtype-cats/save': 'master',
-  'POST /api/md/mtype-cats/delete': 'master',
 };
 
 const PERM_LABEL = {
@@ -958,7 +948,7 @@ const server = http.createServer((req, res) => {
     const file = path.join(PUBLIC, path.normalize(p).replace(/^([.\\/])+/, ''));
     if (file.startsWith(PUBLIC) && fs.existsSync(file) && fs.statSync(file).isFile()) {
       const buf = fs.readFileSync(file);
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream' });
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-store, must-revalidate' });
       return res.end(buf);
     }
     return send(res, 404, { ok: false, error: 'Not found' });

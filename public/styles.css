@@ -460,8 +460,9 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
 .modal-body{padding:18px}
 .modal-body form{display:grid;gap:12px}
 .modal-body label{display:grid;gap:6px;font-size:12.5px;color:var(--txt-2);font-weight:600}
-#user-form{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-#user-form .input{flex:1;min-width:165px}
+#user-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px;align-items:end}
+#user-form .input{width:100%;min-width:0}
+#user-form > .btn{height:42px;white-space:nowrap}
 @media(max-width:760px){
   .topbar .me{display:none}
   #btn-users{display:none}
@@ -479,25 +480,82 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
 .seg:hover{color:var(--txt);background:rgba(91,140,255,.10)}
 .seg.on{background:var(--grad);color:#04101f;box-shadow:0 6px 18px rgba(91,140,255,.30)}
 
-/* ---------------- شريط الفلاتر (سطر واحد مدمج — بلا تمرير أفقي) ---------------- */
+/* ---------------- شريط الفلاتر (سطر واحد يلتف عند الحاجة) ---------------- */
 .filterbar{
-  display:flex;gap:6px;align-items:end;flex-wrap:nowrap;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:flex-end;
+  gap:10px 12px;
   padding:8px 10px;
 }
 .filterbar > :not(.btn){
-  flex:1 1 0;min-width:0;
+  flex:0 0 auto;
 }
 .filterbar .fl{
   display:flex;flex-direction:column;gap:3px;font-size:10px;color:var(--muted);font-weight:700;
+  min-width:140px;
 }
+/* حقول التاريخ: LTR عشان مايتقطعش + عرض ثابت يكفي لعرض التاريخ كاملاً */
+.filterbar input[type=date]{direction:ltr;text-align:center}
+.filterbar .fl:has(> input[type=date]){width:150px;flex:0 0 150px;min-width:150px}
 .filterbar .fl .input{
   width:100%;font-weight:600;color:var(--txt);padding:5px 8px;font-size:12.5px;
 }
-.filterbar .fl:has(>input[type=date]){flex:0 0 120px}
+.filterbar .btn{flex:0 0 auto}
+/* فلاتر صفحة حركات السيستم اليومية: التاريخ + قائمة منسدلة + أزرار */
+.filters-mv{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:flex-end;
+  gap:10px 12px;
+  overflow:visible;
+  z-index:30;
+}
+.filters-mv .fl{
+  flex:0 0 125px;
+  display:flex;flex-direction:column;gap:3px;font-size:10px;color:var(--muted);font-weight:700;
+}
+.filters-mv .fl .input{
+  width:100%;font-weight:600;color:var(--txt);padding:5px 8px;font-size:12.5px;
+}
+/* التاريخ LTR — dir=ltr بيخلي اليوم/الشهر/السنة مايتعكسوش */
+.filters-mv .mv-date{direction:ltr;text-align:center}
+.filters-mv #mf-item{text-align:right;direction:rtl}
+/* نطاق التاريخ: من – إلى جنب بعض — عرض كافٍ لحقلَي التاريخ كاملين بلا تداخل */
+.filters-mv .mv-range{flex:0 0 320px}
+.mv-range-in{display:flex;align-items:center;gap:6px}
+.mv-range-in .input{flex:1 1 0;min-width:0}
+.mv-range-in i{color:var(--muted);font-style:normal;flex:0 0 auto;font-weight:400}
+/* زر «فلاتر أخرى»: مزاح لليسار وأكبر شوية */
+.filters-mv-menu{flex:0 0 auto;margin-inline-start:8px}
+.filters-mv-menu > .btn{padding:8px 15px;font-size:13px;font-weight:800}
+/* القائمة المنسدلة: شبكة كروت مريحة */
+.cpp-menu.filters-mv-pop{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(140px,1fr));
+  min-width:350px;max-width:480px;padding:16px;gap:14px;
+  right:0;left:auto;
+  z-index:200;
+  direction:rtl;
+}
+.filters-mv-pop .fl{
+  display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--muted);font-weight:700;
+}
+.filters-mv-pop .fl .input{
+  width:100%;font-weight:600;color:var(--txt);padding:8px 10px;font-size:13px;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:10px;
+}
+/* الأزرار في حاوية flex مع gap ثابت — متتلزقش في بعض */
+.filters-mv-actions{
+  display:flex;
+  gap:8px;
+  align-items:flex-end;
+}
+.filters-mv .btn{flex:0 0 auto;white-space:nowrap}
 .filterbar select{min-width:0}
 .filterbar .btn{flex:0 0 auto;white-space:nowrap;margin:0;padding:5px 9px;font-size:12px}
 .filterbar .segs{flex:0 0 auto;white-space:nowrap}
-.filterbar span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.filterbar > span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* ---------------- القائمة المنسدلة «إضافة بيانات» ---------------- */
 .cpp{position:relative}
@@ -542,10 +600,97 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
 .ovmark{color:var(--accent)}
 td.editcell{background:rgba(91,140,255,.05)}
 
-/* ============ لوحة التحكم — إدارة المستخدمين والصلاحيات ============ */
-#tbl-tabperms input[type="checkbox"]{
-  width:17px;height:17px;accent-color:var(--accent);cursor:pointer;
+/* ============ لوحة التحكم — شريط الترحيب والإحصاءات ============ */
+.dash-hero{
+  position:relative;overflow:hidden;
+  display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;
+  padding:24px 28px;margin-bottom:18px;border-radius:var(--r);
+  background:linear-gradient(120deg,rgba(91,140,255,.24),rgba(34,211,238,.10) 45%,rgba(167,139,250,.18));
+  border:1px solid rgba(91,140,255,.38);
+  box-shadow:0 18px 44px rgba(91,140,255,.20);
 }
+.dash-hero .hero-glow{
+  position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(420px 200px at 88% 18%, rgba(34,211,238,.38), transparent 65%),
+    radial-gradient(380px 240px at 6% 112%, rgba(167,139,250,.32), transparent 60%);
+}
+.hero-txt{position:relative;z-index:1}
+.hero-hello{
+  display:inline-block;font-size:12.5px;font-weight:700;color:var(--accent-2);
+  background:rgba(34,211,238,.13);border:1px solid rgba(34,211,238,.34);
+  padding:4px 13px;border-radius:999px;margin-bottom:10px;
+}
+.dash-hero h2{margin:0 0 4px;font-size:25px;font-weight:800;letter-spacing:-.4px}
+.dash-hero p{margin:0;color:var(--txt-2);font-size:13.5px}
+.hero-side{position:relative;z-index:1;display:flex;flex-direction:column;align-items:flex-end;gap:10px}
+.hero-role{
+  display:flex;align-items:center;gap:11px;padding:10px 16px;border-radius:14px;
+  background:rgba(4,10,22,.30);border:1px solid rgba(255,255,255,.16);
+  backdrop-filter:blur(8px);
+}
+.hr-ico{
+  width:38px;height:38px;border-radius:12px;background:var(--grad-4);
+  display:grid;place-items:center;font-size:18px;
+  box-shadow:0 8px 18px rgba(251,191,36,.35);flex:0 0 auto;
+}
+.hero-role b{font-size:13.5px;display:block;line-height:1.3}
+.hero-role small{color:var(--txt-2);font-size:11px}
+.hero-date{color:var(--muted);font-size:12px;font-family:var(--font-num)}
+[data-theme="light"] .dash-hero{
+  background:linear-gradient(120deg,rgba(91,140,255,.17),rgba(34,211,238,.08) 45%,rgba(167,139,250,.13));
+  border-color:rgba(91,140,255,.32);
+  box-shadow:0 18px 44px rgba(20,40,80,.10);
+}
+[data-theme="light"] .hero-role{background:rgba(255,255,255,.7)}
+
+/* شبكة لوحة التحكم: المستخدمون (الرئيسية) + الصلاحيات */
+.dash-grid{display:grid;grid-template-columns:1.55fr 1fr;gap:18px;align-items:start}
+@media(max-width:1180px){.dash-grid{grid-template-columns:1fr}}
+
+/* نموذج إضافة مستخدم */
+.uf-f{display:grid;gap:6px;font-size:12px;color:var(--txt-2);font-weight:700}
+.uf-f i{color:var(--muted);font-weight:500;font-style:normal}
+
+/* صف المستخدم: صورة + اسم */
+.urow{display:flex;align-items:center;gap:11px}
+.urow > span:last-child{min-width:0}
+.urow b{font-size:13.5px}
+.u-avatar{
+  width:36px;height:36px;border-radius:12px;display:grid;place-items:center;
+  font-weight:800;font-size:14px;color:#04101f;flex:0 0 auto;
+  box-shadow:0 6px 14px rgba(0,0,0,.25);
+}
+.u-avatar.a1{background:linear-gradient(135deg,#5b8cff,#22d3ee)}
+.u-avatar.a2{background:linear-gradient(135deg,#a78bfa,#fb7185)}
+.u-avatar.a3{background:linear-gradient(135deg,#34d399,#22d3ee)}
+.u-avatar.a4{background:linear-gradient(135deg,#fbbf24,#fb7185)}
+.u-avatar.a5{background:linear-gradient(135deg,#38bdf8,#a78bfa)}
+
+/* جدول صلاحيات الشاشات: أيقونة الشاشة + مفاتيح الأدوار */
+.scr{display:flex;align-items:center;gap:9px}
+.scr i{
+  font-style:normal;width:28px;height:28px;border-radius:9px;display:grid;place-items:center;
+  background:rgba(91,140,255,.12);color:var(--accent);font-size:13px;flex:0 0 auto;
+}
+.scr b{font-size:13px}
+.psw{position:relative;display:inline-flex;cursor:pointer;line-height:0}
+.psw input{position:absolute;opacity:0;width:0;height:0}
+.psw i{
+  display:block;width:38px;height:22px;border-radius:999px;
+  background:var(--surface-2);border:1px solid var(--line-strong);
+  position:relative;transition:.2s;
+}
+.psw i::after{
+  content:"";position:absolute;top:2px;inset-inline-start:2px;
+  width:16px;height:16px;border-radius:50%;background:var(--muted);transition:.2s;
+}
+.psw input:checked + i{background:rgba(91,140,255,.35);border-color:var(--accent)}
+.psw input:checked + i::after{
+  inset-inline-start:18px;background:var(--accent);
+  box-shadow:0 0 10px rgba(91,140,255,.7);
+}
+.psw:hover i{border-color:var(--accent)}
 
 /* ============ قسم البيانات الأساسية: شاشات داخل القسم ============ */
 .md-land{

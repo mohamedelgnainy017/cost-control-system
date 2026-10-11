@@ -104,33 +104,91 @@
       تواصل مع مدير النظام.
     </div>
 
-    <!-- صلاحيات الشاشات (للمدير فقط) -->
-    <div class="card" id="card-tabperms" hidden>
-      <div class="card-h">
-        <h3>🔐 صلاحيات الشاشات <small>حدّد أي شاشة يراها كل دور — المدير يملك كل الشاشات دائماً</small></h3>
-        <button class="btn sm" id="btn-tabperms-save">💾 حفظ الصلاحيات</button>
+    <!-- شريط الترحيب -->
+    <div class="dash-hero" id="dash-hero" hidden>
+      <div class="hero-glow"></div>
+      <div class="hero-txt">
+        <span class="hero-hello" id="dash-greeting">أهلاً بك</span>
+        <h2>لوحة التحكم</h2>
+        <p>إدارة المستخدمين وصلاحيات الشاشات — اضبط من يرى ماذا، ومَن يعدّل ماذا.</p>
       </div>
-      <div class="tblwrap" id="tbl-tabperms"></div>
-      <div class="hint" style="margin-top:10px">
-        التغيير يسري فوراً: تختفي الشاشة الممنوعة من قائمة المستخدم، ويُمنع الخادم عن قراءة بياناتها أيضاً.
-        المستخدم الحالي لا يحتاج إعادة دخول — يكفي إعادة تحميل الصفحة.
+      <div class="hero-side">
+        <div class="hero-role">
+          <span class="hr-ico">👑</span>
+          <div><b id="dash-role-name">مدير</b><small>صلاحيات كاملة</small></div>
+        </div>
+        <div class="hero-date" id="dash-date">—</div>
       </div>
     </div>
 
-    <!-- المستخدمون (للمدير فقط) -->
-    <div class="card" id="card-users" hidden>
-      <div class="card-h"><h3>👥 المستخدمون <small>إضافة وتعطيل وتعيين الأدوار وإعادة التعيين</small></h3></div>
-      <form class="row" id="user-form" autocomplete="off">
-        <input class="input" id="u-name" placeholder="اسم المستخدم (لاتيني)" required>
-        <input class="input" id="u-full" placeholder="الاسم بالعربي (اختياري)">
-        <select class="input" id="u-role"></select>
-        <input class="input" id="u-pass" type="password" placeholder="كلمة المرور (6+)" required>
-        <button class="btn sm" type="submit">＋ إضافة مستخدم</button>
-      </form>
-      <div class="tblwrap" id="tbl-users" style="margin-top:12px"></div>
-      <div class="hint" style="margin-top:12px">
-        إلغاء تفعيل أو إعادة تعيين كلمة المرور يُنهي جلسات ذلك المستخدم فوراً —
-        وتُضبط شاشات كل دور من بطاقة <b>صلاحيات الشاشات</b> أعلاه.
+    <!-- إحصاءات سريعة -->
+    <div class="grid kpis dash-stats" id="dash-stats" hidden>
+      <div class="card kpi g1">
+        <div class="top"><div class="ico">👥</div></div>
+        <div class="label">إجمالي المستخدمين</div>
+        <div class="value" id="st-users">0</div>
+        <div class="delta">مسجَّلون في النظام</div>
+      </div>
+      <div class="card kpi g3">
+        <div class="top"><div class="ico">✓</div></div>
+        <div class="label">مستخدمون نشطون</div>
+        <div class="value" id="st-active">0</div>
+        <div class="delta">قادرون على الدخول الآن</div>
+      </div>
+      <div class="card kpi g4">
+        <div class="top"><div class="ico">🔑</div></div>
+        <div class="label">كلمات مرور افتراضية</div>
+        <div class="value" id="st-must">0</div>
+        <div class="delta">يُطلب تغييرها عند الدخول</div>
+      </div>
+      <div class="card kpi g2">
+        <div class="top"><div class="ico">◧</div></div>
+        <div class="label">شاشات محمية</div>
+        <div class="value" id="st-tabs">0</div>
+        <div class="delta">تُدار بصلاحيات الأدوار</div>
+      </div>
+    </div>
+
+    <div class="dash-grid">
+      <!-- المستخدمون (للمدير فقط) -->
+      <div class="card" id="card-users" hidden>
+        <div class="card-h">
+          <h3>👥 المستخدمون <small>إضافة وتعطيل وتعيين الأدوار وإعادة التعيين</small></h3>
+          <span class="muted xs" id="users-count"></span>
+        </div>
+        <form class="uf" id="user-form" autocomplete="off">
+          <label class="uf-f"><span>اسم المستخدم <i>لاتيني</i></span>
+            <input class="input" id="u-name" placeholder="admin" required>
+          </label>
+          <label class="uf-f"><span>الاسم بالعربي <i>اختياري</i></span>
+            <input class="input" id="u-full" placeholder="أحمد محمد">
+          </label>
+          <label class="uf-f"><span>الدور</span>
+            <select class="input" id="u-role"></select>
+          </label>
+          <label class="uf-f"><span>كلمة المرور</span>
+            <input class="input" id="u-pass" type="password" placeholder="6 أحرف على الأقل" required>
+          </label>
+          <button class="btn" type="submit">＋ إضافة مستخدم</button>
+        </form>
+        <div class="tblwrap" id="tbl-users" style="margin-top:14px"></div>
+        <div class="hint" style="margin-top:12px">
+          إلغاء تفعيل أو إعادة تعيين كلمة المرور يُنهي جلسات ذلك المستخدم فوراً —
+          وتُضبط شاشات كل دور من بطاقة <b>صلاحيات الشاشات</b> بجانبها.
+        </div>
+      </div>
+
+      <!-- صلاحيات الشاشات (للمدير فقط) -->
+      <div class="card" id="card-tabperms" hidden>
+        <div class="card-h">
+          <h3>🔐 صلاحيات الشاشات <small>حدّد أي شاشة يراها كل دور — المدير يملك كل الشاشات دائماً</small></h3>
+          <button class="btn sm" id="btn-tabperms-save">💾 حفظ الصلاحيات</button>
+        </div>
+        <div class="tblwrap" id="tbl-tabperms"></div>
+        <div class="hint" style="margin-top:10px">
+          التغيير يسري فوراً: تختفي الشاشة الممنوعة من قائمة المستخدم، ويُمنع الخادم عن قراءة بياناتها أيضاً.
+          المستخدم الحالي لا يحتاج إعادة دخول — يكفي إعادة تحميل الصفحة.
+        </div>
       </div>
     </div>
   </section>
@@ -194,7 +252,7 @@
           </div>
         </div>
       </div>
-      <div class="row filterbar" style="gap:6px;align-items:center;margin-top:4px;flex-wrap:nowrap">
+      <div class="row filterbar" style="gap:10px 12px;align-items:flex-end;margin-top:4px;flex-wrap:wrap">
         <select class="input" id="md-items-origin" style="max-width:210px">
           <option value="all">تفصيل البيانات: الكل</option>
           <option value="mine">تفصيل البيانات: تم تسجيلها</option>
@@ -292,13 +350,7 @@
                   <span class="act danger" data-act="del">🗑 حذف</span>
                 </span>
               </button>
-              <button class="cpp-item" type="button" data-mt-type="category"><i>◫</i><b>تصنيف</b>
-                <span class="cpp-acts">
-                  <span class="act" data-act="add">＋ إضافة</span>
-                  <span class="act" data-act="edit">✎ تعديل</span>
-                  <span class="act danger" data-act="del">🗑 حذف</span>
-                </span>
-              </button>
+
             </div>
           </div>
         </div>
@@ -466,16 +518,28 @@
       </div>
     </div>
 
-    <div class="card filterbar">
-      <label class="fl">من<input type="date" id="mf-from" class="input"></label>
-      <label class="fl">إلى<input type="date" id="mf-to" class="input"></label>
-      <label class="fl">المكان<select id="mf-place" class="input"><option value="">الكل</option></select></label>
-      <label class="fl">نوع الحركة<select id="mf-mtype" class="input"><option value="">الكل</option></select></label>
-      <label class="fl">التوجيه<select id="mf-dir" class="input"><option value="">الكل</option></select></label>
-      <label class="fl">الوحدة<select id="mf-unit" class="input"><option value="">الكل</option></select></label>
-      <label class="fl">الصنف<input id="mf-item" class="input" placeholder="كود الصنف"></label>
-      <button class="btn sm" id="mf-apply">تطبيق الفلتر</button>
-      <button class="btn sm ghost" id="mf-clear">↺ مسح الفلاتر</button>
+    <div class="card filterbar filters-mv">
+      <label class="fl mv-range">من – إلى
+        <span class="mv-range-in">
+          <input type="date" id="mf-from" class="input mv-date" dir="ltr" lang="en-GB">
+          <i>←</i>
+          <input type="date" id="mf-to" class="input mv-date" dir="ltr" lang="en-GB">
+        </span>
+      </label>
+      <label class="fl">بحث<input id="mf-item" class="input" placeholder="كود الصنف"></label>
+      <div class="cpp filters-mv-menu">
+        <button class="btn sm ghost" id="mf-more-btn" type="button">فلاتر أخرى ▾</button>
+        <div class="cpp-menu filters-mv-pop" id="mf-more-menu" hidden>
+          <label class="fl">المكان<select id="mf-place" class="input"><option value="">الكل</option></select></label>
+          <label class="fl">نوع الحركة<select id="mf-mtype" class="input"><option value="">الكل</option></select></label>
+          <label class="fl">التوجيه<select id="mf-dir" class="input"><option value="">الكل</option></select></label>
+          <label class="fl">الوحدة<select id="mf-unit" class="input"><option value="">الكل</option></select></label>
+        </div>
+      </div>
+      <div class="filters-mv-actions">
+        <button class="btn sm" id="mf-apply">تطبيق الفلتر</button>
+        <button class="btn sm ghost" id="mf-clear">↺ مسح الفلاتر</button>
+      </div>
     </div>
 
     <div class="grid two">
@@ -1155,36 +1219,12 @@
           <input class="input" id="mt-sys" placeholder="ما الذي يفعله السيستم بهذا النوع …">
         </label>
         <label>التصنيف
-          <select class="input" id="mt-cat">
-            <option value="">— بدون تصنيف —</option>
-          </select>
+          <input class="input" id="mt-cat" placeholder="البند الذي تُصنَّف إليه الحركات …">
         </label>
         <div class="login-err" id="mt-err" hidden></div>
         <div class="row">
           <button class="btn" type="submit">حفظ</button>
           <button class="btn ghost" type="button" data-close="md-mtype-modal">إلغاء</button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
-
-<!-- تصنيف أنواع الحركات -->
-<div class="modal" id="md-mtcat-modal" hidden>
-  <div class="modal-card">
-    <div class="modal-h">
-      <h3 id="md-mtcat-title">إضافة تصنيف</h3>
-      <button class="icon-btn" data-close="md-mtcat-modal" title="إغلاق">✕</button>
-    </div>
-    <div class="modal-body">
-      <form id="md-mtcat-form" autocomplete="off">
-        <label>اسم التصنيف
-          <input class="input" id="mtc-name" required placeholder="البند الذي تُصنَّف إليه الحركات …">
-        </label>
-        <div class="login-err" id="mtc-err" hidden></div>
-        <div class="row">
-          <button class="btn" type="submit">حفظ</button>
-          <button class="btn ghost" type="button" data-close="md-mtcat-modal">إلغاء</button>
         </div>
       </form>
     </div>

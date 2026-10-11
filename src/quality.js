@@ -160,10 +160,10 @@ rule('BAL_CONTINUITY', 'error', 'استمرارية الأرصدة (نهاية �
     SELECT item, COALESCE(storage_loc, '') st, balance_date, pd, cq, oq, cv, ov, pcq, pcv
     FROM seq
     WHERE pd IS NOT NULL
-      AND (ABS(cq - oq) > 0.001 OR ABS(cv - ov) > 0.5)
-    ORDER BY ABS(cv - ov) DESC`);
+      AND (ABS(oq - pcq) > 0.001 OR ABS(ov - pcv) > 0.5)
+    ORDER BY ABS(ov - pcv) DESC`);
   if (!rows.length) return null;
-  const tot = rows.reduce((s, r) => s + Math.abs(r.cv - r.ov), 0);
+  const tot = rows.reduce((s, r) => s + Math.abs((r.ov || 0) - (r.pcv || 0)), 0);
   return {
     count: rows.length,
     message: `${rows.length} مفتاحاً تكسر فيه استمرارية الأرصدة بين يومين (نهاية سابق ≠ بداية لاحق) بإجمالي فرق قيمة ${fmt(tot)}`,
