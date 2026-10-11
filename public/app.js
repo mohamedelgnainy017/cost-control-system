@@ -518,10 +518,7 @@ async function renderMdItems() {
 }
 
 /* تفصيل البيانات: الكل / تم تسجيلها / مجلوبة من الحركات */
-$('#md-items-origin')?.addEventListener('change', e => {
-  mdItemsOrigin = e.target.value;
-  renderMdItems().catch(x => toast(x.message));
-});
+$('#md-items-origin')?.addEventListener('change', e => { mdItemsOrigin = e.target.value; });
 
 $('#md-items-apply')?.addEventListener('click', () => renderMdItems().catch(e => toast(e.message)));
 $('#md-items-clear')?.addEventListener('click', () => {
@@ -693,11 +690,38 @@ $('#md-add-btn')?.addEventListener('click', e => {
   const m = $('#md-add-menu'); if (m) m.hidden = !m.hidden;
 });
 document.addEventListener('click', e => {
+  const btn = e.target.closest('.filters-mv-menu > .btn[data-more]');
+  if (btn) {
+    e.stopPropagation();
+    const pop = btn.parentElement.querySelector('.filters-mv-pop');
+    if (!pop) return;
+    const willOpen = pop.hidden;
+    $$('.filters-mv-pop').forEach(m => { m.hidden = true; });
+    pop.hidden = !willOpen;
+    refreshMoreBadge();
+    return;
+  }
   if (e.target.closest('.filters-mv-menu')) return;   /* الضغط جوه القائمة متقفلّهاش */
-  ['#md-add-menu', '#md-loc-add-menu', '#md-mt-add-menu', '#mf-more-menu'].forEach(s => {
+  $$('.filters-mv-pop').forEach(m => { if (!m.hidden) m.hidden = true; });
+  ['#md-add-menu', '#md-loc-add-menu', '#md-mt-add-menu'].forEach(s => {
     const m = $(s); if (m && !m.hidden) m.hidden = true;
   });
 });
+/* مؤشر عدد الفلاتر المُختارة داخل زر «فلاتر أخرى» */
+function refreshMoreBadge() {
+  $$('.filters-mv-menu').forEach(wrap => {
+    const btn = wrap.querySelector('button[data-more]');
+    const pop = wrap.querySelector('.filters-mv-pop');
+    if (!btn || !pop) return;
+    const n = [...pop.querySelectorAll('select, input')].filter(el =>
+      el.type === 'checkbox' ? el.checked : String(el.value || '').trim() !== '').length;
+    btn.classList.toggle('has-on', n > 0);
+    if (n > 0) btn.setAttribute('data-count', n); else btn.removeAttribute('data-count');
+  });
+}
+document.addEventListener('change', e => { if (e.target.closest('.filterbar')) refreshMoreBadge(); });
+document.addEventListener('input', e => { if (e.target.closest('.filterbar')) refreshMoreBadge(); });
+document.addEventListener('click', e => { if (e.target.closest('.filterbar')) refreshMoreBadge(); });
 
 $('#md-add-menu')?.addEventListener('click', e => {
   const it = e.target.closest('[data-type]');
@@ -1117,10 +1141,10 @@ $('#btn-recon')?.addEventListener('click', async () => {
 
 $('#if-apply')?.addEventListener('click', () => loadInventory().catch(e => toast(e.message)));
 $('#if-clear')?.addEventListener('click', () => {
-  ['if-from', 'if-to', 'if-place', 'if-company', 'if-unit', 'if-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  ['if-from', 'if-to', 'if-place', 'if-company', 'if-unit', 'if-item'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   loadInventory().catch(e => toast(e.message));
 });
-['if-item', 'if-from', 'if-to'].forEach(id => $(id)?.addEventListener('keydown', e => {
+['if-item', 'if-from', 'if-to'].forEach(id => document.getElementById(id)?.addEventListener('keydown', e => {
   if (e.key === 'Enter') loadInventory().catch(() => {});
 }));
 
@@ -1189,10 +1213,10 @@ async function loadSales() {
 
 $('#sf-apply')?.addEventListener('click', () => loadSales().catch(e => toast(e.message)));
 $('#sf-clear')?.addEventListener('click', () => {
-  ['sf-from', 'sf-to', 'sf-place', 'sf-cust', 'sf-unit', 'sf-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  ['sf-from', 'sf-to', 'sf-place', 'sf-cust', 'sf-unit', 'sf-item'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   loadSales().catch(e => toast(e.message));
 });
-['sf-item', 'sf-from', 'sf-to'].forEach(id => $(id)?.addEventListener('keydown', e => {
+['sf-item', 'sf-from', 'sf-to'].forEach(id => document.getElementById(id)?.addEventListener('keydown', e => {
   if (e.key === 'Enter') loadSales().catch(() => {});
 }));
 
@@ -1246,18 +1270,14 @@ async function loadMovements() {
 
 $('#mf-apply')?.addEventListener('click', () => loadMovements().catch(e => toast(e.message)));
 $('#mf-clear')?.addEventListener('click', () => {
-  ['mf-from', 'mf-to', 'mf-place', 'mf-mtype', 'mf-dir', 'mf-unit', 'mf-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  ['mf-from', 'mf-to', 'mf-place', 'mf-mtype', 'mf-dir', 'mf-unit', 'mf-item'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   loadMovements().catch(e => toast(e.message));
 });
-['mf-item', 'mf-from', 'mf-to'].forEach(id => $(id)?.addEventListener('keydown', e => {
+['mf-item', 'mf-from', 'mf-to'].forEach(id => document.getElementById(id)?.addEventListener('keydown', e => {
   if (e.key === 'Enter') loadMovements().catch(() => {});
 }));
 
-/* قائمة الفلاتر الإضافية (المكان/النوع/التوجيه/الوحدة/الصنف) */
-$('#mf-more-btn')?.addEventListener('click', e => {
-  e.stopPropagation();
-  const m = $('#mf-more-menu'); if (m) m.hidden = !m.hidden;
-});
+/* قائمة «فلاتر أخرى» تُدار مركزياً — لا حاجة لمعالج خاص بالسوق اليومية */
 
 /* ---------------- البورصة اليومية ---------------- */
 let borseItemsSig = '';
@@ -1715,10 +1735,21 @@ $('#tbl-prices')?.addEventListener('click', e => {
   const b = e.target.closest('button.cellbtn[data-f]');
   if (b) openPrModal(b.dataset.d, b.dataset.i, b.dataset.f);
 });
-$('#btn-pr-load')?.addEventListener('click', () => loadPrices().catch(e => toast(e.message)));
+$('#pr-apply')?.addEventListener('click', () => loadPrices().catch(e => toast(e.message)));
+$('#pr-clear')?.addEventListener('click', () => {
+  const t = new Date();
+  const f = $('#pr-from'), to = $('#pr-to');
+  if (f) f.value = fmtDate(t);
+  if (to) to.value = fmtDate(t);
+  const it = $('#pr-item'); if (it) it.value = '';
+  const ov = $('#pr-onlyov'); if (ov) ov.checked = false;
+  renderPrGrid();
+  loadPrices().catch(e => toast(e.message));
+});
 $('#pr-onlyov')?.addEventListener('change', () => renderPrGrid());
-['#pr-from', '#pr-to'].forEach(s => $(s)?.addEventListener('change', () => loadPrices().catch(e => toast(e.message))));
-$('#pr-item')?.addEventListener('change', () => loadPrices().catch(e => toast(e.message)));
+['#pr-from', '#pr-to', '#pr-item'].forEach(s => $(s)?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadPrices().catch(() => {});
+}));
 
 function openPrModal(date, itemCode, field) {
   const row = prRows.find(r => r.date === date && r.item_code === itemCode);
@@ -1957,9 +1988,20 @@ function showCostsPane(name) {
   if (name === 'status') loadCsStatus().catch(e => toast(e.message));
 }
 $$('#cs-segs .seg').forEach(b => b.addEventListener('click', () => showCostsPane(b.dataset.pane)));
-$('#btn-cs-load')?.addEventListener('click', () => loadCosts().catch(e => toast(e.message)));
-['#cs-level', '#cs-from', '#cs-to', '#cs-item', '#cs-unit'].forEach(s =>
-  $(s)?.addEventListener('change', () => loadCosts().catch(e => toast(e.message))));
+$('#cs-apply')?.addEventListener('click', () => loadCosts().catch(e => toast(e.message)));
+$('#cs-clear')?.addEventListener('click', () => {
+  const t = new Date();
+  const f = $('#cs-from'), to = $('#cs-to');
+  if (f) f.value = fmtDate(t);
+  if (to) to.value = fmtDate(t);
+  const it = $('#cs-item'); if (it) it.value = '';
+  const u = $('#cs-unit'); if (u) u.value = '';
+  const lv = $('#cs-level'); if (lv) lv.value = 'detail';
+  loadCosts().catch(e => toast(e.message));
+});
+['#cs-from', '#cs-to', '#cs-item'].forEach(s => $(s)?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadCosts().catch(() => {});
+}));
 $('#btn-cs-rebuild')?.addEventListener('click', async () => {
   const btn = $('#btn-cs-rebuild'); btn.disabled = true;
   try {
@@ -2369,7 +2411,12 @@ async function showReport(name) {
   }
 }
 
+let rfDimsLoaded = false;
 async function loadReports() {
+  if (!rfDimsLoaded) {
+    rfDimsLoaded = true;
+    fillDimSelect('#rf-place', '/api/dims?dim=place&src=movements').catch(() => {});
+  }
   reportList = await api('/api/reports');
   const host = $('#report-list');
   host.innerHTML = '';
@@ -2392,10 +2439,10 @@ async function loadReports() {
 /* معايير التقارير: تُطبَّق بالضغط على «تطبيق الفلتر» أو «مسح» */
 $('#rf-apply')?.addEventListener('click', () => { if (currentReport) showReport(currentReport).catch(e => toast(e.message)); });
 $('#rf-clear')?.addEventListener('click', () => {
-  ['rf-from', 'rf-to', 'rf-place', 'rf-item'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  ['rf-from', 'rf-to', 'rf-place', 'rf-item'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   if (currentReport) showReport(currentReport).catch(e => toast(e.message));
 });
-['rf-place', 'rf-item', 'rf-from', 'rf-to'].forEach(id => $(id)?.addEventListener('keydown', e => {
+['rf-place', 'rf-item', 'rf-from', 'rf-to'].forEach(id => document.getElementById(id)?.addEventListener('keydown', e => {
   if (e.key === 'Enter' && currentReport) showReport(currentReport).catch(() => {});
 }));
 
