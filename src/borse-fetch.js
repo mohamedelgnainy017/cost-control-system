@@ -30,6 +30,9 @@ const Contract = require('./contract');
 /** بصمة الصفوف القادمة من الجلب في borse.source_file */
 const SRC = 'borse-fetch';
 
+/** بصمة صفوف الإدخال اليدوي (src/daily-entry.js) — لا يمسّها الجلب أبداً */
+const MANUAL = 'manual';
+
 const STATE_KEY = 'borse_fetch_state';
 const TIME_KEY = 'borse_fetch_time';
 const DEFAULT_TIME = '22:00';   // بعد اكتمال جلسة البورصة الأمريكية (18:20 UTC)
@@ -406,6 +409,8 @@ async function run({ reason = 'manual' } = {}) {
         if (sf !== undefined) {
           // صف أرشيفي قديم لا نعيد كتابته — الاستثناء الوحيد صف اليوم
           // (الجلب اليومي يقرّر إغلاقه حتى يستقر)؛ ولا يُمَس أي تاريخ قبل اليوم.
+          // والصف اليدوي (source_file='manual') محصّن تماماً: «التعديل يعلو الجلب».
+          if (sf === MANUAL) { keptArchive++; continue; }
           if (sf !== SRC && d !== today) { keptArchive++; continue; }
           await DB.run(
             `UPDATE borse SET contract = $1, low = $2, high = $3, close = $4, usd_rate = $5

@@ -296,7 +296,7 @@ async function flush(to) {
  * الشبكة: مستوى تفصيلي (صنف × مصنع × تاريخ) أو إجمالي (صنف × تاريخ).
  * `level = 'total'` يقرأ VIEW الإجمالي: متوسط مرجّح عبر المصانع.
  */
-async function grid({ from, to, item, unit, level } = {}) {
+async function grid({ from, to, item, unit, level, itemFrom, itemTo, unitFrom, unitTo } = {}) {
   to = to || today();
   from = from || to;
   if (from > to) { const t = from; from = to; to = t; }
@@ -310,8 +310,10 @@ async function grid({ from, to, item, unit, level } = {}) {
          FROM daily_costs_total
         WHERE cost_date >= $1 AND cost_date <= $2
           AND ($3::text IS NULL OR item_code = $3)
+          AND ($5::text IS NULL OR item_code >= $5)
+          AND ($6::text IS NULL OR item_code <= $6)
         ORDER BY cost_date DESC, item_code ASC`,
-      [from, to, item || null]);
+      [from, to, item || null, unit || null, itemFrom || null, itemTo || null]);
     return { from, to, level: 'total', rows };
   }
 
@@ -324,8 +326,12 @@ async function grid({ from, to, item, unit, level } = {}) {
       WHERE d.cost_date >= $1 AND d.cost_date <= $2
         AND ($3::text IS NULL OR d.item_code = $3)
         AND ($4::text IS NULL OR d.unit_code = $4)
+        AND ($5::text IS NULL OR d.item_code >= $5)
+        AND ($6::text IS NULL OR d.item_code <= $6)
+        AND ($7::text IS NULL OR d.unit_code >= $7)
+        AND ($8::text IS NULL OR d.unit_code <= $8)
       ORDER BY d.cost_date DESC, d.item_code ASC, d.unit_code ASC`,
-    [from, to, item || null, unit || null]);
+    [from, to, item || null, unit || null, itemFrom || null, itemTo || null, unitFrom || null, unitTo || null]);
   return { from, to, level: 'detail', rows };
 }
 

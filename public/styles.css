@@ -154,13 +154,6 @@ body{
 .topbar .page .crumb{color:var(--muted);font-size:11.5px;margin-top:1px}
 .topbar .spacer{flex:1}
 
-.chip{
-  display:inline-flex;align-items:center;gap:7px;background:var(--surface-2);border:1px solid var(--line);
-  padding:6px 12px;border-radius:999px;font-size:12px;color:var(--txt-2);font-family:var(--font-num);
-}
-.chip i{font-style:normal;color:var(--accent);font-size:13px}
-.chip b{color:var(--txt);font-weight:700}
-
 .icon-btn{
   width:36px;height:36px;border-radius:11px;background:var(--surface-2);border:1px solid var(--line);
   color:var(--txt-2);cursor:pointer;font-size:16px;display:grid;place-items:center;transition:.18s;
@@ -232,6 +225,54 @@ th{
   color:var(--muted);font-weight:700;font-size:11.5px;letter-spacing:.4px;text-transform:uppercase;
   background:var(--surface-solid);position:sticky;top:0;z-index:2;box-shadow:0 1px 0 var(--line);
 }
+/* رؤوس الأعمدة القابلة للترتيب — الضغط يبدّل تصاعدي/تنازلي */
+th{vertical-align:bottom}
+th .thbox{display:flex;flex-direction:column;gap:4px;align-items:stretch;min-width:56px}
+.th-t{position:relative;display:block;padding-inline-end:13px;white-space:nowrap}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover .th-t{color:var(--txt)}
+th.sortable .th-t::after{
+  content:"";position:absolute;inset-inline-end:1px;top:50%;transform:translateY(-50%);
+  width:0;height:0;border-inline:4px solid transparent;border-block-end:5px solid currentColor;opacity:.22;
+}
+th.sortable.sorted{color:var(--accent)}
+th.sorted.asc .th-t::after{opacity:.95}
+th.sorted.desc .th-t::after{border-block-end:0;border-block-start:5px solid currentColor;opacity:.95}
+input.thf{
+  width:100%;min-width:50px;box-sizing:border-box;padding:3px 6px;font-size:11px;line-height:1.15;
+  border-radius:7px;border:1px solid var(--line);background:rgba(0,0,0,.22);color:var(--txt);
+  font-family:var(--font);text-transform:none;letter-spacing:normal;outline:none;
+}
+input.thf::placeholder{color:var(--muted);opacity:.6}
+input.thf:focus{border-color:var(--accent);background:rgba(91,140,255,.1)}
+th.num input.thf{direction:ltr;text-align:left}
+[data-theme="light"] input.thf{background:rgba(255,255,255,.7)}
+.tbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 11px;border-bottom:1px solid var(--line);background:var(--surface-solid)}
+.tbar .btn.xs{padding:2px 9px;font-size:11px;line-height:1.4}
+.tbar .tbar-i{font-size:11.5px;color:var(--muted)}
+/* فلتر رأس العمود الديناميكي: زر المثلث + مربع القيمة (+ مربع «إلى») */
+.thfil{display:flex;align-items:center;gap:3px;flex-wrap:wrap}
+.thfil input.thf{flex:1 1 44px;width:auto;min-width:34px}
+.thfil input.thf2{flex:1 1 100%}
+.thop{
+  flex:0 0 auto;width:19px;height:19px;padding:0;display:inline-flex;align-items:center;justify-content:center;
+  font-size:12px;line-height:1;border-radius:6px;border:1px solid var(--line);background:rgba(0,0,0,.22);
+  color:var(--muted);cursor:pointer;font-family:var(--font);outline:none;
+}
+.thop:hover{border-color:var(--accent);color:var(--txt)}
+.thop.on{border-color:var(--accent);color:var(--accent);background:rgba(91,140,255,.16)}
+[data-theme="light"] .thop{background:rgba(255,255,255,.7)}
+.thmenu{
+  position:fixed;z-index:4000;min-width:158px;max-height:320px;overflow:auto;padding:5px;
+  border:1px solid var(--line);border-radius:11px;background:var(--surface-solid);
+  box-shadow:0 14px 38px rgba(0,0,0,.5);
+}
+.thmenu button{
+  display:block;width:100%;text-align:right;padding:6px 9px;margin:0;font-size:12px;line-height:1.5;
+  background:none;border:0;border-radius:7px;color:var(--txt);cursor:pointer;font-family:var(--font);white-space:nowrap;
+}
+.thmenu button:hover{background:rgba(91,140,255,.16)}
+.thmenu button.on{color:var(--accent);font-weight:700}
 tbody tr{transition:background .15s}
 tbody tr:hover{background:rgba(91,140,255,.08)}
 tbody tr:last-child td{border-bottom:0}
@@ -289,8 +330,6 @@ select.input{
 .chart .axis-line{stroke:var(--line-strong)}
 .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--txt-2)}
 .legend i{width:11px;height:11px;border-radius:4px;display:inline-block;margin-inline-end:6px;vertical-align:-1px}
-.legend .c1{background:#5b8cff} .legend .c2{background:#f59e0b}
-.legend .c3{background:#34d399} .legend .c4{background:#fb7185}
 
 .hbar{display:flex;flex-direction:column;gap:9px}
 .hbar .row-b{display:grid;grid-template-columns:minmax(90px,150px) 1fr auto;gap:10px;align-items:center}
@@ -301,20 +340,6 @@ select.input{
 .hbar .vl{font-family:var(--font-num);font-size:12px;color:var(--txt);min-width:78px;text-align:left}
 
 /* ---------------- عناصر أخرى ---------------- */
-.filelist{
-  max-height:330px;overflow:auto;border:1px solid var(--line);border-radius:14px;margin-top:12px;
-  background:rgba(0,0,0,.14);
-}
-[data-theme="light"] .filelist{background:rgba(255,255,255,.6)}
-.filelist div{
-  padding:9px 13px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;gap:10px;align-items:center;
-  font-size:13px;transition:.15s;
-}
-.filelist div:last-child{border-bottom:0}
-.filelist div:hover{background:rgba(91,140,255,.12);padding-inline-start:17px}
-.filelist div.sel{background:linear-gradient(90deg,rgba(91,140,255,.22),transparent);border-inline-start:3px solid var(--accent)}
-.filelist .dim{color:var(--muted);font-size:11.5px;margin-inline-start:auto;font-family:var(--font-num)}
-
 .toast{
   position:fixed;bottom:24px;inset-inline-start:24px;background:var(--surface-solid);
   border:1px solid var(--line-strong);padding:13px 20px;border-radius:14px;box-shadow:var(--shadow-lg);
@@ -329,6 +354,11 @@ select.input{
   border:1px dashed rgba(91,140,255,.38);padding:12px 16px;border-radius:13px;
   color:var(--txt-2);font-size:13px;line-height:1.85;
 }
+/* إخفاء بطاقات/صناديق الملاحظات من جميع الشاشات (طلب المستخدم).
+   تُستثنى الأنماط الحية التي تحمل نتيجة حقيقية لا «ملاحظة»:
+   ملخص المطابقة + عدّاد اكتمال النموذج + إنذار كلمة المرور المؤقتة. */
+.hint{display:none !important}
+#recon-sum.hint,#mi-count.hint,#pw-why.hint{display:block !important}
 .progress{height:9px;background:var(--surface-2);border-radius:9px;overflow:hidden;margin-top:14px;border:1px solid var(--line)}
 .progress i{
   display:block;height:100%;width:42%;
@@ -379,7 +409,6 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
   .shell{margin-inline-start:0}
   main{padding:16px 14px 60px}
   .topbar{padding:12px 14px;gap:9px}
-  .topbar .chip{display:none}
   .topbar .page .crumb{display:none}
   .grid.kpis{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
   .me .who{display:none}
@@ -495,8 +524,10 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
   display:flex;flex-direction:column;gap:3px;font-size:10px;color:var(--muted);font-weight:700;
   min-width:140px;
 }
-/* حقول التاريخ: LTR عشان مايتقطعش + عرض ثابت يكفي لعرض التاريخ كاملاً */
-.filterbar input[type=date]{direction:ltr;text-align:center}
+/* حقول التاريخ: المقاطع الرقمية تبقى LTR (dd/mm/yyyy) والنص العربي
+   (يوم/شهر/سنة) يظهر طبيعياً RTL — unicode-bidi:plaintext يحدد الاتجاه
+   بأول حرف قوي فلا «direction:ltr» يعكس الكلمات العربية */
+.filterbar input[type=date]{unicode-bidi:plaintext;text-align:center}
 .filterbar .fl:has(> input[type=date]){width:150px;flex:0 0 150px;min-width:150px}
 .filterbar .fl .input{
   width:100%;font-weight:600;color:var(--txt);padding:5px 8px;font-size:12.5px;
@@ -518,8 +549,36 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
 .filters-mv .fl .input{
   width:100%;font-weight:600;color:var(--txt);padding:5px 8px;font-size:12.5px;
 }
-/* التاريخ LTR — dir=ltr بيخلي اليوم/الشهر/السنة مايتعكسوش */
-.filters-mv .mv-date{direction:ltr;text-align:center}
+/* كل حقول التاريخ في النظام (الملاحة + النوافذ):
+   «يوم/شهر/سنة» يظهر عربياً صحيحاً من اليمين لليسار، والقيمة dd/mm/yyyy تبقى مرتبة LTR.
+   المحتوى داخل shadow DOM فتُستهدف أجزاء الحقل الداخلية. */
+input[type=date]{unicode-bidi:plaintext}
+/* ترتيب الحقول يوم/شهر/سنة يبقى LTR (يمين = يوم) */
+input[type=date]::-webkit-datetime-edit-fields-wrapper{direction:ltr}
+/* اتجاه نص كل حقل بأول حرف قوي: عربي → RTL صحيح، وأرقام → LTR */
+input[type=date]::-webkit-datetime-edit{unicode-bidi:plaintext}
+input[type=date]::-webkit-datetime-edit-day-field,
+input[type=date]::-webkit-datetime-edit-month-field,
+input[type=date]::-webkit-datetime-edit-year-field{unicode-bidi:plaintext}
+/* ---------- تلميح حقول التاريخ: dd/mm/yyyy إنجليزي ----------
+   نصّ المتصفح داخل <input type="date"> (يوم/شهر/سنة) مترجم بلغة واجهة المتصفح
+   ولا يغيّره lang — فنرسم تلميحنا فوقه ونخفي نصّه عندما يكون الحقل فارغاً
+   (required:invalid يتحقق فقط عند الخلو، وعنصر required خارج أي form فلا يمنع إرسالاً). */
+.dwrap{position:relative;display:block;min-width:0}
+.dph{
+  position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+  pointer-events:none;direction:ltr;letter-spacing:.4px;font-weight:600;font-size:12px;
+  color:var(--muted);
+}
+input[type=date]:required:invalid ~ .dph{display:flex}
+input[type=date]:required:invalid::-webkit-datetime-edit{color:transparent}
+/* الحقل داخل المدى (من ← إلى) يتمدد داخل .mv-range-in */
+.mv-range-in .dwrap{flex:1 1 0;min-width:0}
+.mv-range-in .dwrap .input{width:100%}
+.filters-mv .fl > .dwrap{width:100%}
+/* التاريخ: unicode-bidi:plaintext — الأرقام LTR والعربي RTL (بدل direction:ltr
+   الذي كان يعكس «يوم/شهر/سنة» فتظهر «ي و م») */
+.filters-mv .mv-date{unicode-bidi:plaintext;text-align:center}
 .filters-mv #mf-item{text-align:right;direction:rtl}
 /* نطاق التاريخ: من – إلى جنب بعض — عرض كافٍ لحقلَي التاريخ كاملين بلا تداخل */
 .filters-mv .mv-range{flex:0 0 320px}
@@ -545,6 +604,12 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
   width:100%;font-weight:600;color:var(--txt);padding:8px 10px;font-size:13px;
   background:var(--surface-2);border:1px solid var(--line);border-radius:10px;
 }
+/* حقول النطاق «من / إلى» داخل القائمة المنبثقة: تمتد على عرض القائمة */
+.filters-mv-pop .fl-range{grid-column:1 / -1;display:flex;flex-direction:column;gap:6px}
+.filters-mv-pop .fl-range-lbl{font-size:11px;color:var(--muted);font-weight:700}
+.filters-mv-pop .fl-range-in{display:flex;align-items:center;gap:6px}
+.filters-mv-pop .fl-range-in .input{flex:1 1 0;min-width:0}
+.filters-mv-pop .fl-range-in i{color:var(--muted);font-style:normal;flex:0 0 auto}
 /* عرض ثابت مريح لمربع البحث داخل شريط الفلاتر الجديد */
 .filters-mv .fl-search{flex:0 0 260px}
 /* حركة ظهور ناعمة للقائمة المنبثقة */
@@ -563,11 +628,6 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
 .filters-mv-pop .fl .chk{font-size:12px;color:var(--txt);font-weight:700;padding:8px 10px;
   background:var(--surface-2);border:1px solid var(--line);border-radius:10px}
 /* الأزرار في حاوية flex مع gap ثابت — متتلزقش في بعض */
-.filters-mv-actions{
-  display:flex;
-  gap:8px;
-  align-items:flex-end;
-}
 .filters-mv .btn{flex:0 0 auto;white-space:nowrap}
 .filterbar select{min-width:0}
 .filterbar .btn{flex:0 0 auto;white-space:nowrap;margin:0;padding:5px 9px;font-size:12px}
@@ -576,6 +636,8 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
 
 /* ---------------- القائمة المنسدلة «إضافة بيانات» ---------------- */
 .cpp{position:relative}
+/* الفلترة الآن من رؤوس الأعمدة — إخفاء نافذة «فلاتر أخرى» القديمة */
+.cpp.filters-mv-menu{display:none!important}
 .cpp-menu{
   position:absolute;top:calc(100% + 6px);left:0;z-index:70;min-width:350px;
   background:var(--surface);border:1px solid var(--line-strong);border-radius:14px;
@@ -615,7 +677,6 @@ a.exp:hover{background:rgba(91,140,255,.2);transform:translateY(-2px)}
 .cellbtn:disabled{cursor:default;opacity:.9}
 .cellbtn:disabled:hover{border-color:transparent;background:transparent;transform:none}
 .ovmark{color:var(--accent)}
-td.editcell{background:rgba(91,140,255,.05)}
 
 /* ============ لوحة التحكم — شريط الترحيب والإحصاءات ============ */
 .dash-hero{

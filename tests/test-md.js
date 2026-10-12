@@ -2,7 +2,7 @@
 /* اختبار شاشات البيانات الأساسية: الأصناف والمواقع وأنواع الحركات
    التشغيل: السيرفر شغال أولاً (node src\server.js) ثم node tests\test-md.js */
 const path = require('node:path');
-const BASE = 'http://127.0.0.1:4310';
+const BASE = 'http://127.0.0.1:' + (process.env.TEST_PORT || 4310);
 const DB = require(path.join(__dirname, '..', 'src', 'db'));
 let pass = 0, fail = 0;
 const okTag = m => { pass++; console.log('  OK  ' + m); };
@@ -31,14 +31,15 @@ async function req(method, path, body, cookie) {
   const ck = (lg.setCookie || '').split(';')[0];
   if (!ck) { console.log('STOP: no cookie'); process.exit(1); }
 
-  /* 3) الشاشات: 13 شاشة بما فيها الثلاث الجديدة */
+  /* 3) الشاشات: 12 شاشة — أُزيل تبويب الاستيراد العام (الاستيراد صلاحية import لا شاشة) */
   const tabs = await req('GET', '/api/tabs', null, ck);
   const ids = (tabs.j.data && tabs.j.data.tabs || []).map(t => t.id);
-  chk(ids.length === 13, 'tabs = 13 (الحالي ' + ids.length + ')');
+  chk(ids.length === 12, 'tabs = 12 (الحالي ' + ids.length + ')');
   chk(['md-items', 'md-locations', 'md-movetypes'].every(t => ids.includes(t)), 'الشاشات الثلاث الجديدة مسجلة');
+  chk(!ids.includes('import'), 'لا شاشة «import» — الاستيراد صلاحية بلا شاشة');
   const perms = tabs.j.data && tabs.j.data.perms;
-  chk(perms && perms.accountant && perms.accountant.length === 12,
-    'محاسب افتراضياً 12 شاشة (الحالي ' + (perms && perms.accountant && perms.accountant.length) + ')');
+  chk(perms && perms.accountant && perms.accountant.length === 11,
+    'محاسب افتراضياً 11 شاشة (الحالي ' + (perms && perms.accountant && perms.accountant.length) + ')');
   chk(perms && perms.viewer && perms.viewer.length === 11,
     'مشاهد افتراضياً 11 شاشة (الحالي ' + (perms && perms.viewer && perms.viewer.length) + ')');
 
@@ -119,13 +120,14 @@ async function req(method, path, body, cookie) {
   chk(!!(m0.class_code || m0.class_desc), 'التصنيف مُسكَّن من مجموعة المواد: ' + m0.class_code + '/' + m0.class_desc);
 
   const grp2 = await req('GET', '/api/md/items/groups', null, ck);
-  const hasZ = (grp2.j.data || []).some(g => /^Z/.test(g.code));
-  chk(hasZ, 'قائمة المجموعات المشتقة تحتوي كودات Z من الأصناف');
-  const gZ = (grp2.j.data || []).find(g => /^Z/.test(g.code));
-  chk(!!gZ && typeof gZ.items === 'number' && gZ.items > 0,
-    'المجموعة المشتقة معها عدد أصنافها (' + (gZ && gZ.code) + ' = ' + (gZ && gZ.items) + ' صنف)');
-  chk(!!gZ && !!(gZ.class_code || gZ.class_desc),
-    'المجموعة المشتقة تحمل تصنيفها الأب (' + (gZ && gZ.class_code) + ')');
+  const zGroups = (grp2.j.data || []).filter(g => /^Z/.test(g.code));
+  chk(zGroups.length > 0, 'قائمة المجموعات المشتقة تحتوي كودات Z من الأصناف (' + zGroups.length + ' منها)');
+  /* مجموعة مشتقة لها أصناف فعلاً (بعض صفوف المجموعات المشتقة تبقى بلا أصناف) */
+  const gZ = zGroups.find(g => g.items > 0);
+  chk(!!gZ, 'المجموعة المشتقة معها عدد أصنافها (' + (gZ && gZ.code) + ' = ' + (gZ && gZ.items) + ' صنف)');
+  const gZp = zGroups.find(g => g.class_code || g.class_desc);
+  chk(!!gZp && !!(gZp.class_code || gZp.class_desc),
+    'المجموعة المشتقة تحمل تصنيفها الأب (' + (gZp && gZp.code) + ' ← ' + (gZp && gZp.class_code) + ')');
 
   /* 7) المواقع: إضافة شركة + وحدة + مخزن (مع التسكين التلقائي) */
   const co = await req('POST', '/api/md/locs/company/save', { code: 'ZZT', name: 'شركة اختبار', currency: 'egp' }, ck);

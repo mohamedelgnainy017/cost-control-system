@@ -159,7 +159,7 @@ function readWorkbook(filePath, opts = {}) {
 }
 
 /** قراءة صفوف رأس فقط للكشف (سريعة) */
-function readHeaderPreview(filePath, maxRows = 5) {
+function readHeaderPreview(filePath, maxRows = 5, password) {
   try {
     const wb = XLSX.readFile(filePath, { dense: true, sheetRows: maxRows, codepage: 65001 });
     return wb.SheetNames.map(n => ({
@@ -169,7 +169,7 @@ function readHeaderPreview(filePath, maxRows = 5) {
     }));
   } catch (e) {
     if (/password/i.test(String(e.message || ''))) {
-      const sheets = readViaCom(filePath, null, maxRows + 2);
+      const sheets = readViaCom(filePath, password || undefined, maxRows + 2);
       return sheets.map(s => ({ name: s.name, rows: s.rows.slice(0, maxRows), ref: '(protected)' }));
     }
     throw e;

@@ -92,13 +92,21 @@ async function tx(fn) {
   }
 }
 
+/* حد PostgreSQL: 65535 معاملاً في الاستعلام الواحد (بروتوكول Bind) — نبقى تحته بهامش أمان.
+   مهم: التقطيع يجب أن يحسب «أعمدة × صفوف» لا عدد الصفوف فقط، وإلا انفجر الاستيراد
+   صامتاً عند إضافة عمود جديد (33 عموداً × 2000 صف = 66000 معاملاً > الحد). */
+const MAX_PARAMS = 60000;
+const chunkFor = (columns, want) =>
+  Math.max(1, Math.min(Number(want) || 1000, Math.floor(MAX_PARAMS / Math.max(1, columns.length))));
+
 /** إدراج مجمّع (سريع جداً لمئات الآلاف من الصفوف) */
 async function insertBatch(table, columns, rows, chunk = 1000) {
   if (!rows || !rows.length) return 0;
   const cols = columns.join(', ');
+  const size = chunkFor(columns, chunk);
   let total = 0;
-  for (let i = 0; i < rows.length; i += chunk) {
-    const part = rows.slice(i, i + chunk);
+  for (let i = 0; i < rows.length; i += size) {
+    const part = rows.slice(i, i + size);
     const params = [];
     const tuples = part.map(r =>
       '(' + columns.map((c, ci) => {
@@ -209,6 +217,8 @@ CREATE INDEX IF NOT EXISTS idx_mov_unit ON movements(unit_code);
 CREATE INDEX IF NOT EXISTS idx_mov_ind  ON movements(move_indicator);
 CREATE INDEX IF NOT EXISTS idx_mov_file ON movements(source_file);
 CREATE INDEX IF NOT EXISTS idx_mov_dir  ON movements(direction);
+/* ربط الربحية: (مرجع الحركة + الصنف) يقابل (المستند المرجع + الصنف) في المبيعات */
+CREATE INDEX IF NOT EXISTS idx_mov_ref_item ON movements(doc_ref, item);
 
 CREATE TABLE IF NOT EXISTS sales (
   id            BIGSERIAL PRIMARY KEY,
@@ -239,17 +249,22 @@ CREATE TABLE IF NOT EXISTS sales (
   raw_cost      DOUBLE PRECISION,
   ccy_cost      TEXT,
   place         TEXT,
+  storage_loc   TEXT,
   signed_qty    DOUBLE PRECISION,
   signed_value  DOUBLE PRECISION,
   source_row    INTEGER,
   import_id     BIGINT,
   source_file   TEXT
 );
+/* كود المخزن يُضاف لملفات المبيعات الجديدة — ترقية لقواعد قائمة */
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS storage_loc TEXT;
 CREATE INDEX IF NOT EXISTS idx_sales_item ON sales(item);
 CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(invoice_date);
 CREATE INDEX IF NOT EXISTS idx_sales_doc  ON sales(invoice_doc);
 CREATE INDEX IF NOT EXISTS idx_sales_unit ON sales(unit_code);
+CREATE INDEX IF NOT EXISTS idx_sales_storage ON sales(storage_loc);
 CREATE INDEX IF NOT EXISTS idx_sales_file ON sales(source_file);
+CREATE INDEX IF NOT EXISTS idx_sales_ref  ON sales(ref_doc, item);
 
 CREATE TABLE IF NOT EXISTS balances (
   id             BIGSERIAL PRIMARY KEY,
@@ -464,6 +479,8 @@ ALTER TABLE items ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'mine';
 -- وصف السيستم والتصنيف: نوع حركة واحد قد يُصنَّف لبند آخر بناءً على وصف السيستم
 ALTER TABLE movement_types ADD COLUMN IF NOT EXISTS system_desc TEXT;
 ALTER TABLE movement_types ADD COLUMN IF NOT EXISTS category TEXT;
+-- نوع الصف داخل نفس جدول بيانات الحركات: 'movement' نوع حركة | 'category' تصنيف (بلا جدول منفصل)
+ALTER TABLE movement_types ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'movement';
 
 -- جدول واحد للأصناف: المجموعات والتصنيفات صفوف داخل نفس الجدول بنوع kind:
 --   'class'   تصنيف (أعلى)      — 'group' مجموعة مواد — 'item' صنف فعلي (أسفل، كود 9 خانات)

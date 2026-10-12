@@ -28,7 +28,7 @@ const CODE9 = /^\d{9}$/;           // كود الصنف: 9 خانات مكتمل
 
 /* ================= الأصناف ================= */
 
-async function listItems({ origin, q, limit = 500, group, cls } = {}) {
+async function listItems({ origin, q, limit = 500, group, cls, groupFrom, groupTo, clsFrom, clsTo, clsState } = {}) {
   const where = ["i.kind = 'item'"], p = [];
   if (origin && origin !== 'all') { p.push(origin); where.push(`i.origin = $${p.length}`); }
   if (q) {
@@ -36,8 +36,16 @@ async function listItems({ origin, q, limit = 500, group, cls } = {}) {
     where.push(`(i.code ILIKE $${p.length} OR i.descr ILIKE $${p.length}
               OR i.group_desc ILIKE $${p.length} OR i.class_desc ILIKE $${p.length})`);
   }
+  /* حالة التصنيف: مصنّفة/مسجّلة يدوياً مقابل جلبها السيستم من الحركات بلا تصنيف */
+  if (clsState === 'done') { where.push(`(COALESCE(i.group_code,'') <> '' OR COALESCE(i.class_code,'') <> '' OR i.origin = 'mine')`); }
+  if (clsState === 'none') { where.push(`(COALESCE(i.group_code,'') = '' AND COALESCE(i.class_code,'') = '' AND i.origin = 'movement')`); }
   if (group) { p.push(group); where.push(`i.group_code = $${p.length}`); }
   if (cls) { p.push(cls); where.push(`i.class_code = $${p.length}`); }
+  /* نطاق القيم «من / إلى» للمجموعة والتصنيف (مقارنة نصية بترتيب الأكواد) */
+  if (groupFrom) { p.push(groupFrom); where.push(`COALESCE(i.group_code,'') >= $${p.length}`); }
+  if (groupTo) { p.push(groupTo); where.push(`COALESCE(i.group_code,'') <= $${p.length}`); }
+  if (clsFrom) { p.push(clsFrom); where.push(`COALESCE(i.class_code,'') >= $${p.length}`); }
+  if (clsTo) { p.push(clsTo); where.push(`COALESCE(i.class_code,'') <= $${p.length}`); }
   p.push(Math.min(Number(limit) || 500, 3000));
   return all(`
     SELECT i.code, i.descr, i.uom, i.group_code, i.group_desc, i.class_code, i.class_desc,
@@ -209,8 +217,19 @@ async function syncFromMovements() {
     ORDER BY m.storage_loc, m.unit_code, m.id DESC
     ON CONFLICT (code) DO NOTHING`);
 
+  /* 6) أنواع الحركات: كل نوع حركة جديد يظهر في الحركات يُضاف إلى نفس الجدول
+        ( movement_types ) — فيظهر تلقائياً في شاشة أنواع الحركات */
+  const mt = await run(`
+    INSERT INTO movement_types(type_code, direction, kind, source_file)
+    SELECT DISTINCT ON (m.move_type) m.move_type, m.direction, 'movement', m.source_file
+    FROM movements m
+    WHERE COALESCE(m.move_type,'') <> ''
+      AND NOT EXISTS (SELECT 1 FROM movement_types mt WHERE mt.type_code = m.move_type)
+    ORDER BY m.move_type, m.id DESC
+    ON CONFLICT (type_code) DO NOTHING`);
+
   return { inserted: ins.changes, settled: upd.changes,
-           locations: loc.changes, warehouses: wh.changes };
+           locations: loc.changes, warehouses: wh.changes, mtypes: mt.changes };
 }
 
 /* ============ المجموعات والتصنيفات ============
@@ -390,19 +409,54 @@ async function saveWarehouse({ code, name, unit, company, place, editCode }) {
 
 /* ================= أنواع الحركات ================= */
 
-async function listMtypes({ q } = {}) {
-  const where = [], p = [];
+async function listMtypes({ q, catFrom, catTo } = {}) {
+  const where = ["COALESCE(kind,'movement') = 'movement'"], p = [];
   if (q) {
     p.push('%' + q + '%');
     where.push(`(type_code ILIKE $${p.length} OR direction ILIKE $${p.length}
               OR system_desc ILIKE $${p.length} OR category ILIKE $${p.length})`);
   }
+  /* نطاق التصنيف «من / إلى» */
+  if (catFrom) { p.push(catFrom); where.push(`COALESCE(category,'') >= $${p.length}`); }
+  if (catTo) { p.push(catTo); where.push(`COALESCE(category,'') <= $${p.length}`); }
   return all(`
     SELECT type_code code, COALESCE(direction,'') descr,
            COALESCE(system_desc,'') system_desc, COALESCE(category,'') category
     FROM movement_types
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY type_code`, p);
+}
+
+/* التصنيفات — صفوف داخل نفس جدول  movement_types بلا جدول منفصل */
+async function listCategories() {
+  return all(`
+    SELECT type_code code, category name, COALESCE(system_desc,'') descr
+    FROM movement_types
+    WHERE kind = 'category' AND COALESCE(category,'') <> ''
+    ORDER BY category`);
+}
+
+async function saveCategory({ code, name, descr, editCode }) {
+  code = str(code); name = str(name); descr = str(descr);
+  const editing = str(editCode);
+  if (!code) throw new Error('كود التصنيف مطلوب');
+  if (!name) throw new Error('اسم التصنيف مطلوب');
+  const dup = await get(`SELECT 1 x FROM movement_types WHERE type_code=$1 AND kind='category'`, [code]);
+  if (dup && (!editing || editing !== code)) throw new Error('كود التصنيف مستخدم بالفعل');
+  await run(`INSERT INTO movement_types(type_code, direction, system_desc, category, kind, source_file)
+             VALUES($1, NULL, $2, $3, 'category', NULL)
+             ON CONFLICT (type_code) DO UPDATE
+               SET direction=NULL, system_desc=$2, category=$3, kind='category'`,
+    [code, descr, name]);
+  return { code };
+}
+
+async function deleteCategory({ code }) {
+  code = str(code);
+  if (!code) throw new Error('كود التصنيف مطلوب');
+  const r = await run(`DELETE FROM movement_types WHERE type_code=$1 AND kind='category'`, [code]);
+  if (!r.changes) throw new Error('التصنيف غير موجود — أو حُذف مسبقاً');
+  return { code };
 }
 
 async function saveMtype({ code, descr, systemDesc, category, editCode }) {
@@ -418,10 +472,10 @@ async function saveMtype({ code, descr, systemDesc, category, editCode }) {
     const dup = await get('SELECT 1 x FROM movement_types WHERE type_code=$1', [code]);
     if (dup) throw new Error('نوع الحركة موجود بالفعل — استخدم «تعديل»');
   }
-  await run(`INSERT INTO movement_types(type_code, direction, system_desc, category, source_file)
-             VALUES($1,$2,$3,$4,NULL)
+  await run(`INSERT INTO movement_types(type_code, direction, system_desc, category, kind, source_file)
+             VALUES($1,$2,$3,$4,'movement',NULL)
              ON CONFLICT (type_code) DO UPDATE
-               SET direction=$2, system_desc=$3, category=$4`,
+               SET direction=$2, system_desc=$3, category=$4, kind='movement'`,
     [code, descr, systemDesc, category]);
   return { code };
 }
@@ -485,4 +539,5 @@ module.exports = {
   listLocations, saveCompany, saveUnit, saveWarehouse,
   deleteCompany, deleteUnit, deleteWarehouse,
   listMtypes, saveMtype, deleteMtype,
+  listCategories, saveCategory, deleteCategory,
 };

@@ -7,7 +7,7 @@
  *  - اشتقاق الحقول: المكان، توجيه الحركة، إشارة البيع
  */
 const path = require('node:path');
-const { all, get, run, tx, insertBatch, delSetting, setSetting } = require('./db');
+const { all, get, run, tx, insertBatch, delSetting } = require('./db');
 const { readWorkbook, readHeaderPreview, excelSerialToISO, num, numx, str } = require('./xlsx-reader');
 
 /* توحيد مسار الملف: نفس الملف بفواصل / و\ يجب أن يكون مصدراً واحداً وإلا تراكمت صفوف مكررة */
@@ -29,8 +29,12 @@ const SIGNATURES = {
   movement_types: [/^الحركة$/, /توج.*الحركة/],
   movements: [/تاريخ الترحيل/, /كمية$/, /مبلغ بعملةمحلية/, /نوع الحركة/],
   sales: [/تاريخ الفاتورة/, /صاف[ىي] القيم[ةه]/, /الكمية المفوترة|كمية الفاتور[ةه]/, /مستند مبيع|المستند المرجع/],
-  balances: [/كمية المخزون في (بداية|نهاية) الفترة/, /إجمالي كمية البضائع|كمية إصدار البضائع/],
   prices: [/تاريخ السعر/, /كود الصنف/, /التكلفة/, /السوق/],
+  /* جدول الأرصدة اليومي: عمودَا الكمية والقيمة للفترة (بداية/نهاية) — المطابقتان
+     تكفيان لتحديد الجدول. المطابقة الثانية تقبل أيضاً «إجمالي كمية البضائع» /
+     «كمية إصدار البضائع» من الإصدارات الأقدم من التقرير. */
+  balances: [/كمية المخزون في (بداية|نهاية) الفترة/,
+             /قيمة المخزون في (بداية|نهاية) الفترة|إجمالي كمية البضائع|كمية إصدار البضائع/],
 };
 
 const DATASET_LABEL = {
@@ -265,7 +269,7 @@ function movementRows(rows, t, importId, sourceFile) {
 const SALES_COLS = ['invoice_date','invoice_doc','line_no','qty','price_uom','fx_rate','net_value','ccy_net',
   'sale_doc','sale_line','item','item_desc','ref_doc','ref_line','unit_code','doc_class','doc_status',
   'beneficiary','tax','ccy_tax','credit_price','ccy_credit','subtotal','ccy_subtotal','raw_cost','ccy_cost',
-  'place','signed_qty','signed_value','source_row','import_id','source_file'];
+  'place','signed_qty','signed_value','source_row','import_id','source_file','storage_loc'];
 
 function salesRows(rows, t, importId, sourceFile) {
   const m = t.map;
@@ -283,6 +287,7 @@ function salesRows(rows, t, importId, sourceFile) {
     ben: col(t, 'المستفيد', 'اسم العميل الاساسي'),
     tax: col(t, 'مبلغ الضريبة'), ccy3: col(t, 'عملة3'), credit: col(t, 'سعر الائتمان'), ccy4: col(t, 'عملة4'),
     sub: col(t, 'الإجمالي الفرعي'), ccy5: col(t, 'عملة5'), cost: col(t, 'التكلفة'), ccy6: col(t, 'عملة6'),
+    storage: col(t, 'كود المخزن', 'موقع التخزين'),
   };
   const out = []; let skipped = 0;
   for (let r = t.headerRow + 1; r < rows.length; r++) {
@@ -305,7 +310,7 @@ function salesRows(rows, t, importId, sourceFile) {
       str(row[ci.refDoc]), Math.round(num(row[ci.refLine])), str(row[ci.unit]), cls, status,
       str(row[ci.ben]), num(row[ci.tax]), str(row[ci.ccy3]), num(row[ci.credit]), str(row[ci.ccy4]),
       num(row[ci.sub]), str(row[ci.ccy5]), num(row[ci.cost]), str(row[ci.ccy6]),
-      null, sign * qty, sign * net, r + 1, importId, sourceFile,
+      null, sign * qty, sign * net, r + 1, importId, sourceFile, str(row[ci.storage]),
     ]);
   }
   return { rows: out, skipped };
@@ -382,8 +387,10 @@ async function insertRows(ds, cols, rows, upsertPk) {
   const uniq = [...dedup.values()];
 
   const chunk = 2000; let total = 0;
-  for (let i = 0; i < uniq.length; i += chunk) {
-    const part = uniq.slice(i, i + chunk);
+  /* نفس حد معاملات PostgreSQL: أعمدة × صفوف ≤ 65535 */
+  const size = Math.max(1, Math.min(chunk, Math.floor(60000 / Math.max(1, cols.length))));
+  for (let i = 0; i < uniq.length; i += size) {
+    const part = uniq.slice(i, i + size);
     const params = [];
     const tuples = part.map(r => '(' + cols.map((c, ci) => { params.push(r[ci] === undefined ? null : r[ci]); return '$' + params.length; }).join(', ') + ')');
     const updates = cols.filter(c => c !== upsertPk).map(c => `${c} = EXCLUDED.${c}`).join(', ');
@@ -483,17 +490,12 @@ async function importFile(filePath, opts = {}) {
   }
 
   progress('اشتقاق الحقول');
-  if (!only) {
-    // الاستيراد المحدود (‎--only‎) لا يمسّ الجداول المشتقة ولا قاعدة التكلفة
-    await deriveColumns(sourceFile);
-    await delSetting('cost_rule');   // إعادة كشف قاعدة التكلفة بعد كل استيراد
-  }
-
-  // تذكير مسار آخر ملف استورد بنجاح — أساس زر «استيراد اليوم»
-  if (result.tables.some(t => !t.error && t.rows > 0)) {
-    await setSetting('last_import_path', sourceFile);
-    await setSetting('last_import_dir', path.dirname(sourceFile));
-  }
+  /* اشتقاق المكان/التوجيه يجري دائماً، ودائماً بعد استيراد يومي (حركات/مبيعات/
+     أرصدة) لأن حقول place/direction/signed_* تُبنى منه؛ ويُعاد كشف قاعدة
+     التكلفة بعد أي استيراد يؤثر على التكلفة. الإدخال اليدوي يشتق حقوله لحظة
+     الحفظ (انظر src/daily-entry.js). */
+  await deriveColumns(sourceFile);
+  await delSetting('cost_rule');   // إعادة كشف قاعدة التكلفة بعد كل استيراد
 
   progress('اكتمل');
   return result;
@@ -509,4 +511,42 @@ function analyzePreview(filePath) {
   return out;
 }
 
-module.exports = { importFile, analyzePreview, detectTables, DATASET_LABEL, deriveColumns };
+/**
+ * معاينة موسّعة قبل الاستيراد: تعرض لكل شيت كل جداول البيانات المكتشفة مع عناوين
+ * الأعمدة وعيّنة من أول الصفوف داخل نطاق الجدول نفسه (كل صف مقتطع بعرض كتلته).
+ * @param {string} filePath
+ * @param {{maxRows?:number, only?:string[], password?:string}} opts
+ * @returns {Array<{name:string, ref:string, tables:Array<{dataset,label,headers,rows}>}>}
+ */
+function analyzePreviewDeep(filePath, opts = {}) {
+  const maxRows = Math.max(1, Math.min(Number(opts.maxRows) || 8, 50));
+  const only = Array.isArray(opts.only) && opts.only.length ? opts.only : null;
+  // 80 صفاً تكفي لاكتشاف العناوين (أول 15) واستخراج عيّنة مريحة لكل جدول
+  const sheets = readHeaderPreview(filePath, 80, opts.password);
+  const out = [];
+  for (const sh of sheets) {
+    const rows = sh.rows || [];
+    const tables = detectTables(rows)
+      .filter(t => !only || only.includes(t.dataset))
+      .map(t => {
+        const sample = [];
+        for (let r = t.headerRow + 1; r < rows.length && sample.length < maxRows; r++) {
+          const row = rows[r] || [];
+          const slice = [];
+          let filled = false;
+          for (let c = t.start; c <= t.end; c++) {
+            const v = row[c];
+            if (norm(v) !== '') filled = true;
+            slice.push(v === null || v === undefined ? '' : v);
+          }
+          if (!filled) continue;   // نتخطى الصفوف الفارغة داخل الكتلة
+          sample.push(slice);
+        }
+        return { dataset: t.dataset, label: DATASET_LABEL[t.dataset], headers: t.headers, rows: sample };
+      });
+    out.push({ name: sh.name, ref: sh.ref, tables });
+  }
+  return out;
+}
+
+module.exports = { importFile, analyzePreview, analyzePreviewDeep, detectTables, DATASET_LABEL, deriveColumns };

@@ -51,7 +51,6 @@
 
     <div class="nav-label">البيانات</div>
     <button data-tab="quality"><i>◇</i><span>جودة البيانات</span></button>
-    <button data-tab="import"><i>⇪</i><span>الاستيراد</span></button>
     <button data-tab="reports"><i>⤓</i><span>التقارير</span></button>
   </nav>
 
@@ -72,13 +71,12 @@
     <button class="icon-btn only-mobile" id="btn-menu" title="القائمة">☰</button>
     <div class="page">
       <h1 id="page-title">لوحة التحكم</h1>
-      <div class="crumb" id="page-crumb">نظرة عامة على الأداء والمؤشرات</div>
+      <div class="crbar">
+        <button class="btn fl clear-filters" title="مسح الفلاتر وإعادة البيانات للأخير">🗗</button>
+        <div class="crumb" id="page-crumb">نظرة عامة على الأداء والمؤشرات</div>
+      </div>
     </div>
     <div class="spacer"></div>
-
-    <span class="chip" title="حركات المخزون"><i>⇄</i> <b id="b-mov">—</b></span>
-    <span class="chip" title="بنود المبيعات"><i>◈</i> <b id="b-sal">—</b></span>
-    <span class="chip" title="دليل الأصناف"><i>◇</i> <b id="b-itm">—</b></span>
 
     <button class="btn sm ghost" id="btn-users" hidden>👥 المستخدمون</button>
     <span class="me" id="me-chip" hidden>
@@ -257,18 +255,31 @@
         <div class="cpp filters-mv-menu">
           <button class="btn sm ghost" data-more type="button">فلاتر أخرى ▾</button>
           <div class="cpp-menu filters-mv-pop" hidden>
-            <label class="fl">المصدر<select class="input" id="md-items-origin">
+            <label class="fl" data-nocount>المصدر<select class="input" id="md-items-origin">
               <option value="all">الكل</option>
               <option value="mine">تم تسجيلها</option>
               <option value="movement">مجلوبة من الحركات</option>
             </select></label>
-            <label class="fl">المجموعة<select class="input" id="md-items-group"><option value="">كل المجموعات</option></select></label>
-            <label class="fl">التصنيف<select class="input" id="md-items-class"><option value="">كل التصنيفات</option></select></label>
+            <label class="fl">حالة التصنيف<select class="input" id="md-items-clsstate">
+              <option value="">الكل</option>
+              <option value="done">مصنّفة / مسجّلة بواسطتي</option>
+              <option value="none">غير مصنّفة (جلبها السيستم)</option>
+            </select></label>
+            <div class="fl fl-range"><span class="fl-range-lbl">المجموعة</span>
+              <span class="fl-range-in">
+                <select class="input" id="md-items-group" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select class="input" id="md-items-group-to" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
+            <div class="fl fl-range"><span class="fl-range-lbl">التصنيف</span>
+              <span class="fl-range-in">
+                <select class="input" id="md-items-class" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select class="input" id="md-items-class-to" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
           </div>
-        </div>
-        <div class="filters-mv-actions">
-          <button class="btn sm" id="md-items-apply">تطبيق الفلتر</button>
-          <button class="btn sm ghost" id="md-items-clear">↺ مسح الفلاتر</button>
         </div>
       </div>
       <div class="hint" style="margin-top:10px">
@@ -325,10 +336,6 @@
       </div>
       <div class="filterbar filters-mv" style="margin-top:8px">
         <label class="fl fl-search">بحث<input class="input" id="md-loc-q" placeholder="بحث بالكود أو الاسم أو المكان…"></label>
-        <div class="filters-mv-actions">
-          <button class="btn sm" id="md-loc-apply">تطبيق الفلتر</button>
-          <button class="btn sm ghost" id="md-loc-clear">↺ مسح الفلاتر</button>
-        </div>
       </div>
       <div class="hint" style="margin-top:10px">
         <b>الشركة</b>: كود + اسم + عملة — تعدّل مرة واحدة فتتبدّل وحداتها معها.
@@ -359,7 +366,13 @@
                   <span class="act danger" data-act="del">🗑 حذف</span>
                 </span>
               </button>
-
+              <button class="cpp-item" type="button" data-mt-type="cat"><i>◫</i><b>تصنيف</b>
+                <span class="cpp-acts">
+                  <span class="act" data-act="add">＋ إضافة</span>
+                  <span class="act" data-act="edit">✎ تعديل</span>
+                  <span class="act danger" data-act="del">🗑 حذف</span>
+                </span>
+              </button>
             </div>
           </div>
         </div>
@@ -373,12 +386,19 @@
         <div class="cpp filters-mv-menu">
           <button class="btn sm ghost" data-more type="button">فلاتر أخرى ▾</button>
           <div class="cpp-menu filters-mv-pop" hidden>
-            <label class="fl">التصنيف<select class="input" id="md-mtype-cat"><option value="">كل التصنيفات</option></select></label>
+            <label class="fl">حالة التوجيه<select class="input" id="md-mtype-dirstate">
+              <option value="">الكل</option>
+              <option value="done">موجهة (لها وصف نظام/تصنيف)</option>
+              <option value="none">غير موجهة (لم أضف وصفاً)</option>
+            </select></label>
+            <div class="fl fl-range"><span class="fl-range-lbl">التصنيف</span>
+              <span class="fl-range-in">
+                <select class="input" id="md-mtype-cat" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select class="input" id="md-mtype-cat-to" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
           </div>
-        </div>
-        <div class="filters-mv-actions">
-          <button class="btn sm" id="md-mtype-apply">تطبيق الفلتر</button>
-          <button class="btn sm ghost" id="md-mtype-clear">↺ مسح الفلاتر</button>
         </div>
       </div>
       <div id="tbl-md-mtypes" class="tblwrap" style="margin-top:10px"></div>
@@ -439,6 +459,7 @@
         <h3>أرصدة يومية <small>المخزون والمطابقة — افتتاحي + حركات = ختامي</small></h3>
         <div class="row">
           <button class="btn sm ghost" data-back="daily">‹ رجوع</button>
+          <button class="btn sm ghost" data-manual="balances">＋ إدخال يدوي</button>
           <button class="btn sm" data-daily-import="balances">⬆ استيراد البيانات</button>
         </div>
       </div>
@@ -447,23 +468,44 @@
     <div class="card filterbar filters-mv">
       <label class="fl mv-range">من – إلى
         <span class="mv-range-in">
-          <input type="date" id="if-from" class="input mv-date" dir="ltr" lang="en-GB">
+          <span class="dwrap"><input type="date" id="if-from" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
           <i>←</i>
-          <input type="date" id="if-to" class="input mv-date" dir="ltr" lang="en-GB">
+          <span class="dwrap"><input type="date" id="if-to" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
         </span>
       </label>
       <label class="fl fl-search">بحث<input id="if-item" class="input" placeholder="كود الصنف"></label>
       <div class="cpp filters-mv-menu">
         <button class="btn sm ghost" data-more type="button">فلاتر أخرى ▾</button>
         <div class="cpp-menu filters-mv-pop" hidden>
-          <label class="fl">المكان<select id="if-place" class="input"><option value="">الكل</option></select></label>
-          <label class="fl">الشركة<select id="if-company" class="input"><option value="">الكل</option></select></label>
-          <label class="fl">الوحدة<select id="if-unit" class="input"><option value="">الكل</option></select></label>
+          <div class="fl fl-range"><span class="fl-range-lbl">المكان</span>
+            <span class="fl-range-in">
+              <select id="if-place" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="if-place-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
+          <div class="fl fl-range"><span class="fl-range-lbl">الشركة</span>
+            <span class="fl-range-in">
+              <select id="if-company" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="if-company-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
+          <div class="fl fl-range"><span class="fl-range-lbl">الوحدة</span>
+            <span class="fl-range-in">
+              <select id="if-unit" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="if-unit-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
+          <div class="fl fl-range"><span class="fl-range-lbl">المخزن</span>
+            <span class="fl-range-in">
+              <select id="if-storage" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="if-storage-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
         </div>
-      </div>
-      <div class="filters-mv-actions">
-        <button class="btn sm" id="if-apply">تطبيق الفلتر</button>
-        <button class="btn sm ghost" id="if-clear">↺ مسح الفلاتر</button>
       </div>
     </div>
 
@@ -492,9 +534,10 @@
   <section id="tab-sales">
     <div class="card">
       <div class="card-h">
-        <h3>مبيعات يومية <small>الإيراد والتكلفة والربحية — مكان المبيعات والربحية</small></h3>
+        <h3>مبيعات يومية <small>تقرير تفصيلي قابل للتجميع على مستوى الصنف/المكان/الشركة/العميل — بدون التكلفة</small></h3>
         <div class="row">
           <button class="btn sm ghost" data-back="daily">‹ رجوع</button>
+          <button class="btn sm ghost" data-manual="sales">＋ إدخال يدوي</button>
           <button class="btn sm" data-daily-import="sales">⬆ استيراد البيانات</button>
         </div>
       </div>
@@ -503,46 +546,67 @@
     <div class="card filterbar filters-mv">
       <label class="fl mv-range">من – إلى
         <span class="mv-range-in">
-          <input type="date" id="sf-from" class="input mv-date" dir="ltr" lang="en-GB">
+          <span class="dwrap"><input type="date" id="sf-from" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
           <i>←</i>
-          <input type="date" id="sf-to" class="input mv-date" dir="ltr" lang="en-GB">
+          <span class="dwrap"><input type="date" id="sf-to" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
         </span>
       </label>
       <label class="fl fl-search">بحث<input id="sf-item" class="input" placeholder="كود الصنف"></label>
       <div class="cpp filters-mv-menu">
         <button class="btn sm ghost" data-more type="button">فلاتر أخرى ▾</button>
         <div class="cpp-menu filters-mv-pop" hidden>
-          <label class="fl">المكان<select id="sf-place" class="input"><option value="">الكل</option></select></label>
-          <label class="fl">العميل<select id="sf-cust" class="input"><option value="">الكل</option></select></label>
-          <label class="fl">الوحدة<select id="sf-unit" class="input"><option value="">الكل</option></select></label>
+          <div class="fl fl-range"><span class="fl-range-lbl">المكان</span>
+            <span class="fl-range-in">
+              <select id="sf-place" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="sf-place-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
+          <div class="fl fl-range"><span class="fl-range-lbl">العميل</span>
+            <span class="fl-range-in">
+              <select id="sf-cust" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="sf-cust-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
+          <div class="fl fl-range"><span class="fl-range-lbl">الوحدة</span>
+            <span class="fl-range-in">
+              <select id="sf-unit" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="sf-unit-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
+          <div class="fl fl-range"><span class="fl-range-lbl">المخزن</span>
+            <span class="fl-range-in">
+              <select id="sf-storage" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="sf-storage-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
         </div>
-      </div>
-      <div class="filters-mv-actions">
-        <button class="btn sm" id="sf-apply">تطبيق الفلتر</button>
-        <button class="btn sm ghost" id="sf-clear">↺ مسح الفلاتر</button>
       </div>
     </div>
 
-    <div class="grid kpis" id="sal-kpis"></div>
+    <div class="card filterbar" id="sal-levelbar">
+      <label class="fl">طريقة تجميع التقرير
+        <select id="sal-level" class="input">
+          <option value="detail">تفصيلي (كل الأبعاد)</option>
+          <option value="item">على مستوى الصنف</option>
+          <option value="place">على مستوى المكان — تفصيل الأصناف</option>
+          <option value="company">على مستوى الشركة — تفصيل الأصناف</option>
+          <option value="cust">على مستوى العميل — تفصيل الأصناف</option>
+          <option value="storage">على مستوى المخزن — تفصيل الأصناف</option>
+        </select>
+      </label>
+    </div>
 
     <div class="card mt">
       <div class="card-h">
-        <h3>المبيعات والربحية حسب المكان <small>التكلفة من حركات الوحدات المباعة</small></h3>
-        <a class="exp" href="/api/export?name=sales-place">⬇ CSV</a>
+        <h3>التقرير التفصيلي للمبيعات <small>قيمة البيع • الكمية • قيمة البيع للوحدة — بدون التكلفة</small></h3>
+        <a class="exp" id="sal-csv" href="#">⬇ CSV</a>
       </div>
-      <div id="tbl-sales-place" class="tblwrap"></div>
-    </div>
-
-    <div class="grid two">
-      <div class="card"><div class="card-h"><h3>المبيعات شهرياً</h3></div><div id="ch-sales-month"></div>
-        <div class="legend"><span><i class="c1"></i>قيمة</span><span><i class="c3"></i>كمية</span></div>
-      </div>
-      <div class="card"><div class="card-h"><h3>أعلى الأصناف مبيعاً</h3></div><div id="tbl-sales-item" class="tblwrap"></div></div>
-    </div>
-
-    <div class="grid two">
-      <div class="card"><div class="card-h"><h3>أعلى العملاء</h3></div><div id="tbl-sales-cust" class="tblwrap"></div></div>
-      <div class="card"><div class="card-h"><h3>توزيع حسب فئة المستند <small>قيمة موقّعة</small></h3></div><div id="tbl-sales-class" class="tblwrap"></div></div>
+      <div id="tbl-sal-detail" class="tblwrap"></div>
+      <div class="muted xs" id="sal-detail-count" style="margin-top:8px"></div>
     </div>
   </section>
 
@@ -553,6 +617,7 @@
         <h3>حركات سيستم يومية <small>تحميل ملف الحركات اليومية + وارد وصادر الحركات</small></h3>
         <div class="row">
           <button class="btn sm ghost" data-back="daily">‹ رجوع</button>
+          <button class="btn sm ghost" data-manual="movements">＋ إدخال يدوي</button>
           <button class="btn sm" data-daily-import="movements">⬆ استيراد البيانات</button>
         </div>
       </div>
@@ -561,36 +626,72 @@
     <div class="card filterbar filters-mv">
       <label class="fl mv-range">من – إلى
         <span class="mv-range-in">
-          <input type="date" id="mf-from" class="input mv-date" dir="ltr" lang="en-GB">
+          <span class="dwrap"><input type="date" id="mf-from" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
           <i>←</i>
-          <input type="date" id="mf-to" class="input mv-date" dir="ltr" lang="en-GB">
+          <span class="dwrap"><input type="date" id="mf-to" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
         </span>
       </label>
       <label class="fl fl-search">بحث<input id="mf-item" class="input" placeholder="كود الصنف"></label>
       <div class="cpp filters-mv-menu">
         <button class="btn sm ghost" id="mf-more-btn" data-more type="button">فلاتر أخرى ▾</button>
         <div class="cpp-menu filters-mv-pop" id="mf-more-menu" hidden>
-          <label class="fl">المكان<select id="mf-place" class="input"><option value="">الكل</option></select></label>
-          <label class="fl">نوع الحركة<select id="mf-mtype" class="input"><option value="">الكل</option></select></label>
-          <label class="fl">التوجيه<select id="mf-dir" class="input"><option value="">الكل</option></select></label>
-          <label class="fl">الوحدة<select id="mf-unit" class="input"><option value="">الكل</option></select></label>
+          <div class="fl fl-range"><span class="fl-range-lbl">المكان</span>
+            <span class="fl-range-in">
+              <select id="mf-place" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="mf-place-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
+          <div class="fl fl-range"><span class="fl-range-lbl">نوع الحركة</span>
+            <span class="fl-range-in">
+              <select id="mf-mtype" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="mf-mtype-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
+          <div class="fl fl-range"><span class="fl-range-lbl">التوجيه</span>
+            <span class="fl-range-in">
+              <select id="mf-dir" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="mf-dir-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
+          <div class="fl fl-range"><span class="fl-range-lbl">الوحدة</span>
+            <span class="fl-range-in">
+              <select id="mf-unit" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="mf-unit-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
+          <div class="fl fl-range"><span class="fl-range-lbl">المخزن</span>
+            <span class="fl-range-in">
+              <select id="mf-storage" class="input" title="من"><option value="">من…</option></select>
+              <i>←</i>
+              <select id="mf-storage-to" class="input" title="إلى"><option value="">إلى…</option></select>
+            </span>
+          </div>
         </div>
-      </div>
-      <div class="filters-mv-actions">
-        <button class="btn sm" id="mf-apply">تطبيق الفلتر</button>
-        <button class="btn sm ghost" id="mf-clear">↺ مسح الفلاتر</button>
       </div>
     </div>
 
-    <div class="grid two">
-      <div class="card"><div class="card-h"><h3>الحركات حسب التوجيه</h3></div><div id="tbl-mv-dir" class="tblwrap"></div></div>
-      <div class="card"><div class="card-h"><h3>وارد / صادر شهرياً</h3></div><div id="ch-mv-month"></div>
-        <div class="legend"><span><i class="c3"></i>وارد</span><span><i class="c4"></i>صادر</span></div>
+    <div class="card">
+      <div class="card-h">
+        <h3>حركات سيستم يومية
+          <small>أرقام صافية بعد إسقاط حركات الإلغاء — السيستم يلغي الحركة بحركة تالية بعكس الإشارة</small></h3>
       </div>
-    </div>
-    <div class="grid two">
-      <div class="card"><div class="card-h"><h3>الحركات حسب المكان</h3></div><div id="tbl-mv-place" class="tblwrap"></div></div>
-      <div class="card"><div class="card-h"><h3>أعلى الأصناف حركة بالقيمة</h3></div><div id="tbl-mv-items" class="tblwrap"></div></div>
+
+      <div class="card-h" style="margin-top:6px">
+        <h3>تجميع كل توجيه</h3>
+        <span class="muted xs">وارد = إشارة موجبة • صادر = إشارة سالبة • العدد بعد إسقاط الملغى</span>
+      </div>
+      <div id="mv-dir-sum" class="tblwrap"></div>
+
+      <div class="card-h" style="margin-top:20px">
+        <h3>تقرير الحركات</h3>
+        <span class="muted xs">صنف × توجيه × مخزن × مكان — كمية وقيمة صافية</span>
+      </div>
+      <div id="mv-report" class="tblwrap"></div>
+      <div class="muted xs" id="mv-report-count" style="margin-top:8px"></div>
     </div>
   </section>
 
@@ -601,6 +702,7 @@
         <h3>متابعة البورصة اليومية</h3>
         <div class="row">
           <button class="btn sm ghost" data-back="pricegroup">‹ رجوع</button>
+          <button class="btn sm ghost" data-manual="borse">＋ إدخال يدوي</button>
         </div>
       </div>
     </div>
@@ -612,8 +714,6 @@
     </div>
 
     <div id="borse-pane-view">
-    <div class="grid kpis" id="borse-kpis"></div>
-
     <div class="card mt">
       <div class="card-h">
         <h3>آخر أسعار البورصة <small id="borse-src">—</small></h3>
@@ -639,9 +739,10 @@
           <div class="row">
             <select class="input sm" id="borse-item"></select>
             <select class="input sm" id="borse-range">
+              <option value="7" selected>آخر 7 أيام</option>
               <option value="30">آخر 30 يوم</option>
               <option value="90">آخر 90 يوم</option>
-              <option value="180" selected>آخر 180 يوم</option>
+              <option value="180">آخر 180 يوم</option>
               <option value="365">آخر سنة</option>
               <option value="3000">الكل</option>
             </select>
@@ -672,8 +773,8 @@
           <h3>تعديل أسعار البورصة <small>التعديل يسري من تاريخه على كل الأيام بعده</small></h3>
           <div class="row">
             <select class="input sm" id="be-item"></select>
-            <input class="input sm" type="date" id="be-from">
-            <input class="input sm" type="date" id="be-to">
+            <span class="dwrap"><input class="input sm" type="date" id="be-from" required><span class="dph">dd/mm/yyyy</span></span>
+            <span class="dwrap"><input class="input sm" type="date" id="be-to" required><span class="dph">dd/mm/yyyy</span></span>
             <label class="chk"><input type="checkbox" id="be-onlyov"> المعدَّل فقط</label>
             <button class="btn sm" id="btn-be-load">↻ تحميل</button>
             <button class="btn sm sec" id="btn-be-fetch">⚡ جلب الآن</button>
@@ -715,6 +816,7 @@
         <h3>أسعار السوق اليومية</h3>
         <div class="row">
           <button class="btn sm ghost" data-back="pricegroup">‹ رجوع</button>
+          <button class="btn sm ghost" data-manual="prices">＋ إدخال يدوي</button>
         </div>
       </div>
     </div>
@@ -730,9 +832,9 @@
     <div class="card filterbar filters-mv">
       <label class="fl mv-range">من – إلى
         <span class="mv-range-in">
-          <input type="date" id="pr-from" class="input mv-date" dir="ltr" lang="en-GB">
+          <span class="dwrap"><input type="date" id="pr-from" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
           <i>←</i>
-          <input type="date" id="pr-to" class="input mv-date" dir="ltr" lang="en-GB">
+          <span class="dwrap"><input type="date" id="pr-to" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
         </span>
       </label>
       <label class="fl fl-search">الصنف<select id="pr-item" class="input"><option value="">كل الأصناف</option></select></label>
@@ -743,10 +845,6 @@
             <label class="chk"><input type="checkbox" id="pr-onlyov"> المعدَّل فقط</label>
           </div>
         </div>
-      </div>
-      <div class="filters-mv-actions">
-        <button class="btn sm" id="pr-apply">تطبيق الفلتر</button>
-        <button class="btn sm ghost" id="pr-clear">↺ مسح الفلاتر</button>
       </div>
     </div>
 
@@ -805,25 +903,33 @@
       <div class="card filterbar filters-mv">
         <label class="fl mv-range">من – إلى
           <span class="mv-range-in">
-            <input type="date" id="cs-from" class="input mv-date" dir="ltr" lang="en-GB">
+            <span class="dwrap"><input type="date" id="cs-from" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
             <i>←</i>
-            <input type="date" id="cs-to" class="input mv-date" dir="ltr" lang="en-GB">
+            <span class="dwrap"><input type="date" id="cs-to" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
           </span>
         </label>
         <div class="cpp filters-mv-menu">
           <button class="btn sm ghost" data-more type="button">فلاتر أخرى ▾</button>
           <div class="cpp-menu filters-mv-pop" hidden>
-            <label class="fl">مستوى العرض<select id="cs-level" class="input">
+            <label class="fl" data-nocount>مستوى العرض<select id="cs-level" class="input">
               <option value="detail">تفصيلي — صنف × مصنع</option>
               <option value="total">إجمالي — صنف</option>
             </select></label>
-            <label class="fl">الصنف<select id="cs-item" class="input"><option value="">كل الأصناف</option></select></label>
-            <label class="fl">المصنع<select id="cs-unit" class="input"><option value="">كل المصانع</option></select></label>
+            <div class="fl fl-range"><span class="fl-range-lbl">الصنف</span>
+              <span class="fl-range-in">
+                <select id="cs-item" class="input" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select id="cs-item-to" class="input" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
+            <div class="fl fl-range"><span class="fl-range-lbl">المصنع</span>
+              <span class="fl-range-in">
+                <select id="cs-unit" class="input" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select id="cs-unit-to" class="input" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
           </div>
-        </div>
-        <div class="filters-mv-actions">
-          <button class="btn sm" id="cs-apply">تطبيق الفلتر</button>
-          <button class="btn sm ghost" id="cs-clear">↺ مسح الفلاتر</button>
         </div>
       </div>
 
@@ -879,74 +985,8 @@
             </select></label>
           </div>
         </div>
-        <div class="filters-mv-actions">
-          <button class="btn sm" id="q-apply">تطبيق الفلتر</button>
-          <button class="btn sm ghost" id="q-clear">↺ مسح الفلاتر</button>
-        </div>
       </div>
       <div id="tbl-quality" class="tblwrap" style="margin-top:6px"></div>
-    </div>
-  </section>
-
-  <!-- ============ الاستيراد ============ -->
-  <section id="tab-import">
-
-    <div class="card">
-      <div class="card-h"><h3>الاستيراد اليومي <small>افتح التطبيق يومياً ← ضغطة واحدة تكفي</small></h3></div>
-      <div class="row" style="align-items:center;gap:12px;flex-wrap:wrap">
-        <button class="btn" id="btn-import-today">📥 استيراد اليوم</button>
-        <span class="muted xs" id="today-file">—</span>
-      </div>
-      <div id="today-status" class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap"></div>
-      <div class="muted xs" id="today-note" style="margin-top:8px"></div>
-      <div class="hint" style="margin-top:10px">
-        الزر يستورد <b>آخر ملف استوردته</b> (معروفاً بالاسم أعلى) بكل شيتاته دفعة واحدة، ثم يعرض النتيجة
-        وملاحظات الجودة. لاستيراد ملف آخر (مثل الملف المحمي) استخدم المتصفح بالأسفل.
-      </div>
-    </div>
-
-    <div class="grid two">
-      <div class="card">
-        <div class="card-h"><h3>اختر مجلداً ثم ملف Excel</h3></div>
-        <div class="row">
-          <input class="input" id="dir" value="D:\متابعة الاستهلاك والتكاليف">
-          <button class="btn sm" id="btn-dirs">فتح</button>
-        </div>
-        <div class="filelist" id="filelist"></div>
-        <div class="muted xs" id="files-meta" style="margin-top:6px"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-h"><h3>معاينة واختيار الجداول</h3></div>
-        <div class="row">
-          <button class="btn sec sm" id="btn-preview">🔎 معاينة</button>
-          <button class="btn sm" id="btn-import" disabled>📥 استيراد إلى قاعدة البيانات</button>
-          <label class="muted xs">كلمة مرور (إن وجدت)
-            <input class="input sm" id="pw" type="password" placeholder="••••••">
-          </label>
-        </div>
-        <div id="preview" style="margin-top:12px"></div>
-        <div id="job" style="display:none">
-          <div class="progress"><i></i></div>
-          <div class="muted xs" id="job-stage" style="margin-top:8px"></div>
-        </div>
-        <div id="import-result" style="margin-top:12px"></div>
-        <div class="hint" style="margin-top:12px">
-          الملفات المحمية بكلمة مرور تُقرأ تلقائياً عبر برنامج Excel المفتوح على الجهاز.
-          الجداول تُكتشف بحسب عناوين الأعمدة: الأصناف، المواقع، أنواع الحركات، الحركات، المبيعات، الأرصدة.
-          <b>أسعار البورصة ليست من الملف</b> — تُجلب يومياً من Yahoo وبنك مصر داخل النظام.
-        </div>
-      </div>
-    </div>
-
-    <div class="card mt">
-      <div class="card-h">
-        <h3>المصادر المحملة <small>يمكن ربط ملفات/شيتات أخرى — كل ملف يستبدل بياناته فقط</small></h3>
-        <a class="exp" href="/api/sources">⬇ JSON</a>
-      </div>
-      <div id="tbl-sources" class="tblwrap" style="max-height:220px"></div>
-      <div class="card-h" style="margin-top:20px"><h3>سجل الاستيراد</h3></div>
-      <div id="tbl-imports" class="tblwrap"></div>
     </div>
   </section>
 
@@ -954,10 +994,17 @@
   <section id="tab-reports">
     <div class="card">
       <div class="card-h">
-        <h3>مركز التقارير <small>اختر تقريراً ليُعرض داخل المتصفح — ثم صدّره CSV عند الحاجة</small></h3>
+        <h3>مركز التقارير <small>اختر مجموعة ثم تقريراً ليُعرض داخل المتصفح — ثم صدّره CSV عند الحاجة</small></h3>
         <span class="muted xs" id="rep-count"></span>
       </div>
-      <div class="grid three" id="report-list"></div>
+      <div class="segs" id="rep-groups" style="margin-top:4px">
+        <button class="seg on" data-grp="sales">تقارير مبيعات</button>
+        <button class="seg" data-grp="store">تقارير مخازن</button>
+        <button class="seg" data-grp="bal">تقارير أرصدة</button>
+        <button class="seg" data-grp="misc">تقارير أخرى</button>
+      </div>
+      <div class="grid three" id="report-list" style="margin-top:10px"></div>
+      <div class="muted xs" id="rep-list-empty" style="margin-top:8px" hidden>لا توجد تقارير في هذه المجموعة</div>
     </div>
 
     <div class="card mt" id="report-view">
@@ -971,27 +1018,85 @@
       <div class="filterbar filters-mv" style="margin-top:10px">
         <label class="fl mv-range">من – إلى
           <span class="mv-range-in">
-            <input type="date" id="rf-from" class="input mv-date" dir="ltr" lang="en-GB">
+            <span class="dwrap"><input type="date" id="rf-from" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
             <i>←</i>
-            <input type="date" id="rf-to" class="input mv-date" dir="ltr" lang="en-GB">
+            <span class="dwrap"><input type="date" id="rf-to" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
           </span>
         </label>
         <label class="fl fl-search">بحث<input id="rf-item" class="input" placeholder="كود الصنف"></label>
         <div class="cpp filters-mv-menu">
           <button class="btn sm ghost" data-more type="button">فلاتر أخرى ▾</button>
           <div class="cpp-menu filters-mv-pop" hidden>
-            <label class="fl">المكان<select id="rf-place" class="input"><option value="">الكل</option></select></label>
+            <div class="fl fl-range"><span class="fl-range-lbl">المكان</span>
+              <span class="fl-range-in">
+                <select id="rf-place" class="input" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select id="rf-place-to" class="input" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
+            <div class="fl fl-range"><span class="fl-range-lbl">الوحدة</span>
+              <span class="fl-range-in">
+                <select id="rf-unit" class="input" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select id="rf-unit-to" class="input" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
+            <div class="fl fl-range"><span class="fl-range-lbl">المخزن</span>
+              <span class="fl-range-in">
+                <select id="rf-storage" class="input" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select id="rf-storage-to" class="input" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
+            <div class="fl fl-range"><span class="fl-range-lbl">الشركة</span>
+              <span class="fl-range-in">
+                <select id="rf-company" class="input" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select id="rf-company-to" class="input" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
+            <div class="fl fl-range"><span class="fl-range-lbl">التصنيف</span>
+              <span class="fl-range-in">
+                <select id="rf-cls" class="input" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select id="rf-cls-to" class="input" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
+            <div class="fl fl-range"><span class="fl-range-lbl">المجموعة</span>
+              <span class="fl-range-in">
+                <select id="rf-grp" class="input" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select id="rf-grp-to" class="input" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
+            <div class="fl fl-range"><span class="fl-range-lbl">العميل</span>
+              <span class="fl-range-in">
+                <select id="rf-cust" class="input" title="من"><option value="">من…</option></select>
+                <i>←</i>
+                <select id="rf-cust-to" class="input" title="إلى"><option value="">إلى…</option></select>
+              </span>
+            </div>
           </div>
         </div>
-        <div class="filters-mv-actions">
-          <button class="btn sm" id="rf-apply">تطبيق الفلتر</button>
-          <button class="btn sm ghost" id="rf-clear">↺ مسح الفلاتر</button>
-        </div>
         <span class="muted xs">المعايير تُطبَّق على التقارير كلها عند التطبيق</span>
+      </div>
+      <div id="rep-opts" class="filterbar" style="margin-top:10px" hidden>
+        <label class="fl">بند تجميع التقرير
+          <select id="rep-level" class="input"></select>
+        </label>
+        <span id="rep-link-wrap">
+          <label class="fl">طريقة ربط التكلفة
+            <select id="rep-link" class="input">
+              <option value="doc_item">المستند المرجع + الصنف</option>
+              <option value="place">المكان (الطريقة القديمة)</option>
+            </select>
+          </label>
+        </span>
       </div>
       <div id="rep-chart"></div>
       <div class="legend" id="rep-legend"></div>
       <div id="rep-table" class="tblwrap" style="margin-top:12px"></div>
+      <div class="row" id="rep-pager" style="margin-top:12px;gap:6px;flex-wrap:wrap;align-items:center" hidden></div>
     </div>
   </section>
 
@@ -1041,16 +1146,60 @@
         <input type="file" id="dfl-file" accept=".xlsx,.xls" hidden>
       </div>
       <div class="hint" style="margin-top:10px">
-        الملف يُسمّى بالتاريخ — مثال <b>01-10-2026.xlsx</b>. إذا رفعت الاسم نفسه مرة أخرى يقوم النظام
-        <b>باستبدال الملف القديم بالجديد</b> (تُمسح بياناته القديمة وتُدرج الجديدة مكانها) —
-        ومن القائمة تستطيع <b>إضافة ملف</b>، <b>استبدال</b> أي ملف قائم، <b>حذفه</b>، أو <b>البحث</b> باسمه.
+        الملف يُسمّى بالتاريخ — مثال <b>01-10-2026.xlsx</b>. بعد اختيار الملف تظهر <b>معاينة الجداول
+        والصفوف</b> قبل الاستيراد ثم تؤكّد أو تُلغي. ورفع الاسم نفسه <b>يستبدل</b> الملف القديم وبياناته،
+        ومن القائمة تستطيع <b>استبدال</b> أي ملف قائم، <b>حذفه</b>، أو <b>البحث</b> باسمه.
       </div>
+
+      <!-- معاينة الملف قبل الاستيراد -->
+      <div id="dfl-preview" style="display:none;margin-top:12px;border:1px solid var(--line);border-radius:14px;padding:12px;background:rgba(0,0,0,.12)">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <b id="dfl-preview-title">معاينة الملف</b>
+          <span class="muted xs" id="dfl-preview-meta"></span>
+        </div>
+        <div class="muted xs" id="dfl-preview-warn" style="margin-top:8px"></div>
+        <div id="dfl-preview-body" style="margin-top:10px"></div>
+        <label class="muted xs" style="display:block;margin-top:10px">كلمة مرور الملف (إن وُجدت)
+          <input class="input sm" id="dfl-pw" type="password" placeholder="••••••">
+        </label>
+        <div class="row" style="margin-top:12px">
+          <button class="btn sm" id="dfl-confirm">✔ تأكيد الاستيراد</button>
+          <button class="btn sm ghost" id="dfl-cancel">إلغاء</button>
+        </div>
+      </div>
+
       <div id="tbl-dfl" class="tblwrap" style="margin-top:10px;max-height:360px"></div>
       <div class="muted xs" id="dfl-count" style="margin-top:8px"></div>
       <div id="dfl-progress" style="display:none;margin-top:10px">
         <div class="progress"><i></i></div>
         <div class="muted xs" id="dfl-stage" style="margin-top:8px"></div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ الإدخال اليدوي للبيانات اليومية (حركات/مبيعات/أرصدة) ============ -->
+<div class="modal" id="de-modal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-h">
+      <h3>إدخال يدوي <small id="de-cat">—</small></h3>
+      <button class="icon-btn" data-close="de-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="de-form" autocomplete="off" novalidate>
+        <div class="grid three" id="de-fields"></div>
+        <div class="row" style="margin-top:4px">
+          <button class="btn" type="submit" id="de-save-btn">حفظ</button>
+          <button class="btn ghost" type="button" id="de-reset" style="display:none">إلغاء التعديل</button>
+        </div>
+        <div class="login-err" id="de-err" hidden></div>
+      </form>
+      <div class="card-h" style="margin-top:20px">
+        <h3>السجلات اليدوية <small>يُعدَّل ويُحذف ما أُدخل يدوياً فقط — صفوف الملفات محصّنة</small></h3>
+        <button class="btn sm ghost" id="de-refresh" title="تحديث القائمة">↻</button>
+      </div>
+      <div id="tbl-de" class="tblwrap" style="margin-top:8px;max-height:320px"></div>
+      <div class="muted xs" id="de-count" style="margin-top:8px"></div>
     </div>
   </div>
 </div>
@@ -1290,8 +1439,7 @@
 </div>
 
 <!-- نوع حركة -->
-<div class="modal" id="md-mtype-modal" hidden>
-  <div class="modal-card">
+<div class="modal" id="md-mtype-modal" hidden>  <div class="modal-card">
     <div class="modal-h">
       <h3 id="md-mtype-title">إضافة نوع حركة</h3>
       <button class="icon-btn" data-close="md-mtype-modal" title="إغلاق">✕</button>
@@ -1306,12 +1454,40 @@
           <input class="input" id="mt-sys" placeholder="ما الذي يفعله السيستم بهذا النوع …">
         </label>
         <label>التصنيف
-          <input class="input" id="mt-cat" placeholder="البند الذي تُصنَّف إليه الحركات …">
+          <select class="input" id="mt-cat">
+            <option value="">— بلا تصنيف —</option>
+          </select>
         </label>
         <div class="login-err" id="mt-err" hidden></div>
         <div class="row">
           <button class="btn" type="submit">حفظ</button>
           <button class="btn ghost" type="button" data-close="md-mtype-modal">إلغاء</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="md-mcat-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-h">
+      <h3 id="md-mcat-title">إضافة تصنيف</h3>
+      <button class="icon-btn" data-close="md-mcat-modal" title="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="md-mcat-form" autocomplete="off">
+        <label>كود التصنيف
+          <input class="input" id="mcat-code" required>
+        </label>
+        <label>اسم التصنيف<input class="input" id="mcat-name" required></label>
+        <label>الوصف
+          <input class="input" id="mcat-descr" placeholder="ما الذي تُجمعه هذا التصنيف …">
+        </label>
+        <div class="hint">التصنيفات تُخزَّن في <b>نفس جدول بيانات الحركات</b> — لا جدول منفصل.</div>
+        <div class="login-err" id="mcat-err" hidden></div>
+        <div class="row">
+          <button class="btn" type="submit">حفظ</button>
+          <button class="btn ghost" type="button" data-close="md-mcat-modal">إلغاء</button>
         </div>
       </form>
     </div>
