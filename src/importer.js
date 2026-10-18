@@ -21,6 +21,9 @@ function dateFromFileName(name) {
   return `${y}-${String(m[2]).padStart(2, '0')}-${String(m[1]).padStart(2, '0')}`;
 }
 
+/** عمود تاريخ: يحوّل رقم Excel التسلسلي (أو نصاً) إلى ISO yyyy-mm-dd، وإلا '' */
+const dt = v => excelSerialToISO(v) || '';
+
 /* ---------------- كشف نوع الجدول ---------------- */
 // كل عنصر = نمط يُطبَّق على أي عنصر في صف العناوين (بعدد من الأعمدة المطلوبة)
 const SIGNATURES = {
@@ -29,12 +32,26 @@ const SIGNATURES = {
   movement_types: [/^الحركة$/, /توج.*الحركة/],
   movements: [/تاريخ الترحيل/, /كمية$/, /مبلغ بعملةمحلية/, /نوع الحركة/],
   sales: [/تاريخ الفاتورة/, /صاف[ىي] القيم[ةه]/, /الكمية المفوترة|كمية الفاتور[ةه]/, /مستند مبيع|المستند المرجع/],
-  prices: [/تاريخ السعر/, /كود الصنف/, /التكلفة/, /السوق/],
+
   /* جدول الأرصدة اليومي: عمودَا الكمية والقيمة للفترة (بداية/نهاية) — المطابقتان
      تكفيان لتحديد الجدول. المطابقة الثانية تقبل أيضاً «إجمالي كمية البضائع» /
      «كمية إصدار البضائع» من الإصدارات الأقدم من التقرير. */
   balances: [/كمية المخزون في (بداية|نهاية) الفترة/,
              /قيمة المخزون في (بداية|نهاية) الفترة|إجمالي كمية البضائع|كمية إصدار البضائع/],
+  contract_registrations: [/الرقم داخلي/, /رقم العقد|كمية تفصيلى/],
+  contract_details: [/الرقم داخلي/, /الباخرة/, /ميناء الوصول/],
+  contract_payments: [/الرقم داخلي/, /تاريخ السداد/],
+  contract_loading: [/الرقم داخلي/, /تاريخ التحميل/],
+  contract_hedge: [/الرقم داخلي/, /تاريخ الربط/],
+  contract_roll: [/الرقم داخلي/, /تاريخ الترويل/],
+  contract_release: [/الرقم داخلي/, /تاريخ الافراج/],
+  contract_external_sales: [/الرقم داخلي/, /تاريخ البيع/],
+  contract_balances: [/تاريخ التقرير/, /كود الصنف/],
+  contract_items: [/كود الصنف/, /اسم الصنف/],
+  contract_suppliers: [/كود المورد/, /اسم المورد/],
+  contract_ports: [/كود الميناء/, /اسم الميناء/],
+  contract_companies_internal: [/كود الشركة الداخلية/, /اسم الشركة الداخلية/],
+  contract_countries: [/كود المصدر/, /اسم المصدر/],
 };
 
 const DATASET_LABEL = {
@@ -44,12 +61,42 @@ const DATASET_LABEL = {
   movements: 'حركات المخزون',
   sales: 'المبيعات',
   balances: 'أرصدة المخزون',
-  prices: 'الأسعار اليومية',
+
+  contract_registrations: 'عقود الاستيراد - التسجيل',
+  contract_details: 'عقود الاستيراد - تفصيلى',
+  contract_payments: 'عقود الاستيراد - السداد',
+  contract_loading: 'عقود الاستيراد - التحميل',
+  contract_hedge: 'عقود الاستيراد - الربط',
+  contract_roll: 'عقود الاستيراد - الرول',
+  contract_release: 'عقود الاستيراد - الافراج',
+  contract_external_sales: 'عقود الاستيراد - بيع خارجى',
+  contract_balances: 'عقود الاستيراد - الارصدة',
+  contract_items: 'عقود الاستيراد - عناصر',
+  contract_suppliers: 'عقود الاستيراد - الموردين',
+  contract_ports: 'عقود الاستيراد - موانئ التحميل',
+  contract_companies_internal: 'عقود الاستيراد - شركات داخلية',
+  contract_countries: 'عقود الاستيراد - المصادر',
+  contract_arrival_ports: 'عقود الاستيراد - موانئ الوصول',
 };
 
 const TABLE_OF = {
   items: 'items', locations: 'locations', movement_types: 'movement_types',
-  movements: 'movements', sales: 'sales', balances: 'balances', prices: 'prices',
+  movements: 'movements', sales: 'sales', balances: 'balances',
+  contract_registrations: 'contract_registrations',
+  contract_details: 'contract_details',
+  contract_payments: 'contract_payments',
+  contract_loading: 'contract_loading',
+  contract_hedge: 'contract_hedge',
+  contract_roll: 'contract_roll',
+  contract_release: 'contract_release',
+  contract_external_sales: 'contract_external_sales',
+  contract_balances: 'contract_balances',
+  contract_items: 'contract_items',
+  contract_suppliers: 'contract_suppliers',
+  contract_ports: 'contract_ports',
+  contract_companies_internal: 'contract_companies_internal',
+  contract_countries: 'contract_countries',
+  contract_arrival_ports: 'contract_arrival_ports',
 };
 
 // توحيد النص العربي: إزالة BOM والتشكيل والتطويل والمسافات
@@ -107,6 +154,26 @@ function classify(headers) {
     const need = Math.max(2, Math.min(3, sig.length));
     if (hit >= need && (!best || hit > best.hit)) best = { ds, hit };
   }
+  // fallback for contract tables - if has الرقم داخلي and a key field
+  if (!best && list.some(h => /الرقم الداخلى|الرقم الداخلي/.test(h))) {
+    if (list.some(h => /تاريخ السداد|كمية السداد|سعر السداد/.test(h))) return 'contract_payments';
+    if (list.some(h => /تاريخ التحميل|كمية التحميل/.test(h))) return 'contract_loading';
+    if (list.some(h => /تاريخ الربط|كمية الربط|قيمة الربط/.test(h))) return 'contract_hedge';
+    if (list.some(h => /تاريخ الترويل|ترويل/.test(h))) return 'contract_roll';
+    if (list.some(h => /تاريخ الافراج|كمية الافراج/.test(h))) return 'contract_release';
+    if (list.some(h => /تاريخ البيع|كمية المبيعات/.test(h))) return 'contract_external_sales';
+    if (list.some(h => /الباخرة|ميناء الوصول|كمية تفصيلى/.test(h))) return 'contract_details';
+  }
+  // try loose normalization
+  const loose = list.map(s => s.replace(/[^\u0621-\u064A\u0660-\u0669a-zA-Z0-9]/g, ''));
+  if (!best && loose.some(h => /الرقمداخلي/.test(h))) {
+    if (loose.some(h => /تاريخالسداد|كميةالسداد|سعرالسداد/.test(h))) return 'contract_payments';
+    if (loose.some(h => /تاريخالتحميل|كميةالتحميل/.test(h))) return 'contract_loading';
+    if (loose.some(h => /تاريخالربط|عددالعقود|قيمةالربط/.test(h))) return 'contract_hedge';
+    if (loose.some(h => /تاريخالترويل|كميةالترويل/.test(h))) return 'contract_roll';
+    if (loose.some(h => /تاريخالافراج|كميةالافراج/.test(h))) return 'contract_release';
+    if (loose.some(h => /تاريخالبيع|كميةالمبيعات/.test(h))) return 'contract_external_sales';
+  }
   return best ? best.ds : null;
 }
 
@@ -116,12 +183,30 @@ function headerIndex(headers) {
   return map;
 }
 
+/**
+ * تطبيع إضافي لأسماء الأعمدة العربية: توحيد الهمزات/الياء/التاء المربوطة
+ * وإزالة «ال» التعريف والمسافات — يجعل «الرقم الداخلي» و«الرقم داخلي»
+ * و«شركة خارجية» و«شركة خارجىة» متطابقة.
+ */
+function colNorm(s) {
+  return norm(s)
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .replace(/ال/g, '')
+    .replace(/[^\u0621-\u064Aa-zA-Z0-9]/g, '');
+}
+
 /** يجد العمود بالمطابقة الجزئية أيضاً — يُرجع الإزاحة المطلقة داخل الصف (بالنسبة لبداية الكتلة) */
 function col(t, ...names) {
   const map = t.map, off = t.start || 0;
   const raw = (n) => {
     if (map[n] !== undefined) return map[n];
-    const key = Object.keys(map).find(k => k === n || k.includes(n));
+    let key = Object.keys(map).find(k => k === n || k.includes(n));
+    if (key !== undefined) return map[key];
+    // مطابقة مطبّعة (همزات/ياء/تاء/«ال»)
+    const cn = colNorm(n);
+    key = Object.keys(map).find(k => colNorm(k) === cn || colNorm(k).includes(cn));
     return key === undefined ? -1 : map[key];
   };
   for (const n of names) {
@@ -136,16 +221,57 @@ function colFn(t, pred) {
   return key === undefined ? -1 : t.map[key] + (t.start || 0);
 }
 
+/* جداول المراجع في شيت «بيانات» — تُكتشف بعنوانها الفعلي (كود + اسم) في أي موضع،
+   لأنها قد تشترك في الأعمدة فتُخلط بالكشف العام. */
+const REF_BLOCKS = [
+  { dataset: 'contract_suppliers',     code: 'كود المورد',       name: 'اسم المورد' },
+  { dataset: 'contract_countries',     code: 'كود المصدر',       name: 'اسم المصدر' },
+  { dataset: 'contract_arrival_ports', code: 'كود ميناء الوصول', name: 'اسم ميناء الوصول' },
+  { dataset: 'contract_ports',         code: 'كود الميناء',      name: 'اسم الميناء' },
+];
+
+/** كتلة مرجعية (كود/اسم): يجد صف العنوان ثم يقرأ لأسفل حتى أول صف فارغ */
+function findRefBlock(rows, codeHdr, nameHdr) {
+  const cN = norm(codeHdr), nN = norm(nameHdr);
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r] || [];
+    for (let c = 0; c + 1 < row.length; c++) {
+      if (norm(row[c]) === cN && norm(row[c + 1]) === nN) {
+        let e = r + 1;
+        while (e < rows.length) {
+          const rr = rows[e] || [];
+          if (norm(rr[c]) === '' && norm(rr[c + 1]) === '') break;
+          e++;
+        }
+        const headers = [str(row[c]), str(row[c + 1])];
+        return { dataset: null, headerRow: r, start: c, end: c + 1, rowEnd: e, headers, map: headerIndex(headers) };
+      }
+    }
+  }
+  return null;
+}
+
 function detectTables(rows) {
-  const hr = findHeaderRow(rows);
-  if (!hr) return [];
-  const blocks = splitBlocks(hr.header);
   const out = [];
-  for (const b of blocks) {
-    const headers = hr.header.slice(b.start, b.end + 1);
-    const ds = classify(headers);
-    if (!ds) continue;
-    out.push({ dataset: ds, headerRow: hr.r, start: b.start, end: b.end, headers, map: headerIndex(headers) });
+  const hr = findHeaderRow(rows);
+  if (hr) {
+    const blocks = splitBlocks(hr.header);
+    for (const b of blocks) {
+      const headers = hr.header.slice(b.start, b.end + 1);
+      const ds = classify(headers);
+      if (!ds) continue;
+      out.push({ dataset: ds, headerRow: hr.r, start: b.start, end: b.end, headers, map: headerIndex(headers) });
+    }
+  }
+  /* كتل المراجع (موردين/مصادر/موانئ) تُكتشف بموقع عنوانها الحقيقي داخل الشيت لا بعنوان
+     أول صف فقط، لأن عدة كتل تشترك في نفس الأعمدة (G:H) فيقرأ المحرك العام أولها
+     ويبالغ في مدى الصفوف فيخلطها. الكتلة المرجعية تُقيَّد بأول صف فارغ بعد عنوانها. */
+  for (const spec of REF_BLOCKS) {
+    const rb = findRefBlock(rows, spec.code, spec.name);
+    if (!rb) continue;
+    rb.dataset = spec.dataset;
+    for (let i = out.length - 1; i >= 0; i--) if (out[i].dataset === spec.dataset) out.splice(i, 1);
+    out.push(rb);
   }
   return out;
 }
@@ -342,27 +468,78 @@ function balanceRows(rows, t, importId, sourceFile) {
   return { rows: out, skipped };
 }
 
-const PRICES_COLS = ['price_date','item_code','item','cost_land','market_land','currency',
-  'source_row','import_id','source_file'];
 
-function priceRows(rows, t, importId, sourceFile) {
+
+
+function contractItemsRows(rows, t, importId, sourceFile) {
   const ci = {
-    date: col(t, 'تاريخ السعر'), code: col(t, 'كود الصنف'), name: col(t, 'اسم الصنف'),
-    cost: col(t, 'التكلفة'), market: col(t, 'السوق'), ccy: col(t, 'العملة'),
+    code: col(t, 'كود الصنف'),
+    name: col(t, 'اسم الصنف'),
+    dir: col(t, 'التوجية'),
+    lot: col(t, 'لوط'),
+    factor: col(t, 'معامل'),
+    mcode: col(t, 'المادة'),
+    mdesc: col(t, 'وصف المادة'),
+    unit: col(t, 'وحدة'),
+    mtype: col(t, 'نوع المادة'),
+    gcode: col(t, 'مجموعة المواد'),
+    gdesc: col(t, 'وصف مجموعة المواد'),
+    cls: col(t, 'التصنيف'),
+    clsdesc: col(t, 'وصف التصنيف'),
+    ptype: col(t, 'نوع المنتج'),
+    loc: col(t, 'موقع'),
+    old: col(t, 'كود قديم'),
+    status: col(t, 'الحالة'),
   };
   const out = []; let skipped = 0;
   for (let r = t.headerRow + 1; r < rows.length; r++) {
     const row = rows[r] || [];
     const code = str(row[ci.code]);
-    const d = excelSerialToISO(row[ci.date]);
-    // صفوف ناقصة: بلا كود/تاريخ، أو صف ختامي فارغ، أو صنف بقيم null (46293)
-    const cost = numx(row[ci.cost]), market = numx(row[ci.market]);
-    if (!code || !d || (cost === null && market === null)) { skipped++; continue; }
-    out.push([d, code, str(row[ci.name]), cost, market, str(row[ci.ccy]),
-              r + 1, importId, sourceFile]);
+    if (!code) { skipped++; continue; }
+    out.push([code, str(row[ci.name]), str(row[ci.dir]), num(row[ci.lot]), num(row[ci.factor]), str(row[ci.mcode]), str(row[ci.mdesc]), str(row[ci.unit]), str(row[ci.mtype]), str(row[ci.gcode]), str(row[ci.gdesc]), str(row[ci.cls]), str(row[ci.clsdesc]), str(row[ci.ptype]), str(row[ci.loc]), str(row[ci.old]), str(row[ci.status]), sourceFile, new Date().toISOString()]);
   }
   return { rows: out, skipped };
 }
+
+
+function contractDetailsRows(rows, t, importId, sourceFile) {
+  const ci = {internal:col(t,'الرقم داخلي'),cls:col(t,'التصنيف'),src:col(t,'المصدر'),ext:col(t,'شركة خارجية'),intc:col(t,'شركة داخلية'),cno:col(t,'رقم العقد'),qty:col(t,'كمية تفصيلى'),vessel:col(t,'الباخرة'),port:col(t,'ميناء الوصول'),exp:col(t,'وصول متوقع'),opstart:col(t,'بداية تشغيل'),ldur:col(t,'مدة التحميل'),opend:col(t,'نهاية تشغيل'),cstat:col(t,'موقف العقد'),vstat:col(t,'موقف المركب'),notes:col(t,'ملاحظات التسجيل')};
+  const out=[]; let skip=0;
+  for(let r=t.headerRow+1;r<rows.length;r++){const row=rows[r]||[];const inr=str(row[ci.internal]);if(!inr){skip++;continue;} out.push([inr,str(row[ci.cls]),str(row[ci.src]),str(row[ci.ext]),str(row[ci.intc]),str(row[ci.cno]),num(row[ci.qty]),str(row[ci.vessel]),str(row[ci.port]),dt(row[ci.exp]),dt(row[ci.opstart]),str(row[ci.ldur]),dt(row[ci.opend]),str(row[ci.cstat]),str(row[ci.vstat]),str(row[ci.notes]),r+1,importId,sourceFile]);}
+  return {rows:out,skipped:skip};
+}
+function contractRegistrationsRows(rows, t, importId, sourceFile) {
+  const ci = {
+    internal: col(t, 'الرقم داخلي'),
+    cat: col(t, 'تصنيف التعاقد'),
+    type: col(t, 'نوع التعاقد'),
+    date: col(t, 'تاريخ التعاقد'),
+    cls: col(t, 'التصنيف'),
+    sup: col(t, 'المورد'),
+    src: col(t, 'المصدر'),
+    ccomp: col(t, 'شركة التعاقد'),
+    cno: col(t, 'رقم العقد'),
+    qty: col(t, 'الكمية'),
+    prem: col(t, 'بريم التعاقد'),
+    ship: col(t, 'الشحن'),
+    sval: col(t, 'قيمة الشحن'),
+    iprice: col(t, 'سعر مبدئى'),
+    cex: col(t, 'بورصة التعاقد'),
+    expd: col(t, 'متوقع سداد'),
+    stat: col(t, 'موقف العقد'),
+    ecif: col(t, 'سعر CIF متوقع'),
+    notes: col(t, 'ملاحظات التسجيل'),
+  };
+  const out = []; let skipped = 0;
+  for (let r = t.headerRow + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const internal = str(row[ci.internal]);
+    if (!internal) { skipped++; continue; }
+    out.push([internal, str(row[ci.cat]), str(row[ci.type]), dt(row[ci.date]), str(row[ci.cls]), str(row[ci.sup]), str(row[ci.src]), str(row[ci.ccomp]), str(row[ci.cno]), num(row[ci.qty]), str(row[ci.prem]), str(row[ci.ship]), num(row[ci.sval]), num(row[ci.iprice]), str(row[ci.cex]), dt(row[ci.expd]), str(row[ci.stat]), num(row[ci.ecif]), str(row[ci.notes]), r+1, importId, sourceFile]);
+  }
+  return { rows: out, skipped };
+}
+
 
 const BUILDERS = {
   items: { cols: ['code','descr','uom','group_code','group_desc','class_code','class_desc','updated_at','source_file'], fn: itemsRows, pk: 'code' },
@@ -371,7 +548,22 @@ const BUILDERS = {
   movements: { cols: MOV_COLS, fn: movementRows, pk: null },
   sales: { cols: SALES_COLS, fn: salesRows, pk: null },
   balances: { cols: BAL_COLS, fn: balanceRows, pk: null },
-  prices: { cols: PRICES_COLS, fn: priceRows, pk: null },
+
+  contract_items: { cols: ['code','name','direction','lot','factor','material_code','material_desc','unit','material_type','group_code','group_desc','class_code','class_desc','product_type','location','old_code','status','source_file','updated_at'], fn: contractItemsRows, pk: 'code' },
+  contract_registrations: { cols: ['internal_no','contract_category','contract_type','contract_date','classification','supplier','source_country','contracting_company','contract_no','quantity','contract_premium','shipping_type','shipping_value','initial_price','contract_exchange','expected_payment_date','contract_status','expected_cif_price','notes','source_row','import_id','source_file'], fn: contractRegistrationsRows, pk: null },
+  contract_details: { cols: ['internal_no','classification','source_country','external_company','internal_company','contract_no','detail_quantity','vessel_name','arrival_port','expected_arrival','operation_start','loading_duration','operation_end','contract_status','vessel_status','notes','source_row','import_id','source_file'], fn: contractDetailsRows, pk: null },
+  contract_payments: { cols: ['internal_no','payment_date','payment_company','item','supplier','contract_no','internal_company','payment_type','price_type','payment_status','payment_quantity','payment_price','exchange_rate','responsible_person','notes','source_row','import_id','source_file'], fn: contractPaymentsRows, pk: null },
+  contract_loading: { cols: ['internal_no','loading_date','contract_no','item','vessel_name','loading_type','loading_quantity','notes','source_row','import_id','source_file'], fn: contractLoadingRows, pk: null },
+  contract_hedge: { cols: ['internal_no','hedge_date','supplier','contract_no','item','contract_exchange','contract_count','hedge_quantity','exchange_price','hedge_exchange','hedge_premium','hedge_price','hedge_value','notes','source_row','import_id','source_file'], fn: contractHedgeRows, pk: null },
+  contract_roll: { cols: ['internal_no','roll_date','contract_no','supplier','item','roll_quantity','contract_exchange','hedge_exchange','previous_exchange','rolling_exchange','rolling_price','notes','source_row','import_id','source_file'], fn: contractRollRows, pk: null },
+  contract_release: { cols: ['internal_no','release_date','contract_no','item','vessel_name','release_quantity','release_type','notes','source_row','import_id','source_file'], fn: contractReleaseRows, pk: null },
+  contract_external_sales: { cols: ['internal_no','sale_date','contract_no','item','vessel_name','sale_quantity','notes','source_row','import_id','source_file'], fn: contractExternalSalesRows, pk: null },
+  contract_balances: { cols: ['report_date','item_code','item_name','unit','qty_sawaki','qty_waha','qty_ameriya','qty_sahlia','total_balance','consumption_rate','days_enough','enough_until','contract_additions','port_additions','consumption','lot','factor','daily_rate','expenses','price_usd','market_price','source_row','import_id','source_file'], fn: contractBalancesRows, pk: null },
+  contract_suppliers: { cols: ['code','name','source_file','updated_at'], fn: contractSuppliersRows, pk: 'code' },
+  contract_ports: { cols: ['code','name','source_file','updated_at'], fn: contractPortsRows, pk: 'code' },
+  contract_companies_internal: { cols: ['code','name','source_file','updated_at'], fn: contractCompaniesInternalRows, pk: 'code' },
+  contract_countries: { cols: ['code','name','source_file','updated_at'], fn: contractCountriesRows, pk: 'code' },
+  contract_arrival_ports: { cols: ['code','name','source_file','updated_at'], fn: contractArrivalPortsRows, pk: 'code' },
 };
 
 /** إدراج مجمّع مع دعم upsert للمفتاح الأساسي */
@@ -442,6 +634,12 @@ async function importFile(filePath, opts = {}) {
 
   const detected = [];
   for (const sh of sheets) {
+    /* شيتات المتابعة (تقارير/ملخّصات محسوبة داخل Excel) لا تُستورد — بياناتها مشتقة
+       وتكرارها يخالف جداول المصدر نفسها. */
+    if (/^متابعة/.test((sh.name || '').trim())) {
+      result.sheets.push({ name: sh.name, rows: (sh.rows || []).length, tables: [], skipped: 'report' });
+      continue;
+    }
     const tables = detectTables(sh.rows || []);
     result.sheets.push({ name: sh.name, rows: (sh.rows || []).length, tables: tables.map(t => DATASET_LABEL[t.dataset]) });
     for (const t of tables) {
@@ -459,7 +657,7 @@ async function importFile(filePath, opts = {}) {
     return result;
   }
 
-  const order = ['items', 'locations', 'movement_types', 'balances', 'movements', 'sales', 'prices'];
+  const order = ['items', 'locations', 'movement_types', 'balances', 'movements', 'sales'];
   detected.sort((a, b) => order.indexOf(a.t.dataset) - order.indexOf(b.t.dataset));
 
   for (const d of detected) {
@@ -526,6 +724,8 @@ function analyzePreviewDeep(filePath, opts = {}) {
   const out = [];
   for (const sh of sheets) {
     const rows = sh.rows || [];
+    /* شيتات المتابعة (تقارير/ملخّصات) لا تُعرض في المعاينة — لا تُستورد. */
+    if (/^متابعة/.test((sh.name || '').trim())) { out.push({ name: sh.name, ref: sh.ref, tables: [] }); continue; }
     const tables = detectTables(rows)
       .filter(t => !only || only.includes(t.dataset))
       .map(t => {
@@ -550,3 +750,34 @@ function analyzePreviewDeep(filePath, opts = {}) {
 }
 
 module.exports = { importFile, analyzePreview, analyzePreviewDeep, detectTables, DATASET_LABEL, deriveColumns };
+
+function contractPaymentsRows(rows,t,importId,sourceFile){const ci={internal:col(t,'الرقم داخلي'),pdate:col(t,'تاريخ السداد'),pcomp:col(t,'شركة السداد'),item:col(t,'الصنف'),sup:col(t,'المورد'),cno:col(t,'رقم العقد'),icomp:col(t,'الشركة الداخلية'),ptype:col(t,'نوع السداد'),prtype:col(t,'نوع السعر'),pstat:col(t,'موقف السداد'),pqty:col(t,'كمية السداد'),pprice:col(t,'سعر السداد'),rate:col(t,'ريت السداد'),resp:col(t,'مسئول السداد'),notes:col(t,'ملاحظات السداد')};const out=[];let skip=0;for(let r=t.headerRow+1;r<rows.length;r++){const row=rows[r]||[];const inr=str(row[ci.internal]);if(!inr){skip++;continue;}out.push([inr,dt(row[ci.pdate]),str(row[ci.pcomp]),str(row[ci.item]),str(row[ci.sup]),str(row[ci.cno]),str(row[ci.icomp]),str(row[ci.ptype]),str(row[ci.prtype]),str(row[ci.pstat]),num(row[ci.pqty]),num(row[ci.pprice]),num(row[ci.rate]),str(row[ci.resp]),str(row[ci.notes]),r+1,importId,sourceFile]);}return {rows:out,skipped:skip};}
+function contractLoadingRows(rows,t,importId,sourceFile){const ci={internal:col(t,'الرقم داخلي'),ldate:col(t,'تاريخ التحميل'),cno:col(t,'رقم العقد'),item:col(t,'الصنف'),vessel:col(t,'اسم المركب'),ltype:col(t,'نوع التحميل'),lqty:col(t,'كمية التحميل'),notes:col(t,'ملاحظات التحميل')};const out=[];let skip=0;for(let r=t.headerRow+1;r<rows.length;r++){const row=rows[r]||[];const inr=str(row[ci.internal]);if(!inr){skip++;continue;}out.push([inr,dt(row[ci.ldate]),str(row[ci.cno]),str(row[ci.item]),str(row[ci.vessel]),str(row[ci.ltype]),num(row[ci.lqty]),str(row[ci.notes]),r+1,importId,sourceFile]);}return {rows:out,skipped:skip};}
+function contractHedgeRows(rows,t,importId,sourceFile){const ci={internal:col(t,'الرقم داخلي'),hdate:col(t,'تاريخ الربط'),sup:col(t,'المورد'),cno:col(t,'رقم العقد'),item:col(t,'الصنف'),cex:col(t,'بورصة التعاقد'),ccount:col(t,'عدد العقود'),hqty:col(t,'كمية الربط'),eprice:col(t,'سعر البورصة'),hex:col(t,'بورصة الربط'),hprem:col(t,'بريم الربط'),hprice:col(t,'سعر الربط'),hval:col(t,'قيمة الربط'),notes:col(t,'ملاحظات الربط')};const out=[];let skip=0;for(let r=t.headerRow+1;r<rows.length;r++){const row=rows[r]||[];const inr=str(row[ci.internal]);if(!inr){skip++;continue;}out.push([inr,dt(row[ci.hdate]),str(row[ci.sup]),str(row[ci.cno]),str(row[ci.item]),str(row[ci.cex]),num(row[ci.ccount]),num(row[ci.hqty]),num(row[ci.eprice]),str(row[ci.hex]),num(row[ci.hprem]),num(row[ci.hprice]),num(row[ci.hval]),str(row[ci.notes]),r+1,importId,sourceFile]);}return {rows:out,skipped:skip};}
+
+function contractRollRows(rows,t,importId,sourceFile){const ci={internal:col(t,'الرقم داخلي'),rdate:col(t,'تاريخ الترويل'),cno:col(t,'رقم العقد'),sup:col(t,'المورد'),item:col(t,'الصنف'),rqty:col(t,'كمية الترويل'),cex:col(t,'بورصة التعاقد'),hex:col(t,'بورصة الربط'),pex:col(t,'بورصة سابقة'),rex:col(t,'بورصة الرولينج'),rprice:col(t,'سعر الرولينج'),notes:col(t,'ملاحظات الرولينج')};const out=[];let skip=0;for(let r=t.headerRow+1;r<rows.length;r++){const row=rows[r]||[];const inr=str(row[ci.internal]);if(!inr){skip++;continue;}out.push([inr,dt(row[ci.rdate]),str(row[ci.cno]),str(row[ci.sup]),str(row[ci.item]),num(row[ci.rqty]),str(row[ci.cex]),str(row[ci.hex]),str(row[ci.pex]),str(row[ci.rex]),num(row[ci.rprice]),str(row[ci.notes]),r+1,importId,sourceFile]);}return {rows:out,skipped:skip};}
+function contractReleaseRows(rows,t,importId,sourceFile){const ci={internal:col(t,'الرقم داخلي'),rdate:col(t,'تاريخ الافراج'),cno:col(t,'رقم العقد'),item:col(t,'الصنف'),vessel:col(t,'اسم المركب'),rqty:col(t,'كمية الافراج'),rtype:col(t,'نوع الافراج')};const out=[];let skip=0;for(let r=t.headerRow+1;r<rows.length;r++){const row=rows[r]||[];const inr=str(row[ci.internal]);if(!inr){skip++;continue;}out.push([inr,dt(row[ci.rdate]),str(row[ci.cno]),str(row[ci.item]),str(row[ci.vessel]),num(row[ci.rqty]),str(row[ci.rtype]),'',r+1,importId,sourceFile]);}return {rows:out,skipped:skip};}
+function contractExternalSalesRows(rows,t,importId,sourceFile){const ci={internal:col(t,'الرقم داخلي'),sdate:col(t,'تاريخ البيع'),cno:col(t,'رقم العقد'),item:col(t,'الصنف'),vessel:col(t,'اسم المركب'),sqty:col(t,'كمية المبيعات')};const out=[];let skip=0;for(let r=t.headerRow+1;r<rows.length;r++){const row=rows[r]||[];const inr=str(row[ci.internal]);if(!inr){skip++;continue;}out.push([inr,dt(row[ci.sdate]),str(row[ci.cno]),str(row[ci.item]),str(row[ci.vessel]),num(row[ci.sqty]),'',r+1,importId,sourceFile]);}return {rows:out,skipped:skip};}
+
+function contractBalancesRows(rows,t,importId,sourceFile){const ci={rdate:col(t,'تاريخ التقرير'),icode:col(t,'كود الصنف'),iname:col(t,'اسم الصنف'),unit:col(t,'الوحدة'),qs:col(t,'السواقي'),qw:col(t,'الواحة'),qa:col(t,'العامرية'),qsh:col(t,'الصالحية'),tb:col(t,'اجمالى الرصيد'),crate:col(t,'معدل الاستهلاك'),de:col(t,'يكفى لمدة'),eu:col(t,'حتي تاريخ'),cadd:col(t,'تعاقدات إضافات'),padd:col(t,'ميناء إضافات'),cons:col(t,'الاستهلاك'),lot:col(t,'اللوط'),fac:col(t,'المعامل'),drate:col(t,'الريت اليومى'),exp:col(t,'المصاريف'),pusd:col(t,'السعر بالدولار'),mprice:col(t,'سعر السوق')};const out=[];let skip=0;const fd=dateFromFileName(sourceFile);for(let r=t.headerRow+1;r<rows.length;r++){const row=rows[r]||[];const ic=str(row[ci.icode]);if(!ic){skip++;continue;}const d=ci.rdate>=0?excelSerialToISO(row[ci.rdate]):(fd||'');out.push([d,ic,str(row[ci.iname]),str(row[ci.unit]),num(row[ci.qs]),num(row[ci.qw]),num(row[ci.qa]),num(row[ci.qsh]),num(row[ci.tb]),num(row[ci.crate]),num(row[ci.de]),dt(row[ci.eu]),num(row[ci.cadd]),num(row[ci.padd]),num(row[ci.cons]),num(row[ci.lot]),num(row[ci.fac]),num(row[ci.drate]),num(row[ci.exp]),num(row[ci.pusd]),num(row[ci.mprice]),r+1,importId,sourceFile]);}return {rows:out,skipped:skip};}
+
+/* جداول المراجع (كود + اسم): تُقرأ من موضع العنوان حتى أول صف فارغ (t.rowEnd).
+   كانت تقرأ لآخر الشيت فتلتقط كتل المراجع المجاورة في نفس الأعمدة (المصادر/موانئ الوصول). */
+function refRows(rows, t, importId, sourceFile) {
+  const codeIdx = t.start, nameIdx = t.start + 1;
+  const end = (t.rowEnd != null && t.rowEnd > t.headerRow) ? t.rowEnd : rows.length;
+  const out = []; let skip = 0;
+  for (let r = t.headerRow + 1; r < end; r++) {
+    const row = rows[r] || [];
+    const c = str(row[codeIdx]), n = str(row[nameIdx]);
+    if (!c && !n) break;                        // نهاية الكتلة عند أول صف فارغ
+    if (!c || !/^[A-Za-z0-9]/.test(c)) { skip++; continue; }  // نتخطى صفوف العناوين/بلا كود
+    out.push([c, n, sourceFile, new Date().toISOString()]);
+  }
+  return { rows: out, skipped: skip };
+}
+function contractSuppliersRows(rows, t, i, sf) { return refRows(rows, t, i, sf); }
+function contractPortsRows(rows, t, i, sf) { return refRows(rows, t, i, sf); }
+function contractCompaniesInternalRows(rows, t, i, sf) { return refRows(rows, t, i, sf); }
+function contractCountriesRows(rows, t, i, sf) { return refRows(rows, t, i, sf); }
+function contractArrivalPortsRows(rows, t, i, sf) { return refRows(rows, t, i, sf); }

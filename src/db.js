@@ -439,19 +439,6 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_exp  ON sessions(expires_at);
 
-CREATE TABLE IF NOT EXISTS quality_issues (
-  id         BIGSERIAL PRIMARY KEY,
-  code       TEXT,
-  severity   TEXT,
-  entity     TEXT,
-  entity_key TEXT,
-  message    TEXT,
-  details    TEXT,
-  created_at TIMESTAMP NOT NULL DEFAULT LOCALTIMESTAMP,
-  import_id  BIGINT
-);
-CREATE INDEX IF NOT EXISTS idx_qi_code ON quality_issues(code);
-
 CREATE TABLE IF NOT EXISTS recon (
   key         TEXT PRIMARY KEY,
   item        TEXT,
@@ -488,6 +475,18 @@ ALTER TABLE movement_types ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT '
 -- يملأ قائمتي الاختيار في نموذج الصنف ويديرهما زرا «＋ مجموعة» و«＋ تصنيف».
 ALTER TABLE items ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'item';
 
+/* صلاحيات الشاشات لكل مستخدم (JSON array من معرّفات الشاشات، أو NULL = افتراضي الدور) */
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tabs TEXT;
+/* ترقية: منح شاشة «مراجع العقود» الجديدة لمن كانت له شاشات البيانات الأساسية
+   (يملك md-movetypes) ولم تُمنح له بعد — الهدف: لا تختفي الشاشة الجديدة عن المستخدمين
+   القائمين. لا تُمسّ شاشات المدير. تُنفَّذ مرة واحدة فعّالة (لا تتكرر). */
+UPDATE users
+   SET tabs = replace(tabs, '"md-movetypes"', '"md-movetypes","md-contractrefs"')
+ WHERE role <> 'admin'
+   AND tabs IS NOT NULL
+   AND tabs LIKE '%"md-movetypes"%'
+   AND tabs NOT LIKE '%"md-contractrefs"%';
+
 -- (ترقية إصدارات سابقة) كتالوجا المجموعات والتصنيفات المنفصلان: ننشئهما مؤقتاً
 -- فقط لننقل بياناتهما إلى صفوف kind داخل items ثم نحذفهما نهائياً.
 CREATE TABLE IF NOT EXISTS item_groups (
@@ -518,6 +517,12 @@ CREATE TABLE IF NOT EXISTS warehouses (
   updated_at   TIMESTAMP,
   source_file  TEXT
 );
+ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS report_active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS is_transit BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS location_name TEXT;
+ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS classification TEXT;
+ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS warehouse_group TEXT;
 
 -- تهيئة: الأصناف الحالية كلها «مسجّلة»؛ والمجموعات والتصنيفات صفوف داخل items
 -- وسجل الشركات من وحدات locations القائمة
@@ -540,6 +545,271 @@ DROP TABLE IF EXISTS item_classes;
 INSERT INTO companies(company_code, company_name, currency)
   SELECT DISTINCT company_code, company_name, currency FROM locations WHERE COALESCE(company_code,'') <> ''
   ON CONFLICT (company_code) DO NOTHING;
+
+-- مخازن «ترانزيت» لكل وحدة — تُجمع عليها الأرصدة التي لا مخزن لها
+INSERT INTO warehouses(code, name, unit_code, company_code, place, report_active, is_transit, updated_at, source_file)
+  SELECT 'TR01','مخزن ترانزيت السواقي','EL01','1001','اعلاف السواقى',TRUE,TRUE,now(),'transit'
+  WHERE NOT EXISTS (SELECT 1 FROM warehouses WHERE code='TR01');
+INSERT INTO warehouses(code, name, unit_code, company_code, place, report_active, is_transit, updated_at, source_file)
+  SELECT 'TR02','مخزن ترانزيت الواحة','WF01','1002','اعلاف الواحة',TRUE,TRUE,now(),'transit'
+  WHERE NOT EXISTS (SELECT 1 FROM warehouses WHERE code='TR02');
+INSERT INTO warehouses(code, name, unit_code, company_code, place, report_active, is_transit, updated_at, source_file)
+  SELECT 'TR03','مخزن ترانزيت العامرية','EL02','1001','اعلاف العامرية',TRUE,TRUE,now(),'transit'
+  WHERE NOT EXISTS (SELECT 1 FROM warehouses WHERE code='TR03');
+INSERT INTO warehouses(code, name, unit_code, company_code, place, report_active, is_transit, updated_at, source_file)
+  SELECT 'TR04','مخزن ترانزيت الصالحية','BF02','1005','مواشى المزرعة',TRUE,TRUE,now(),'transit'
+  WHERE NOT EXISTS (SELECT 1 FROM warehouses WHERE code='TR04');
+
+/* ============ عقود الاستيراد (مخطط إضافي لا يمسّ الجداول القائمة) ============ */
+/* استبدال نسخة قديمة ناقصة من contract_items إن وُجدت (بلا عمود name) */
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='contract_items')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='contract_items' AND column_name='name') THEN
+    DROP TABLE IF EXISTS contract_items;
+  END IF;
+END $$;
+
+-- جداول المراجع (لوك-أب)
+CREATE TABLE IF NOT EXISTS contract_items(
+  code TEXT PRIMARY KEY,
+  name TEXT,
+  direction TEXT,
+  lot NUMERIC,
+  factor NUMERIC,
+  material_code TEXT,
+  material_desc TEXT,
+  unit TEXT,
+  material_type TEXT,
+  group_code TEXT,
+  group_desc TEXT,
+  class_code TEXT,
+  class_desc TEXT,
+  product_type TEXT,
+  location TEXT,
+  old_code TEXT,
+  status TEXT,
+  source_file TEXT,
+  updated_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS contract_suppliers(
+  code TEXT PRIMARY KEY, name TEXT, source_file TEXT, updated_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS contract_ports(
+  code TEXT PRIMARY KEY, name TEXT, source_file TEXT, updated_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS contract_companies_internal(
+  code TEXT PRIMARY KEY, name TEXT, source_file TEXT, updated_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS contract_countries(
+  code TEXT PRIMARY KEY, name TEXT, source_file TEXT, updated_at TIMESTAMPTZ
+);
+-- موانئ الوصول (PN) — كانت مخلوطة داخل contract_suppliers قبل التنظيم
+CREATE TABLE IF NOT EXISTS contract_arrival_ports(
+  code TEXT PRIMARY KEY, name TEXT, source_file TEXT, updated_at TIMESTAMPTZ
+);
+/* ===== تظبيط جداول المراجع المختلطة (مرة واحدة فعّالة) =====
+   contract_suppliers كان يحمل: موردين S + مصادر C + موانئ وصول PN + صفوف عناوين.
+   ننقل C → contract_countries و PN → contract_arrival_ports ثم نُبقي S فقط.
+   تُنفَّذ في كل إقلاع لكنها لا تؤثر بعد أول مرة (لا يبقى ما يُنقل/يُحذف). */
+INSERT INTO contract_countries(code, name, source_file, updated_at)
+  SELECT code, name, source_file, updated_at FROM contract_suppliers
+  WHERE code ~ '^C[0-9]+$'
+  ON CONFLICT (code) DO NOTHING;
+INSERT INTO contract_arrival_ports(code, name, source_file, updated_at)
+  SELECT code, name, source_file, updated_at FROM contract_suppliers
+  WHERE code ~ '^PN[0-9]+$'
+  ON CONFLICT (code) DO NOTHING;
+DELETE FROM contract_suppliers
+  WHERE code ~ '^C[0-9]+$' OR code ~ '^PN[0-9]+$' OR code !~ '^[A-Za-z0-9]+$';
+
+-- جداول البيانات
+CREATE TABLE IF NOT EXISTS contract_registrations(
+  id BIGSERIAL PRIMARY KEY,
+  internal_no TEXT,
+  contract_category TEXT,
+  contract_type TEXT,
+  contract_date TEXT,
+  classification TEXT,
+  supplier TEXT,
+  source_country TEXT,
+  contracting_company TEXT,
+  contract_no TEXT,
+  quantity NUMERIC,
+  contract_premium TEXT,
+  shipping_type TEXT,
+  shipping_value NUMERIC,
+  initial_price NUMERIC,
+  contract_exchange TEXT,
+  expected_payment_date TEXT,
+  contract_status TEXT,
+  expected_cif_price NUMERIC,
+  notes TEXT,
+  source_row INT,
+  import_id BIGINT,
+  source_file TEXT
+);
+CREATE TABLE IF NOT EXISTS contract_details(
+  id BIGSERIAL PRIMARY KEY,
+  internal_no TEXT,
+  classification TEXT,
+  source_country TEXT,
+  external_company TEXT,
+  internal_company TEXT,
+  contract_no TEXT,
+  detail_quantity NUMERIC,
+  vessel_name TEXT,
+  arrival_port TEXT,
+  expected_arrival TEXT,
+  operation_start TEXT,
+  loading_duration TEXT,
+  operation_end TEXT,
+  contract_status TEXT,
+  vessel_status TEXT,
+  notes TEXT,
+  source_row INT,
+  import_id BIGINT,
+  source_file TEXT
+);
+CREATE TABLE IF NOT EXISTS contract_payments(
+  id BIGSERIAL PRIMARY KEY,
+  internal_no TEXT,
+  payment_date TEXT,
+  payment_company TEXT,
+  item TEXT,
+  supplier TEXT,
+  contract_no TEXT,
+  internal_company TEXT,
+  payment_type TEXT,
+  price_type TEXT,
+  payment_status TEXT,
+  payment_quantity NUMERIC,
+  payment_price NUMERIC,
+  exchange_rate NUMERIC,
+  responsible_person TEXT,
+  notes TEXT,
+  source_row INT,
+  import_id BIGINT,
+  source_file TEXT
+);
+CREATE TABLE IF NOT EXISTS contract_loading(
+  id BIGSERIAL PRIMARY KEY,
+  internal_no TEXT,
+  loading_date TEXT,
+  contract_no TEXT,
+  item TEXT,
+  vessel_name TEXT,
+  loading_type TEXT,
+  loading_quantity NUMERIC,
+  notes TEXT,
+  source_row INT,
+  import_id BIGINT,
+  source_file TEXT
+);
+CREATE TABLE IF NOT EXISTS contract_hedge(
+  id BIGSERIAL PRIMARY KEY,
+  internal_no TEXT,
+  hedge_date TEXT,
+  supplier TEXT,
+  contract_no TEXT,
+  item TEXT,
+  contract_exchange TEXT,
+  contract_count NUMERIC,
+  hedge_quantity NUMERIC,
+  exchange_price NUMERIC,
+  hedge_exchange TEXT,
+  hedge_premium NUMERIC,
+  hedge_price NUMERIC,
+  hedge_value NUMERIC,
+  notes TEXT,
+  source_row INT,
+  import_id BIGINT,
+  source_file TEXT
+);
+CREATE TABLE IF NOT EXISTS contract_roll(
+  id BIGSERIAL PRIMARY KEY,
+  internal_no TEXT,
+  roll_date TEXT,
+  contract_no TEXT,
+  supplier TEXT,
+  item TEXT,
+  roll_quantity NUMERIC,
+  contract_exchange TEXT,
+  hedge_exchange TEXT,
+  previous_exchange TEXT,
+  rolling_exchange TEXT,
+  rolling_price NUMERIC,
+  notes TEXT,
+  source_row INT,
+  import_id BIGINT,
+  source_file TEXT
+);
+CREATE TABLE IF NOT EXISTS contract_release(
+  id BIGSERIAL PRIMARY KEY,
+  internal_no TEXT,
+  release_date TEXT,
+  contract_no TEXT,
+  item TEXT,
+  vessel_name TEXT,
+  release_quantity NUMERIC,
+  release_type TEXT,
+  notes TEXT,
+  source_row INT,
+  import_id BIGINT,
+  source_file TEXT
+);
+CREATE TABLE IF NOT EXISTS contract_external_sales(
+  id BIGSERIAL PRIMARY KEY,
+  internal_no TEXT,
+  sale_date TEXT,
+  contract_no TEXT,
+  item TEXT,
+  vessel_name TEXT,
+  sale_quantity NUMERIC,
+  notes TEXT,
+  source_row INT,
+  import_id BIGINT,
+  source_file TEXT
+);
+CREATE TABLE IF NOT EXISTS contract_balances(
+  id BIGSERIAL PRIMARY KEY,
+  report_date TEXT,
+  item_code TEXT,
+  item_name TEXT,
+  unit TEXT,
+  qty_sawaki NUMERIC,
+  qty_waha NUMERIC,
+  qty_ameriya NUMERIC,
+  qty_sahlia NUMERIC,
+  total_balance NUMERIC,
+  consumption_rate NUMERIC,
+  days_enough NUMERIC,
+  enough_until TEXT,
+  contract_additions NUMERIC,
+  port_additions NUMERIC,
+  consumption NUMERIC,
+  lot NUMERIC,
+  factor NUMERIC,
+  daily_rate NUMERIC,
+  expenses NUMERIC,
+  price_usd NUMERIC,
+  market_price NUMERIC,
+  source_row INT,
+  import_id BIGINT,
+  source_file TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_contract_registrations_no ON contract_registrations(internal_no);
+CREATE INDEX IF NOT EXISTS idx_contract_registrations_cno ON contract_registrations(contract_no);
+CREATE INDEX IF NOT EXISTS idx_contract_details_no ON contract_details(internal_no);
+CREATE INDEX IF NOT EXISTS idx_contract_details_cno ON contract_details(contract_no);
+CREATE INDEX IF NOT EXISTS idx_contract_payments_no ON contract_payments(internal_no);
+CREATE INDEX IF NOT EXISTS idx_contract_loading_no ON contract_loading(internal_no);
+CREATE INDEX IF NOT EXISTS idx_contract_hedge_no ON contract_hedge(internal_no);
+CREATE INDEX IF NOT EXISTS idx_contract_roll_no ON contract_roll(internal_no);
+CREATE INDEX IF NOT EXISTS idx_contract_release_no ON contract_release(internal_no);
+CREATE INDEX IF NOT EXISTS idx_contract_external_sales_no ON contract_external_sales(internal_no);
+CREATE INDEX IF NOT EXISTS idx_contract_balances_item ON contract_balances(item_code, report_date);
 `;
 
 let migrated = false;

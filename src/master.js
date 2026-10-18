@@ -46,7 +46,7 @@ async function listItems({ origin, q, limit = 500, group, cls, groupFrom, groupT
   if (groupTo) { p.push(groupTo); where.push(`COALESCE(i.group_code,'') <= $${p.length}`); }
   if (clsFrom) { p.push(clsFrom); where.push(`COALESCE(i.class_code,'') >= $${p.length}`); }
   if (clsTo) { p.push(clsTo); where.push(`COALESCE(i.class_code,'') <= $${p.length}`); }
-  p.push(Math.min(Number(limit) || 500, 3000));
+  p.push(Math.min(Number(limit) || 500, 20000));
   return all(`
     SELECT i.code, i.descr, i.uom, i.group_code, i.group_desc, i.class_code, i.class_desc,
            COALESCE(i.origin,'mine') origin, i.source_file
@@ -127,110 +127,6 @@ async function ensureCats({ groupCode, groupDescr, classCode, classDescr }) {
     WHERE items.kind <> 'item'`, [classCode, classDescr]);
 }
 
-/**
- * مزامنة البيانات الأساسية مع الحركات — تُشغَّل تلقائياً بعد كل استيراد للحركات
- * ومن زر «جلب من الحركات» في شاشة الأصناف:
- *  - جلب الأصناف الجديدة + تسكين المجموعات والتصنيفات على الأصناف الموجودة
- *  - تحديث كتالوجي المجموعات والتصنيفات
- *  - جلب الوحدات (المواقع) الجديدة ومواقع التخزين (المخازن) الجديدة من الحركات
- * تُرجع عدد صفوف كل مرحلة.
- */
-async function syncFromMovements() {
-  /* 1) جلب الأصناف الجديدة: كود + وصف + وحدة كما هي في الحركات */
-  const ins = await run(`
-    WITH src AS (
-      SELECT DISTINCT ON (m.item) m.item code, m.item_desc descr, m.uom uom, m.source_file sf
-      FROM movements m
-      WHERE COALESCE(m.item,'') <> ''
-      ORDER BY m.item, m.id DESC
-    )
-    INSERT INTO items (code, descr, uom, origin, updated_at, source_file)
-    SELECT s.code, s.descr, s.uom, 'movement', now(), s.sf
-    FROM src s
-    WHERE NOT EXISTS (SELECT 1 FROM items i WHERE i.code = s.code)
-    ON CONFLICT (code) DO NOTHING`);
-
-  /* 2) التسكين: مجموعة المواد ← التصنيف، المجموعة الخارجية ← مجموعة المواد
-        (تُحدَّث فقط الحقول التى يملؤها المصدر — لا يُمسح قائم بما هو فارغ هناك) */
-  const upd = await run(`
-    WITH src AS (
-      SELECT DISTINCT ON (m.item) m.item code,
-             m.group_code, m.group_desc, m.ext_group_code, m.ext_group_desc
-      FROM movements m
-      WHERE COALESCE(m.item,'') <> ''
-      ORDER BY m.item, m.id DESC
-    )
-    UPDATE items i SET
-      class_code = CASE WHEN COALESCE(s.group_code,'')     <> '' THEN s.group_code     ELSE i.class_code END,
-      class_desc = CASE WHEN COALESCE(s.group_desc,'')      <> '' THEN s.group_desc      ELSE i.class_desc END,
-      group_code = CASE WHEN COALESCE(s.ext_group_code,'')  <> '' THEN s.ext_group_code  ELSE i.group_code END,
-      group_desc = CASE WHEN COALESCE(s.ext_group_desc,'')  <> '' THEN s.ext_group_desc  ELSE i.group_desc END,
-      updated_at = now()
-    FROM src s
-    WHERE i.code = s.code
-      AND i.origin = 'movement'
-      AND ( (COALESCE(s.ext_group_code,'') <> '' AND COALESCE(i.group_code,'') <> s.ext_group_code)
-         OR (COALESCE(s.ext_group_desc,'') <> '' AND COALESCE(i.group_desc,'') <> s.ext_group_desc)
-         OR (COALESCE(s.group_code,'')     <> '' AND COALESCE(i.class_code,'') <> s.group_code)
-         OR (COALESCE(s.group_desc,'')     <> '' AND COALESCE(i.class_desc,'') <> s.group_desc) )`);
-
-  /* 3) تحديث صفوف المجموعات والتصنيفات من أحدث ما في الأصناف
-        (حتى تظهر أي مجموعة/تصنيف جديد في قوائم الاختيار) */
-  await run(`INSERT INTO items(code, descr, kind, origin, updated_at)
-             SELECT DISTINCT group_code, group_desc, 'group', 'catalog', now() FROM items
-             WHERE COALESCE(group_code,'') <> ''
-             ON CONFLICT (code) DO NOTHING`);
-  await run(`INSERT INTO items(code, descr, kind, origin, updated_at)
-             SELECT DISTINCT class_code, class_desc, 'class', 'catalog', now() FROM items
-             WHERE COALESCE(class_code,'') <> ''
-             ON CONFLICT (code) DO NOTHING`);
-
-  /* 4) المواقع: كل وحدة جديدة تظهر في الحركات تُضاف إلى جدول locations
-        (الوحدات مصدرها شيت «المواقع والشركات» — وهنا ضمان أن أي وحدة في
-        الحركات دون أن تُرفع في شيتها تظهر تلقائياً في شاشة المواقع) */
-  const loc = await run(`
-    INSERT INTO locations(unit_code, company_code, company_name, currency, source_file)
-    SELECT DISTINCT ON (m.unit_code)
-           m.unit_code, m.company_code,
-           COALESCE(c.company_name,''), COALESCE(c.currency,''),
-           m.source_file
-    FROM movements m
-    LEFT JOIN companies c ON c.company_code = m.company_code
-    WHERE COALESCE(m.unit_code,'') <> ''
-      AND NOT EXISTS (SELECT 1 FROM locations l WHERE l.unit_code = m.unit_code)
-    ORDER BY m.unit_code, m.id DESC
-    ON CONFLICT (unit_code) DO NOTHING`);
-
-  /* 5) المخازن: كل «موقع تخزين» جديد تظهر في الحركات يُضاف إلى جدول warehouses
-        (مع وحدته وشركته ومكان وحدته الوراثي) */
-  const wh = await run(`
-    INSERT INTO warehouses(code, name, unit_code, company_code, place, source_file)
-    SELECT DISTINCT ON (m.storage_loc, m.unit_code)
-           m.storage_loc, m.storage_loc, m.unit_code,
-           COALESCE(NULLIF(m.company_code,''), l.company_code, ''),
-           COALESCE(l.place, ''),
-           m.source_file
-    FROM movements m
-    LEFT JOIN locations l ON l.unit_code = m.unit_code
-    WHERE COALESCE(m.storage_loc,'') <> ''
-      AND NOT EXISTS (SELECT 1 FROM warehouses w WHERE w.code = m.storage_loc)
-    ORDER BY m.storage_loc, m.unit_code, m.id DESC
-    ON CONFLICT (code) DO NOTHING`);
-
-  /* 6) أنواع الحركات: كل نوع حركة جديد يظهر في الحركات يُضاف إلى نفس الجدول
-        ( movement_types ) — فيظهر تلقائياً في شاشة أنواع الحركات */
-  const mt = await run(`
-    INSERT INTO movement_types(type_code, direction, kind, source_file)
-    SELECT DISTINCT ON (m.move_type) m.move_type, m.direction, 'movement', m.source_file
-    FROM movements m
-    WHERE COALESCE(m.move_type,'') <> ''
-      AND NOT EXISTS (SELECT 1 FROM movement_types mt WHERE mt.type_code = m.move_type)
-    ORDER BY m.move_type, m.id DESC
-    ON CONFLICT (type_code) DO NOTHING`);
-
-  return { inserted: ins.changes, settled: upd.changes,
-           locations: loc.changes, warehouses: wh.changes, mtypes: mt.changes };
-}
 
 /* ============ المجموعات والتصنيفات ============
    صفوف داخل جدول items بنوع kind='group'/'class' — هي مصدر القوائم المنسدلة،
@@ -323,7 +219,7 @@ async function listLocations() {
          FROM companies c ORDER BY c.company_code`),
     all(`SELECT unit_code code, unit_name name, company_code, company_name, currency, place
          FROM locations ORDER BY unit_code`),
-    all(`SELECT code, name, unit_code, company_code, place FROM warehouses ORDER BY code`),
+    all(`SELECT code, name, unit_code, company_code, place, location_name, classification, warehouse_group, report_active, is_transit FROM warehouses ORDER BY code`),
   ]);
   return { companies, units, warehouses };
 }
@@ -377,8 +273,9 @@ async function saveUnit({ code, name, company, place, editCode }) {
 }
 
 /** المخزن: يُسند عليه الشركة والوحدة (تُجلب من الوحدة) والمكان */
-async function saveWarehouse({ code, name, unit, company, place, editCode }) {
+async function saveWarehouse({ code, name, unit, company, place, locationName, classification, warehouseGroup, editCode, reportActive, isTransit }) {
   code = str(code); name = str(name); unit = str(unit); place = str(place);
+  locationName = str(locationName); classification = str(classification); warehouseGroup = str(warehouseGroup);
   const editing = str(editCode);
   if (!code) throw new Error('كود المخزن مطلوب');
   if (!name) throw new Error('اسم المخزن مطلوب');
@@ -399,12 +296,21 @@ async function saveWarehouse({ code, name, unit, company, place, editCode }) {
     const dup = await get('SELECT 1 x FROM warehouses WHERE code=$1', [code]);
     if (dup) throw new Error('كود المخزن موجود بالفعل — استخدم «تعديل»');
   }
-  await run(`INSERT INTO warehouses(code, name, unit_code, company_code, place, updated_at)
-             VALUES($1,$2,$3,$4,$5,now())
+  await run(`INSERT INTO warehouses(code, name, unit_code, company_code, place, location_name, classification, warehouse_group, report_active, is_transit, updated_at)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
              ON CONFLICT (code) DO UPDATE
-               SET name=$2, unit_code=$3, company_code=$4, place=$5, updated_at=now()`,
-    [code, name, unit, company, place]);
+               SET name=$2, unit_code=$3, company_code=$4, place=$5, location_name=$6, classification=$7, warehouse_group=$8, report_active=$9, is_transit=$10, updated_at=now()`,
+    [code, name, unit, company, place, locationName, classification, warehouseGroup, !!reportActive, !!isTransit]);
   return { code };
+}
+
+async function setWarehouseReportActive(code, active) {
+  code = str(code);
+  if (!code) throw new Error('كود المخزن مطلوب');
+  const r = await get('SELECT 1 x FROM warehouses WHERE code=$1', [code]);
+  if (!r) throw new Error('المخزن غير موجود');
+  await run('UPDATE warehouses SET report_active=$1, updated_at=now() WHERE code=$2', [!!active, code]);
+  return { code, report_active: !!active };
 }
 
 /* ================= أنواع الحركات ================= */
@@ -532,12 +438,95 @@ async function deleteWarehouse({ code }) {
   return { code };
 }
 
+/* ================= مراجع عقود الاستيراد =================
+   أربع قوائم (موردين S — مصادر C — موانئ وصول PN — موانئ تحميل PX) في جداول مستقلة.
+   تُدار من شاشة «البيانات الأساسية ← مراجع العقود» وتغذّي القوائم المنسدلة في نماذج العقود. */
+const REF_KINDS = {
+  supplier:     { table: 'contract_suppliers',     label: 'الموردين',      prefix: 'S',  pad: 3 },
+  source:       { table: 'contract_countries',     label: 'المصادر',        prefix: 'C',  pad: 3 },
+  arrival_port: { table: 'contract_arrival_ports', label: 'موانئ الوصول',  prefix: 'PN', pad: 3 },
+  loading_port: { table: 'contract_ports',         label: 'موانئ التحميل', prefix: 'PX', pad: 3 },
+};
+/* أعمدة الاستخدام بالاسم داخل جداول العقود — لحماية الحذف */
+const REF_USAGE = {
+  supplier: [['contract_registrations', 'supplier'], ['contract_payments', 'supplier'],
+             ['contract_hedge', 'supplier'], ['contract_roll', 'supplier']],
+  source: [['contract_registrations', 'source_country'], ['contract_details', 'source_country']],
+  arrival_port: [['contract_details', 'arrival_port']],
+  loading_port: [],
+};
+const refDef = kind => {
+  const d = REF_KINDS[kind];
+  if (!d) throw new Error('نوع مرجع غير معروف');
+  return d;
+};
+
+const listRefs = async kind => {
+  const d = refDef(kind);
+  return all(`SELECT code, name FROM ${d.table} ORDER BY code`);
+};
+
+async function listAllRefs() {
+  const out = {};
+  for (const kind of Object.keys(REF_KINDS)) out[kind] = await listRefs(kind);
+  return out;
+}
+
+/** الكود التالي بالبادئة (S015 / C009 / PN005 / PX018) — أكبر رقم سابق + 1 */
+async function nextRefCode(kind) {
+  const d = refDef(kind);
+  const rows = await all(`SELECT code FROM ${d.table} WHERE code ILIKE $1`, [d.prefix + '%']);
+  const rx = new RegExp('^' + d.prefix + '(\\d+)$', 'i');
+  let mx = 0;
+  for (const r of rows) { const m = rx.exec(str(r.code)); if (m) mx = Math.max(mx, parseInt(m[1], 10)); }
+  return d.prefix + String(mx + 1).padStart(d.pad, '0');
+}
+
+async function saveRef({ kind, code, name, editCode } = {}) {
+  const d = refDef(kind);
+  name = str(name); code = str(code); const editing = str(editCode);
+  if (!name) throw new Error('الاسم مطلوب');
+  if (!code) code = await nextRefCode(kind);
+  if (editing) {
+    if (code !== editing) {
+      const dup = await get(`SELECT 1 x FROM ${d.table} WHERE code=$1`, [code]);
+      if (dup) throw new Error('الكود مستخدم بالفعل');
+    }
+    const r = await run(`UPDATE ${d.table} SET code=$1, name=$2, updated_at=now() WHERE code=$3`,
+      [code, name, editing]);
+    if (!r.changes) throw new Error('السجل غير موجود — قد يكون حُذف');
+    return { code };
+  }
+  const dup = await get(`SELECT 1 x FROM ${d.table} WHERE code=$1`, [code]);
+  if (dup) throw new Error('الكود موجود بالفعل — استخدم «تعديل»');
+  await run(`INSERT INTO ${d.table}(code, name, updated_at) VALUES($1,$2,now())`, [code, name]);
+  return { code };
+}
+
+async function deleteRef({ kind, code } = {}) {
+  const d = refDef(kind);
+  code = str(code);
+  if (!code) throw new Error('حدد السجل المطلوب حذفه');
+  const row = await get(`SELECT name FROM ${d.table} WHERE code=$1`, [code]);
+  if (!row) throw new Error('السجل غير موجود — أو حُذف مسبقاً');
+  const name = str(row.name);
+  let used = 0;
+  for (const [tab, col] of (REF_USAGE[kind] || [])) {
+    const u = await get(`SELECT COUNT(*)::int n FROM ${tab} WHERE ${col} = $1`, [name]);
+    used += (u && u.n) || 0;
+  }
+  if (used) throw new Error(`لا يمكن الحذف — «${name}» مستخدم في ${used} سجل بجداول العقود`);
+  await run(`DELETE FROM ${d.table} WHERE code=$1`, [code]);
+  return { code };
+}
+
 module.exports = {
-  listItems, saveItem, syncFromMovements,
+  listItems, saveItem,
   listGroups, saveGroup, listClasses, saveClass,
   deleteItem, deleteGroup, deleteClass,
-  listLocations, saveCompany, saveUnit, saveWarehouse,
+  listLocations, saveCompany, saveUnit, saveWarehouse, setWarehouseReportActive,
   deleteCompany, deleteUnit, deleteWarehouse,
   listMtypes, saveMtype, deleteMtype,
   listCategories, saveCategory, deleteCategory,
+  REF_KINDS, listRefs, listAllRefs, saveRef, deleteRef,
 };
