@@ -560,11 +560,16 @@ const r2 = n => Math.round(numf(n) * 100) / 100;
 
 /* ---------- محور التصنيف الموحَّد (Canonical Class Axis) ----------
    الربط الصحيح بين عقود الاستيراد وبيانات النظام العام يجري **بالكود** لا بالاسم:
-     contract_items.code  =  items.group_code   (كلاهما 1001..5002)
+     v_class.class_code = contract_items.code = items.group_code   (كلها 1001..5002)
      contract_balances.item_code = نفس فضاء الأكواد
    ويُبنى منه المحور الموحَّد مرة واحدة لكل استدعاء، فيُستخدم في كل تقارير العقود.
-   نوع التصنيف (رئيسي/إضافات/أخرى) يأتي من «اتجاه» العقد (خامات/إضافات/أخرى)،
-   ويُستكمل من تصنيف النظام (items.class_code) للأكواد غير الموجودة في العقود. */
+   المصدر الأساسي هو العرض الموحّد «v_class» (كل أعمدة الـVIEW المتاحة):
+     class_code, class_name, direction, kind, class_erp_code, class_erp_desc,
+     erp_item_count, source.
+   فإن تعذّر الاستعلام أو رجع فارغاً → نرجع للبناء اليدوى (contract_items + items)
+   كاحتياط فقط (classAxisManual). نوع التصنيف (main/additive/other) يأتي من الـVIEW،
+   ويُشتق احتياطاً من «الاتجاه» (خامات/إضافات/أخرى) ثم من class_erp_code
+   (101/204=main، 102=additive). */
 function kindOfDirection(dir) {
   const d = clsKey(dir);
   if (d.includes('اضافات') || d.includes('ادويه')) return 'additive';
@@ -579,7 +584,8 @@ function kindOfClassCode(cc) {
   if (c) return 'other';                            /* أخرى / علف / دشيشة / مركزات ... */
   return null;
 }
-async function classAxis() {
+/* البناء اليدوي السابق — يُستخدم كاحتياط فقط إذا تعذّر قراءة v_class أو رجعت فارغة */
+async function classAxisManual() {
   const [ci, grps, cls] = await Promise.all([
     all(`SELECT code, name, direction FROM contract_items`),
     /* صفوف المجموعة نفسها بلا تصنيف — فيُشتق تصنيفها من صفوف الأصناف (كما في master.js) */
@@ -609,7 +615,56 @@ async function classAxis() {
   for (const m of byCode.values()) { const k = clsKey(m.name); if (k && !byKey.has(k)) byKey.set(k, m.code); }
   return { byCode, byKey, clsDesc };
 }
-/** يحلّ كوداً أو اسماً إلى بيانات التصنيف المعيارية (كود + اسم + نوع) */
+/* المحور الأساسي: كل أعمدة العرض الموحّد v_class (الأساس التعاقدي + تكملة ERP)،
+   ثم الاحتياطى classAxisManual() عند تعذّر الاستعلام أو فراغ النتيجة. */
+async function classAxis() {
+  try {
+    const rows = await all(`SELECT class_code, class_name, direction, kind,
+                                   class_erp_code, class_erp_desc, erp_item_count, source
+                            FROM v_class
+                            ORDER BY CASE source WHEN 'both' THEN 0 WHEN 'contract' THEN 1 ELSE 2 END,
+                                     class_code`);
+    if (rows && rows.length) {
+      const byCode = new Map();
+      const byKey = new Map();
+      const byKeySrc = new Map();
+      const clsDesc = new Map();
+      const prio = s => (s === 'both' ? 0 : s === 'contract' ? 1 : 2);
+      for (const r of rows) {
+        const cd = String(r.class_code || '').trim();
+        if (!cd) continue;
+        const cc = String(r.class_erp_code || '').trim();
+        const meta = {
+          code: cd,
+          name: String(r.class_name || '').trim() || cd,
+          direction: r.direction || '',
+          class_code: cc,
+          class_desc: r.class_erp_desc || '',
+          kind: r.kind || kindOfDirection(r.direction) || kindOfClassCode(cc),
+          erp_item_count: numf(r.erp_item_count),
+          source: r.source || '',
+        };
+        if (cc && !clsDesc.has(cc)) clsDesc.set(cc, meta.class_desc);
+        byCode.set(cd, meta);
+        /* فهرس بالاسم للاحتياط فقط عند غياب الكود — وأولوية للصف التعاقدي
+           (both/contract) عند تشابه الأسماء مع مجموعة ERP (erp) */
+        const k = clsKey(meta.name);
+        if (k) {
+          const p = prio(meta.source);
+          const cur = byKeySrc.get(k);
+          if (cur === undefined || p < cur) { byKey.set(k, cd); byKeySrc.set(k, p); }
+        }
+      }
+      if (byCode.size) return { byCode, byKey, clsDesc };
+    }
+  } catch (e) {
+    console.log('classAxis: تعذّر قراءة v_class — البناء اليدوي الاحتياطى:', e.message);
+  }
+  return classAxisManual();
+}
+/** يحلّ كوداً أو اسماً إلى بيانات التصنيف المعيارية (كود + اسم + نوع).
+ *  الأفضلية دائماً لـ class_code: يُجرَّب الكود مباشرةً فى byCode أولاً،
+ *  ثم يُستخدم clsKey (فهرس الاسم) كاحتياط عند غياب الكود فقط. */
 function resolveClass(axis, codeOrName, fallbackName) {
   const raw = String(codeOrName == null ? '' : codeOrName).trim();
   let meta = raw ? axis.byCode.get(raw) : null;
@@ -708,11 +763,11 @@ async function contractCoverage(F = {}) {
       return k === 'الذره' || k === 'الصويا' || k === 'البذره';
     });
   } else if (kindFilter === 'خامات') {
-    // خامات = التصنيفات الرئيسية (main)
-    filteredOrder = order.filter(cls => isMainName(cls));
+    // خامات = التصنيفات الرئيسية (main) حسب v_class.kind (لا نمط الاسم)
+    filteredOrder = order.filter(cls => resolveClass(axis, cls, cls).kind === 'main');
   } else if (kindFilter === 'اضافات') {
-    // إضافات = التصنيفات غير الرئيسية (additive)
-    filteredOrder = order.filter(cls => !isMainName(cls));
+    // إضافات = التصنيفات الفرعية (additive) حسب v_class.kind (لا نمط الاسم)
+    filteredOrder = order.filter(cls => resolveClass(axis, cls, cls).kind === 'additive');
   }
 
   const zero = { total: 0, consumption: 0, contract_add: 0, port_add: 0, total_add: 0, daily_rate: 0,
@@ -731,7 +786,7 @@ async function contractCoverage(F = {}) {
     const currentCost = b.price_usd * b.daily_rate + b.expenses;
     return {
       cls: cls || '(غير محدد)',
-      class_code: meta.class_code || meta.code || '',
+      class_code: meta.code || meta.class_code || '',
       class_desc: meta.class_desc || '',
       direction: meta.direction || '',
       contracts: new Set(ctx.map(r => r.internal_no).filter(Boolean)).size,
@@ -766,7 +821,7 @@ async function contractCoverage(F = {}) {
       current_cost: r2(currentCost),
       market_price: r2(b.market_price),
       diff: r2(b.market_price - currentCost),
-      kind: meta.kind || (isMainName(cls) ? 'main' : 'additive'),
+      kind: meta.kind || null,
     };
   });
   return { rows };
