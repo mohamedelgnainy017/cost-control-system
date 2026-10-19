@@ -18,6 +18,14 @@ const n = v => (v === null || v === undefined || v === '' ? 0 : (Number.isFinite
 /** رقم أو BLANK (null) — يحافظ على سلوك DAX فى التمييز بين 0 والفراغ */
 const nOrNull = v => (v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
 const str = v => (v === null || v === undefined ? '' : String(v));
+/** تطبيع اسم التصنيف — مطابق تماماً لدالة clsKey فى analytics.js
+ *  (يحذف التطويل/الفراغات ويوحّد الهمزات/ى/ة). نسخة محلية لتفادى الاعتماد
+ *  الدائرى: analytics.js يستورد ./pbix، والدالة هناك غير مُصدَّرة. */
+function clsKey(v) {
+  return String(v || '')
+    .replace(/[\u0640\s]/g, '')
+    .replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه');
+}
 const r2 = v => (v === null || v === undefined ? null : Math.round(Number(v) * 100) / 100);
 const pad2 = x => String(x).padStart(2, '0');
 const ceil1000 = x => Math.ceil(x / 1000) * 1000;
@@ -92,13 +100,36 @@ async function loadModel(opts = {}) {
     all(`SELECT code, unit_code, report_active, is_transit FROM warehouses`),
   ]);
 
-  /* ---- الاصناف ---- */
+  /* ---- الاصناف ----
+     الربط بالاسم متسامح مع اختلافات الكتابة التى تعالجها clsKey (تطويل/فراغات/
+     همزات/ة/ى). نبنى:
+       - itemByName:    المطابقة الحرفية السابقة كما هى (وتُصدَّر فى النموذج بلا تغيير).
+       - itemByNormKey: المفتاح المطبَّع، للمفاتيح الفريدة فقط.
+     عند تصادم مختلفين على نفس المفتاح المطبَّع نرفض المطابقة المطبَّعة لذلك المفتاح
+     بدل اختيار صف اعتباطى، ويبقى الاحتياط الحرفى هو الحَكَم (سلوك متوافق مع السابق). */
   const itemByName = new Map();
   const itemByCode = new Map();
+  const itemByNormKey = new Map();
+  const ambiguousNorm = new Set();
   for (const it of items) {
     itemByName.set(str(it.name), it);
     itemByCode.set(str(it.code), it);
+    const k = clsKey(it.name);
+    if (!k) continue;
+    if (itemByNormKey.has(k)) ambiguousNorm.add(k);
+    else itemByNormKey.set(k, it);
   }
+  /** يحلّ الصنف من قيمة classification: المفتاح المطبَّع أولاً (إن كان فريداً)،
+   *  ثم المطابقة الحرفية احتياطاً. لا يتجاوز الاحتياط نتيجة مطبَّعة صحيحة. */
+  const resolveItem = classification => {
+    const raw = str(classification);
+    const k = clsKey(raw);
+    if (k && !ambiguousNorm.has(k)) {
+      const hit = itemByNormKey.get(k);
+      if (hit) return hit;
+    }
+    return itemByName.has(raw) ? itemByName.get(raw) : null;
+  };
 
   /* ---- تفصيلى: تجميع بـ «الرقم داخلي» بأخذ MIN ---- */
   const detGroups = new Map();
@@ -169,7 +200,7 @@ async function loadModel(opts = {}) {
     const shipType = str(g.shipping_type);
     const cifExpected = nOrNull(g.expected_cif_price);
 
-    const item = itemByName.get(classification);
+    const item = resolveItem(classification);
     const code = item ? str(item.code) : null;
 
     const det = detAgg.get(internalNo) || {};
@@ -357,19 +388,42 @@ async function loadModel(opts = {}) {
       dailyDate = dr && dr.d ? String(dr.d).slice(0,10) : null;
     } catch (e) { dailyDate = null; }
   }
+  /* ربط استثنائى محصور فى مسار factory فقط: مجموعتا المخزن Z112-05-01
+     («مضاد سموم سيلكيت» / class_desc «سموم سيلكا») و Z112-03-01
+     («بريمكسات تسمين» / class_desc «بريمكس تسمين») غير موجودتين فى
+     contract_items، فكانتا تُتخطّيان. نربطهما بالتصنيف المكافئ حسب
+     group_desc/class_desc الفعليين: 2014 = سيلكا، 2009 = بريمكس تسمين.
+     لأن الأكواد الأصلية غير مربوطة، فهذه الصفوف لم تكن تدخل الإجمالى
+     مسبقاً؛ الربط على مستوى المجموعة كلها لا يكرر أى كمية. */
+  const factoryGroupAlias = new Map([
+    ['Z112-05-01', '2014'],
+    ['Z112-03-01', '2009'],
+  ]);
+  /* توحيد الوحدة إلى طن: KG ÷ 1000، TO × 1. أى وحدة أخرى (PC/M/L/M3…)
+     لا تُخمَّن ولا تُضاف إلى الإجمالى، ويُحصى عدد صفوفها المستبعدة. */
+  const uomToTons = (uom, qty) => {
+    const u = str(uom).trim().toUpperCase();
+    if (u === 'KG') return n(qty) / 1000;
+    if (u === 'TO') return n(qty);
+    return null;
+  };
   const factoryByClass = new Map();
+  let factorySkippedUomRows = 0;
   if (dailyDate && activeWh.size) {
-    const drows = await all(`SELECT item, unit_code, storage_loc, close_qty FROM balances WHERE balance_date = $1`, [dailyDate]);
+    const drows = await all(`SELECT item, unit_code, storage_loc, close_qty, base_uom FROM balances WHERE balance_date = $1`, [dailyDate]);
     for (const r of (drows || [])) {
-      const grp = mdGroupByCode.get(str(r.item));
+      let grp = mdGroupByCode.get(str(r.item));
       if (!grp) continue;
+      if (factoryGroupAlias.has(grp)) grp = factoryGroupAlias.get(grp);
       const it = itemByCode.get(grp);
       const cls = it ? str(it.name) : '';
       if (!cls) continue;
       const sl = str(r.storage_loc).trim();
       const effWh = sl ? sl : (transitByUnit.get(str(r.unit_code)) || '');
       if (!effWh || !activeWh.has(effWh)) continue;
-      factoryByClass.set(cls, (factoryByClass.get(cls) || 0) + n(r.close_qty));
+      const tons = uomToTons(r.base_uom, r.close_qty);
+      if (tons === null) { factorySkippedUomRows += 1; continue; }
+      factoryByClass.set(cls, (factoryByClass.get(cls) || 0) + tons);
     }
   }
   const factoryMap = activeWh.size ? factoryByClass : null;
@@ -381,6 +435,7 @@ async function loadModel(opts = {}) {
     balAll: bal,
     factoryMap,
     dailyBalanceDate: dailyDate,
+    factorySkippedUomRows,
     hedge: hedges,
     pay: pays, load: loads, roll: rolls, release: releases,
     sell: sells.map(s => ({ ...s, sale_quantity: (s.sale_quantity === null || s.sale_quantity === '' ? s.sale_quantity : Math.round(Number(s.sale_quantity))) })),
