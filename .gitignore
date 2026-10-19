@@ -9,3 +9,13 @@ data/*
 *.log
 .DS_Store
 Thumbs.db
+*.pbix
+*.xlsm
+*.xlsx
+response.txt
+testnode*.js
+testapi*.ps1
+testadditives.js
+checkcols*.js
+checkdetails.js
+checkitems*.js
