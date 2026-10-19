@@ -812,10 +812,68 @@ CREATE INDEX IF NOT EXISTS idx_contract_external_sales_no ON contract_external_s
 CREATE INDEX IF NOT EXISTS idx_contract_balances_item ON contract_balances(item_code, report_date);
 `;
 
+/* ===== عرض موحّد للتصنيفات: v_class =====
+   المصدر الأساسي: contract_items.code/name/direction (التصنيف التعاقدي).
+   تكملة من ERP: items (kind='group' و kind='item') عبر group_code، مع جلب
+   تصنيف ERP (class_code/class_desc) وعدد أصناف ERP لكل مجموعة.
+   kind: يُشتق من direction أولاً، ثم من class_erp_code (101/204=main، 102=additive).
+   source: contract (تعاقدي فقط) | erp (ERP فقط) | both (الاثنان). */
+const CLASS_VIEW = `
+CREATE OR REPLACE VIEW v_class AS
+WITH cls AS (
+  SELECT NULLIF(BTRIM(group_code), '') AS group_code,
+         NULLIF(BTRIM(class_code), '') AS class_erp_code,
+         NULLIF(BTRIM(class_desc), '') AS class_erp_desc,
+         COUNT(*) AS cnt,
+         ROW_NUMBER() OVER (PARTITION BY NULLIF(BTRIM(group_code), '')
+                            ORDER BY COUNT(*) DESC, NULLIF(BTRIM(class_code), '')) AS rn
+  FROM items
+  WHERE kind = 'item'
+    AND NULLIF(BTRIM(group_code), '') IS NOT NULL
+    AND NULLIF(BTRIM(class_code), '') IS NOT NULL
+  GROUP BY 1, 2, 3
+),
+erp AS (SELECT group_code, class_erp_code, class_erp_desc FROM cls WHERE rn = 1),
+item_cnt AS (
+  SELECT NULLIF(BTRIM(group_code), '') AS group_code, COUNT(*) AS n
+  FROM items WHERE kind = 'item' AND NULLIF(BTRIM(group_code), '') IS NOT NULL
+  GROUP BY 1
+),
+ci AS (SELECT NULLIF(BTRIM(code), '') AS code, name, direction FROM contract_items WHERE NULLIF(BTRIM(code), '') IS NOT NULL),
+grp AS (SELECT NULLIF(BTRIM(code), '') AS code, descr FROM items WHERE kind = 'group' AND NULLIF(BTRIM(code), '') IS NOT NULL),
+keys AS (SELECT code FROM ci UNION SELECT code FROM grp UNION SELECT group_code FROM item_cnt)
+SELECT
+  k.code                                       AS class_code,
+  COALESCE(NULLIF(BTRIM(ci.name), ''), grp.descr, k.code) AS class_name,
+  ci.direction                                 AS direction,
+  CASE
+    WHEN ci.direction = 'خامات'  THEN 'main'
+    WHEN ci.direction = 'إضافات' THEN 'additive'
+    WHEN ci.direction = 'أخرى'   THEN 'other'
+    WHEN erp.class_erp_code IN ('101', '204') THEN 'main'
+    WHEN erp.class_erp_code = '102'           THEN 'additive'
+    ELSE 'other'
+  END                                          AS kind,
+  erp.class_erp_code                           AS class_erp_code,
+  erp.class_erp_desc                           AS class_erp_desc,
+  COALESCE(ic.n, 0)                            AS erp_item_count,
+  CASE
+    WHEN ci.code IS NOT NULL AND erp.class_erp_code IS NOT NULL THEN 'both'
+    WHEN ci.code IS NOT NULL THEN 'contract'
+    ELSE 'erp'
+  END                                          AS source
+FROM keys k
+LEFT JOIN ci      ON ci.code = k.code
+LEFT JOIN grp     ON grp.code = k.code
+LEFT JOIN erp     ON erp.group_code = k.code
+LEFT JOIN item_cnt ic ON ic.group_code = k.code;
+`;
+
 let migrated = false;
 async function migrate() {
   if (migrated) return;
   await pool.query(SCHEMA);
+  await pool.query(CLASS_VIEW);
   migrated = true;
 }
 
