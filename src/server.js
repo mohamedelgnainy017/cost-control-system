@@ -13,7 +13,6 @@ const { spawn } = require('node:child_process');
 const DB = require('./db');
 const { analyzePreviewDeep } = require('./importer');
 const DE = require('./daily-entry');
-const quality = require('./quality');
 const A = require('./analytics');
 const Auth = require('./auth');
 const BE = require('./borse-edit');
@@ -21,6 +20,21 @@ const BF = require('./borse-fetch');
 const PE = require('./prices-edit');
 const CE = require('./cost-engine');
 const M = require('./master');
+
+/* ---------- لا تدع خطأ غير معالج يُوقف الخادم (يُسجَّل في ملف بدلاً من الانهيار) ----------
+   السبب (السابق): أي استثناء غير معالج كان يُخرج Node (exit 1) فتتوقف الخدمة وتظهر
+   نافذة «Server is running» при перезапуске keep-alive. الآن نُسجّل الخطأ ونُبقي الخادم حيّاً. */
+const ERR_LOG = path.join(__dirname, '..', 'data', 'server-errors.log');
+process.on('uncaughtException', (err) => {
+  const msg = `[${new Date().toISOString()}] uncaughtException: ${err && err.stack ? err.stack : err}\n`;
+  try { fs.appendFileSync(ERR_LOG, msg); } catch (_) {}
+  console.error(msg);
+});
+process.on('unhandledRejection', (reason) => {
+  const msg = `[${new Date().toISOString()}] unhandledRejection: ${reason && reason.stack ? reason.stack : reason}\n`;
+  try { fs.appendFileSync(ERR_LOG, msg); } catch (_) {}
+  console.error(msg);
+});
 
 const PORT = Number(process.env.PORT || 4310);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -54,8 +68,9 @@ function pruneStaging(maxAgeMs = 86400000) {
 const DAILY_CATS = {
   movements: { table: 'movements', label: 'الحركات اليومية' },
   sales: { table: 'sales', label: 'المبيعات اليومية' },
-  balances: { table: 'balances', label: 'الأرصدة اليومية' },
+  balances:  { table: 'balances', label: 'الأرصدة اليومية' },
 };
+const datasetsFor = cat => [cat];
 const uploadsDir = cat => path.join(UPLOADS_ROOT, cat);
 const sanitizeFileName = name => {
   const s = String(name || '').replace(/[\\/:*?"<>|]/g, '_').trim();
@@ -76,13 +91,16 @@ function dateFromName(name) {
    - عملية مقارنة: >100 / >=100 / <100 / <=100 / =100
    - مدى رقمي: 100-500
    - خلاف ذلك: احتواء نصي بعد تطبيع عربي (الهمزات/الياء/التاء + إسقاط الفراغات والفواصل). */
+/* تطبيع نصي عربي موحّد: توحيد الهمزات/الياء/التاء المربوطة + إسقاط التشكيل والفراغات والفواصل */
+const normAr = s => String(s === null || s === undefined ? '' : s).toLowerCase()
+  .replace(/[أإآٱ]/g, 'ا').replace(/[ىي]/g, 'ي').replace(/[ةه]/g, 'ه')
+  .replace(/[\u064B-\u065F\u0670]/g, '').replace(/[\s,،_()\-]/g, '');
+
 function applyColFilters(rows, param) {
   let flt = null;
   try { flt = param ? JSON.parse(param) : null; } catch (_) { flt = null; }
   if (!flt || typeof flt !== 'object' || Array.isArray(flt)) return rows;
-  const norm = s => String(s === null || s === undefined ? '' : s).toLowerCase()
-    .replace(/[أإآٱ]/g, 'ا').replace(/[ىي]/g, 'ي').replace(/[ةه]/g, 'ه')
-    .replace(/[\u064B-\u065F\u0670]/g, '').replace(/[\s,،_()\-]/g, '');
+  const norm = normAr;
   const toNum = s => {
     const t = String(s === null || s === undefined ? '' : s).replace(/[^\d.\-]/g, '');
     return /\d/.test(t) ? Number(t) : NaN;
@@ -126,7 +144,12 @@ function applyColFilters(rows, param) {
       return cmp(plain, lo) >= 0 && cmp(plain, hi) <= 0;
     }
     if (op === 'in' || op === 'notin') {
-      const list = String(r.v === null || r.v === undefined ? '' : r.v).split(/[,،;]/).map(x => norm(x)).filter(Boolean);
+      let list;
+      if (Array.isArray(r.set)) {
+        list = r.set.map(x => norm(x));
+      } else {
+        list = String(r.v === null || r.v === undefined ? '' : r.v).split(/[,،;]/).map(x => norm(x)).filter(Boolean);
+      }
       if (!list.length) return true;
       const hit = list.some(x => cmp(plain, x) === 0);
       return op === 'in' ? hit : !hit;
@@ -137,14 +160,68 @@ function applyColFilters(rows, param) {
     const r = flt[k];
     if (r === null || r === undefined) return false;
     if (typeof r === 'string') return r.trim() !== '';
-    const op = r.op || 'contains';
+    const op = r.op || 'in';
     if (op === 'empty' || op === 'notempty') return true;
+    if (op === 'in' || op === 'notin') {
+      if (Array.isArray(r.set)) return r.set.length > 0;
+      const v = String(r.v === null || r.v === undefined ? '' : r.v).trim();
+      return v !== '';
+    }
     const v = String(r.v === null || r.v === undefined ? '' : r.v).trim();
     const v2 = String(r.v2 === null || r.v2 === undefined ? '' : r.v2).trim();
     return v !== '' || v2 !== '';
   });
   if (!entries.length) return rows;
   return rows.filter(r => entries.every(k => test(r[k], flt[k])));
+}
+
+/* ---------- فلاتر شاشات عقود الاستيراد (بحث + تاريخ + حالة العقد) ----------
+   تعمل على التقارير الخام لخطوات العقود. «الحالة» تُقرأ من عمود contract_status
+   إن وُجد في الشاشة، وإلا تُحلّ من حالة العقد الأم عبر «الرقم داخلي» — فيعمل الفلتر
+   على كل الخطوات (تسجيل عقد/تفصيلى/سداد/تحميل/ربط/ترويل/افراج) ومرتبط بالحالة الحقيقية. */
+const CON_VIEW_DATE = {
+  'contract-registrations-raw': 'contract_date',
+  'contract-details-raw': 'expected_arrival',
+  'contract-payments-raw': 'payment_date',
+  'contract-loading-raw': 'loading_date',
+  'contract-hedge-raw': 'hedge_date',
+  'contract-roll-raw': 'roll_date',
+  'contract-release-raw': 'release_date',
+};
+async function contractViewFilter(name, rows, q) {
+  const dateCol = CON_VIEW_DATE[name];
+  if (!dateCol || !rows.length) return rows;
+  const status = (q.get('status') || '').trim();
+  const search = (q.get('q') || '').trim();
+  const from = (q.get('from') || '').trim();
+  const to = (q.get('to') || '').trim();
+  if (!status && !search && !from && !to) return rows;
+  let out = rows;
+  if (status) {
+    /* إن كانت الشاشة تحمل عمود contract_status نفلتر عليه مباشرة؛ وإلا نربط بالرقم داخلي */
+    let statusOf;
+    if (Object.prototype.hasOwnProperty.call(rows[0], 'contract_status')) {
+      statusOf = r => normAr(r.contract_status);
+    } else {
+      const map = new Map();
+      for (const g of await DB.all('SELECT internal_no, contract_status FROM contract_registrations')) {
+        const k = String(g.internal_no || '').trim();
+        if (!k) continue;
+        const v = normAr(g.contract_status);
+        if (!map.has(k) || (v && !map.get(k))) map.set(k, v);
+      }
+      statusOf = r => map.get(String(r.internal_no || '').trim()) || '';
+    }
+    const want = normAr(status);
+    out = out.filter(r => statusOf(r) === want);
+  }
+  if (search) {
+    const s = normAr(search);
+    out = out.filter(r => Object.values(r).some(v => normAr(v).includes(s)));
+  }
+  if (from) out = out.filter(r => String(r[dateCol] || '') >= from);
+  if (to) out = out.filter(r => { const d = String(r[dateCol] || ''); return d !== '' && d <= to; });
+  return out;
 }
 
 function send(res, code, body, headers = {}) {
@@ -185,7 +262,7 @@ function startImportJob(filePath, opts = {}) {
   const id = ++jobSeq;
   const job = jobs[id] = {
     id, status: 'running', stage: 'بدء', started: Date.now(),
-    result: null, error: null, log: [], quality: [],   // quality تُملأ قبل إعلان الاكتمال
+    result: null, error: null, log: [],
   };
   const args = [path.join(__dirname, 'cli-import.js'), filePath];
   if (opts.password) args.push('--password=' + opts.password);
@@ -217,13 +294,7 @@ function startImportJob(filePath, opts = {}) {
     job.ms = Date.now() - job.started;
     if (code === 0 && job.rawResult && job.rawResult.ok) {
       job.result = job.rawResult.result;
-      /* بعد الاستيراد لا نشغّل الفحص الكامل (12 قاعدة بمسح الجداول كلها —
-         1.7 ث اليوم وقد تصبح دقائق مع نمو 40 ألف صف/يوم): نعرض آخر نتائج
-         محفوظة فوراً، والفحص الكامل من زر «إعادة الفحص» (صلاحية quality)
-         أو جولة ليلية لاحقاً. نعلن الاكتمال بعد تعبئتها لتفادي سباق القراءة. */
-      job.stage = 'تحضير نتائج الجودة';
       try {
-        job.quality = await quality.listIssues();
         /* استيراد أرصدة يغيّر تكاليف اليوم نفسه وما بعده → يُعاد بناء المحرك من أول مصدر */
         const tbls = (job.rawResult && job.rawResult.result && job.rawResult.result.tables) || [];
         if (tbls.some(t => t && t.dataset === 'balances')) {
@@ -234,7 +305,6 @@ function startImportJob(filePath, opts = {}) {
       } catch (e) { job.postError = e.message; }
       job.status = 'done';
       job.stage = 'اكتمل';
-      overviewCached().catch(() => {});   // تحديث ذاكرة المؤشرات في الخلفية حتى تفتح اللوحة فوراً
     } else {
       job.status = 'error';
       job.stage = 'فشل';
@@ -249,6 +319,7 @@ const pad2 = n => String(n).padStart(2, '0');
 const localStr = d => (d instanceof Date && !isNaN(d))
   ? `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
   : (d || null);
+
 
 /**
  * حالة البورصة = الأرشيف المستورد في القاعدة + آخر جلب ذاتي من مصادر خارجية
@@ -267,104 +338,19 @@ async function borseStatus() {
   };
 }
 
-/**
- * المؤشرات (overview) مُخزَّنة: البيانات لا تتغير إلا بالاستيراد، فنخزّن
- * النتيجة بعد كل استيراد ونتحقق بمطابقة آخر استيراد (MAX(id) من imports).
- * بدون كاش: لوحة المؤشرات تستهلك مسح الجداول كاملة (0.9 ث اليوم، وستطول
- * تدريجياً مع نمو 40 ألف صف/يوم حتى تصبح بالعشرات من الثواني).
- */
-async function overviewCached() {
-  try {
-    const [cache, lastImp, link] = await Promise.all([
-      DB.getSetting('overview_cache'),
-      DB.get(`SELECT MAX(id) id FROM imports`),
-      A.detectCostLink(),
-    ]);
-    const lastId = lastImp && lastImp.id !== null && lastImp.id !== undefined ? String(lastImp.id) : null;
-    if (cache) {
-      const c = JSON.parse(cache);
-      /* الكاش صالح فقط إن لم يتغيّر آخر استيراد ولا طريقة ربط التكلفة */
-      if (c.importId !== undefined && String(c.importId) === lastId && c.costLink === link) return c.data;
-    }
-    const data = await A.overview();
-    await DB.setSetting('overview_cache', JSON.stringify({ importId: lastId, costLink: link, at: new Date().toISOString(), data }));
-    return data;
-  } catch (e) {
-    return A.overview();   // أي فشل في الكاش → حساب مباشر (السلوك القديم)
-  }
-}
-
 /* ---------- التقارير: مصدر واحد يخدم العرض في المتصفح والتصدير CSV ---------- */
 /* hidden: يُبقى التقرير متاحاً للتصدير (CSV) لكنه لا يظهر في قائمة مركز التقارير
    — تُستخدم للتقارير التي استُبدلت بتقارير المبيعات الثلاثة */
 const REPORTS = {
-  'sales-place': { hidden: true, label: 'مبيعات وربحية حسب المكان', desc: 'الإيراد • التكلفة • مجمل الربح • الهامش', fn: F => A.salesByPlace(F) },
-  'sales-item': { hidden: true, label: 'مبيعات وربحية حسب الصنف', desc: 'الإيراد والتكلفة ومجمل الربح لكل صنف', fn: F => A.salesByItem(F, 1000) },
-  'sales-month': { hidden: true, label: 'المبيعات والربحية شهرياً', desc: 'اتجاه الإيراد والتكلفة ومجمل الربح الشهري', fn: F => A.salesByMonth(F) },
-  'sales-customer': { hidden: true, label: 'المبيعات والربحية حسب العميل', desc: 'الإيراد والتكلفة ومجمل الربح والضريبة لكل عميل', fn: F => A.salesByCustomer(F, 1000) },
-  'sales-class': { hidden: true, label: 'المبيعات حسب فئة المستند', desc: 'الفئة والحالة والقيمة الموقّعة', fn: F => A.salesByClass(F) },
-  'sales-detail': { label: 'التقرير التفصيلي للمبيعات', desc: 'كل بند بأبعاده: صنف/وحدة قياس/تصنيف/مجموعة/مخزن/وحدة/مكان/شركة', fn: F => A.salesDetail(F) },
-  'sales-total-item': { hidden: true, label: 'إجمالي المبيعات على مستوى الصنف', desc: 'الإيراد والتكلفة والربح مجمّعاً لكل صنف', fn: F => A.salesTotalBy(F, 'item').then(r => r.rows) },
-  'sales-total-place': { hidden: true, label: 'إجمالي المبيعات حسب المكان', desc: 'كل مكان مع تفصيل الأصناف المباعة تحته', fn: F => A.salesBreakdown(F, 'place').then(r => r.rows) },
-  'sales-total-company': { hidden: true, label: 'إجمالي المبيعات حسب الشركة', desc: 'كل شركة مع تفصيل الأصناف المباعة تحتها', fn: F => A.salesBreakdown(F, 'company').then(r => r.rows) },
-  'sales-total-cust': { hidden: true, label: 'إجمالي المبيعات حسب العميل', desc: 'كل عميل مع تفصيل الأصناف المباعة له', fn: F => A.salesBreakdown(F, 'cust').then(r => r.rows) },
-  'sales-total-storage': { hidden: true, label: 'إجمالي المبيعات حسب المخزن', desc: 'كل مخزن مع تفصيل الأصناف المباعة منه', fn: F => A.salesBreakdown(F, 'storage').then(r => r.rows) },
-  'sales-periods': {
-    label: 'المبيعات على مستوى الفترات', desc: 'مجموع كل سنة ثم كل شهر (الأشهر = الإجمالي)',
-    fn: async F => {
-      const p = await A.salesByPeriod(F);
-      return [...p.years, ...p.months];
-    },
-  },
-  'costs-month': { hidden: true, label: 'تكلفة المبيعات شهرياً', desc: 'الإجمالي الشهري لتكلفة الوحدات المباعة', fn: F => A.costByMonth(F) },
+  'sales-total': { label: 'المبيعات', fn: F => (F.mode === 'detail' ? A.salesDetail(F) : F.mode === 'raw' ? DB.all(`SELECT * FROM sales ORDER BY id`) : A.salesGroup(F, F.by || 'item', F.by2 || '', F.per || '').then(r => r.rows)) },
   /* ---------- تقارير مخازن جديدة (تفصيلي • إجمالي بمستويات • فترات) ----------
       القديمة تبقى مخفية للتصدير فقط */
-  'movements-detail': {
-    label: 'الحركات التفصيلية', desc: 'كل حركة بأبعادها: تاريخ/صنف/وحدة/توجيه/مخزن/مكان/شركة/نوع — بأرقام صافية',
-    fn: F => A.movementsDetail(F),
-  },
-  'movements-periods': {
-    label: 'حركات المخازن بالفترات', desc: 'وارد وصادر وصافي لكل سنة ثم كل شهر',
-    fn: async F => { const p = await A.movementsPeriods(F); return [...p.years, ...p.months]; },
-  },
-  'movements-total-item': { hidden: true, label: 'إجمالي الحركات على مستوى الصنف', desc: 'وارد وصادر وصافي لكل صنف', fn: F => A.movementsBreakdown(F, 'item').then(r => r.rows) },
-  'movements-total-place': { hidden: true, label: 'إجمالي الحركات حسب المكان', desc: 'كل مكان مع تفصيل الأصناف', fn: F => A.movementsBreakdown(F, 'place').then(r => r.rows) },
-  'movements-total-company': { hidden: true, label: 'إجمالي الحركات حسب الشركة', desc: 'كل شركة مع تفصيل الأصناف', fn: F => A.movementsBreakdown(F, 'company').then(r => r.rows) },
-  'movements-total-storage': { hidden: true, label: 'إجمالي الحركات حسب المخزن', desc: 'كل مخزن مع تفصيل الأصناف', fn: F => A.movementsBreakdown(F, 'storage').then(r => r.rows) },
-  'movements-total-unit': { hidden: true, label: 'إجمالي الحركات حسب الوحدة', desc: 'كل وحدة مع تفصيل الأصناف', fn: F => A.movementsBreakdown(F, 'unit').then(r => r.rows) },
-  'movements-total-dir': { hidden: true, label: 'إجمالي الحركات حسب التوجيه', desc: 'كل توجيه مع تفصيل الأصناف', fn: F => A.movementsBreakdown(F, 'dir').then(r => r.rows) },
-  'movements-total-mtype': { hidden: true, label: 'إجمالي الحركات حسب نوع الحركة', desc: 'كل نوع حركة مع تفصيل الأصناف', fn: F => A.movementsBreakdown(F, 'mtype').then(r => r.rows) },
+  'movements-total': { label: 'الحركات', fn: F => (F.mode === 'detail' ? A.movementsDetail(F) : F.mode === 'raw' ? DB.all(`SELECT * FROM movements ORDER BY id`) : A.movementsGroup(F, F.by || 'item', F.by2 || '', F.per || '').then(r => r.rows)) },
   /* ---------- تقارير أرصدة جديدة (تفصيلي • إجمالي بمستويات • فترات) ---------- */
-  'inventory-detail': {
-    label: 'الأرصدة التفصيلية', desc: 'كل سجل رصيد: تاريخ/صنف/مخزن/وحدة/مكان/شركة/تصنيف/مجموعة + افتتاحي وختامي وحركة اليوم',
-    fn: F => A.inventoryDetail(F),
-  },
-  'inventory-periods': {
-    label: 'أرصدة المخازن بالفترات', desc: 'الرصيد الافتتاحي في أول كل سنة/شهر والختامي في آخرها',
-    fn: async F => { const p = await A.inventoryPeriods(F); return [...p.years, ...p.months]; },
-  },
-  'inventory-total-item': { hidden: true, label: 'إجمالي الأرصدة على مستوى الصنف', desc: 'افتتاحي وختامي لكل صنف', fn: F => A.inventoryBreakdown(F, 'item').then(r => r.rows) },
-  'inventory-total-place': { hidden: true, label: 'إجمالي الأرصدة حسب المكان', desc: 'كل مكان مع تفصيل الأصناف', fn: F => A.inventoryBreakdown(F, 'place').then(r => r.rows) },
-  'inventory-total-company': { hidden: true, label: 'إجمالي الأرصدة حسب الشركة', desc: 'كل شركة مع تفصيل الأصناف', fn: F => A.inventoryBreakdown(F, 'company').then(r => r.rows) },
-  'inventory-total-storage': { hidden: true, label: 'إجمالي الأرصدة حسب المخزن', desc: 'كل مخزن مع تفصيل الأصناف', fn: F => A.inventoryBreakdown(F, 'storage').then(r => r.rows) },
-  'inventory-total-unit': { hidden: true, label: 'إجمالي الأرصدة حسب الوحدة', desc: 'كل وحدة مع تفصيل الأصناف', fn: F => A.inventoryBreakdown(F, 'unit').then(r => r.rows) },
-  'inventory-total-cls': { hidden: true, label: 'إجمالي الأرصدة حسب التصنيف', desc: 'كل تصنيف مع تفصيل الأصناف', fn: F => A.inventoryBreakdown(F, 'cls').then(r => r.rows) },
-  'inventory-total-grp': { hidden: true, label: 'إجمالي الأرصدة حسب المجموعة', desc: 'كل مجموعة مع تفصيل الأصناف', fn: F => A.inventoryBreakdown(F, 'grp').then(r => r.rows) },
+  'inventory-total': { label: 'الأرصدة', fn: F => (F.mode === 'detail' ? A.inventoryDetail(F) : F.mode === 'raw' ? DB.all(`SELECT * FROM balances ORDER BY id`) : A.inventoryGroup(F, F.by || 'item', F.by2 || '', F.per || '').then(r => r.rows)) },
   /* تقرير شاشة «المبيعات اليومية» للتصدير: بدون التكلفة + «قيمة البيع للوحدة» */
-  'sales-day-detail': { hidden: true, label: 'مبيعات يومية تفصيلية', desc: 'قيمة البيع والكمية وقيمة البيع للوحدة — بدون التكلفة', fn: F => A.salesDaily(F, 'detail').then(r => r.rows) },
-  'sales-day-item': { hidden: true, label: 'مبيعات يومية على مستوى الصنف', desc: 'قيمة البيع والكمية وقيمة البيع للوحدة — بدون التكلفة', fn: F => A.salesDaily(F, 'item').then(r => r.rows) },
-  'sales-day-place': { hidden: true, label: 'مبيعات يومية على مستوى المكان', desc: 'قيمة البيع والكمية وقيمة البيع للوحدة — بدون التكلفة', fn: F => A.salesDaily(F, 'place').then(r => r.rows) },
-  'sales-day-company': { hidden: true, label: 'مبيعات يومية على مستوى الشركة', desc: 'قيمة البيع والكمية وقيمة البيع للوحدة — بدون التكلفة', fn: F => A.salesDaily(F, 'company').then(r => r.rows) },
-  'sales-day-cust': { hidden: true, label: 'مبيعات يومية على مستوى العميل', desc: 'قيمة البيع والكمية وقيمة البيع للوحدة — بدون التكلفة', fn: F => A.salesDaily(F, 'cust').then(r => r.rows) },
-  'sales-day-storage': { hidden: true, label: 'مبيعات يومية على مستوى المخزن', desc: 'قيمة البيع والكمية وقيمة البيع للوحدة — بدون التكلفة', fn: F => A.salesDaily(F, 'storage').then(r => r.rows) },
-  'movements-direction': { hidden: true, label: 'الحركات حسب التوجيه', desc: 'وارد وصادر لكل توجيه', fn: F => A.movementsByDirection(F) },
-  'movements-month': { hidden: true, label: 'الحركات شهرياً', desc: 'تدفق الوارد والصادر شهرياً', fn: F => A.movementsByMonth(F) },
-  'movements-place': { hidden: true, label: 'الحركات حسب المكان', desc: 'الوارد والصادر لكل وحدة', fn: F => A.movementsByPlace(F) },
-  'movements-items': { hidden: true, label: 'أعلى الأصناف حركةً', desc: 'الأصناف الأعلى حركةً بالقيمة', fn: F => A.topMovementItems(F, 200) },
-  'inventory-place': { hidden: true, label: 'المخزون حسب المكان', desc: 'الافتتاحي والختامي لكل مكان', fn: F => A.inventoryByPlace(F) },
-  'inventory-class': { hidden: true, label: 'المخزون حسب التصنيف', desc: 'توزيع قيمة المخزون على التصنيفات', fn: F => A.inventoryByClass(F) },
+  'sales-day': { hidden: true, label: 'مبيعات يومية (تجميع × تفصيل × فترة)', desc: 'by & by2 & per', fn: F => A.salesDaily(F, F.by || 'detail', F.by2 || '', F.per || '').then(r => r.rows) },
   'reconcile': { label: 'مطابقة الأرصدة', desc: 'رصيد نهاية كل تاريخ سابق مقابل بداية التاريخ التالي', fn: () => DB.all('SELECT * FROM recon ORDER BY ABS(diff_val) DESC') },
-  'quality': { label: 'جودة البيانات', desc: 'كل الملاحظات والفحوص', fn: () => quality.listIssues() },
   'borse-latest': { label: 'أسعار البورصة الأخيرة', desc: 'آخر سعر لكل صنف مع التغير', fn: () => A.borseLatest() },
   'borse-raw': {
     label: 'سجل البورصة اليومي (خام)', desc: 'كل التسجيلات اليومية كما في الملف',
@@ -372,19 +358,104 @@ const REPORTS = {
              usd_rate, down_payment, fees, fx_factor, cost_price
              FROM borse ORDER BY borse_date DESC, item`),
   },
-  /* ---------- التقارير الخام: كل الأعمدة وكل الصفوف كما في قاعدة البيانات ----------
-     «بدون قائمة أعمدة صريحة» حتى أي عمود جديد في الجدول يظهر تلقائياً */
-  'sales-raw': {
-    label: 'بيانات المبيعات الخام', desc: 'كل بنود المبيعات وكل أعمدتها', raw: true,
-    fn: () => DB.all(`SELECT * FROM sales ORDER BY id`),
+  /* ---------- تقارير عقود الاستيراد الخام: كل أوراق الملف المصدر ---------- */
+  'contract-registrations-raw': {
+    label: 'تسجيل العقود (خام)', desc: 'ورقة «التسجيل» — كل عقود الاستيراد وكل أعمدتها', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_registrations ORDER BY id`),
   },
-  'movements-raw': {
-    label: 'بيانات الحركات الخام', desc: 'كل حركات المخزون وكل أعمدتها', raw: true,
-    fn: () => DB.all(`SELECT * FROM movements ORDER BY id`),
+  'contract-details-raw': {
+    label: 'تفصيلى العقود (خام)', desc: 'ورقة «تفصيلى» — بنود العقود ومراكبها وموانئ الوصول', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_details ORDER BY id`),
   },
-  'balances-raw': {
-    label: 'بيانات الأرصدة الخام', desc: 'كل أرصدة المخزون وكل أعمدتها', raw: true,
-    fn: () => DB.all(`SELECT * FROM balances ORDER BY id`),
+  'contract-payments-raw': {
+    label: 'سداد العقود (خام)', desc: 'ورقة «السداد» — بنود السداد وأسعارها', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_payments ORDER BY id`),
+  },
+  'contract-loading-raw': {
+    label: 'تحميل العقود (خام)', desc: 'ورقة «التحميل» — كميات التحميل لكل مركب', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_loading ORDER BY id`),
+  },
+  'contract-hedge-raw': {
+    label: 'ربط العقود (خام)', desc: 'ورقة «الربط» — عمليات ربط البورصة', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_hedge ORDER BY id`),
+  },
+  'contract-roll-raw': {
+    label: 'رول العقود (خام)', desc: 'ورقة «الرول» — عمليات الترويل', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_roll ORDER BY id`),
+  },
+  'contract-release-raw': {
+    label: 'إفراج العقود (خام)', desc: 'ورقة «الافراج» — كميات الإفراج لكل مركب', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_release ORDER BY id`),
+  },
+  'contract-external-sales-raw': {
+    label: 'بيع خارجى (خام)', desc: 'ورقة «بيع خارجى» — مبيعات خارجية (فارغة في الملف الحالي)', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_external_sales ORDER BY id`),
+  },
+  'contract-balances-raw': {
+    label: 'أرصدة خامات العقود (خام)', desc: 'ورقة «الارصدة» — رصيد المصانع والموانى والتغطية', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_balances ORDER BY id`),
+  },
+  'contract-items-raw': {
+    label: 'أصناف العقود (خام)', desc: 'ورقة «البيانات» — جدول الأصناف', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_items`),
+  },
+  'contract-suppliers-raw': {
+    label: 'موردو العقود (خام)', desc: 'ورقة «البيانات» — جدول الموردين', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_suppliers`),
+  },
+  'contract-ports-raw': {
+    label: 'موانئ العقود (خام)', desc: 'ورقة «البيانات» — جدول الموانئ', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_ports`),
+  },
+  'contract-companies-raw': {
+    label: 'شركات العقود الداخلية (خام)', desc: 'ورقة «البيانات» — جدول الشركات الداخلية', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM contract_companies_internal`),
+  },
+  /* ---------- صفحات Power BI لعقود الاستيراد (إعادة بناء داخل التطبيق) ---------- */
+  'pbix-home': {
+    label: '① الصفحة الرئيسية', desc: 'بطاقات: موقف ربط الخامات • الريت اليومى • عدد مراكب الذرة • قيمة المطلوب سداده',
+    fn: F => A.contractPbixCards(F).then(o => [o]),
+  },
+  'pbix-hedge-position': {
+    label: '🌾 موقف ربط وتغطية الخامات الرئيسية', desc: 'تصنيف × المدفوع بدون تسعير • المتبقى من الكمية المفتوحة • رصيد المصانع • رصيد التغطية • Position • عدد العقود • عدد الأيام',
+    fn: F => A.contractHedgePosition(F),
+  },
+  'pbix-corn-vessels': {
+    label: '③ تقرير مراكب الذرة — تفصيلى (Power BI)', desc: 'المصدر/المورد/الكمية/الشحن/قيمة الشحن/موقف التسعير/السعر CIF/الباخرة/موقف السداد/وصول متوقع/موقف المركب/صافي البريم',
+    fn: F => A.contractCornVessels(F).then(r => r.rows),
+  },
+  'pbix-corn-summary': {
+    label: '③ مراكب الذرة — ملخص حسب المصدر (Power BI)', desc: 'المصدر × كمية مراكب الذرة × عدد مراكب الذرة',
+    fn: F => A.contractCornVessels(F).then(r => r.summary),
+  },
+  'pbix-docs-value': {
+    label: '④ تقرير قيمة المستندات — تفصيلى (Power BI)', desc: 'المورد/التصنيف/متوقع سداد/حالة التجميع/كمية المطلوب سداده/سعر CIF المتوقع/قيمة المطلوب سداده',
+    fn: F => A.contractDocsValue(F).then(r => r.rows),
+  },
+  'pbix-docs-class': {
+    label: '④ قيمة المستندات حسب التصنيف (Power BI)', desc: 'التصنيف × إجمالي قيمة المطلوب سداده',
+    fn: F => A.contractDocsValue(F).then(r => r.byClass),
+  },
+  'pbix-docs-month': {
+    label: '④ قيمة المستندات حسب شهر السداد المتوقع (Power BI)', desc: 'شهر عربى سداد متوقع × إجمالي قيمة المطلوب سداده',
+    fn: F => A.contractDocsValue(F).then(r => r.byMonth),
+  },
+  'pbix-priced-costs': {
+    label: '⑤ تكلفة الخامات المسعرة (Power BI)', desc: 'التصنيف × الريت اليومى/السعر بالدولار/التكلفة الحالية/سعر السوق/الفرق',
+    fn: F => A.contractPricedCosts(F),
+  },
+  'pbix-main-coverage': {
+    label: '⑥ تغطية خامات رئيسية (Power BI)', desc: 'رصيد المصانع/رصيد متاح ميناء/مدفوعة وغير مفتوحة/مطلوب سدادها/تعاقدات/ما تم بيعه/إجمالى الرصيد/الاستهلاك/يكفى يوم',
+    fn: F => A.contractMainCoverage(F),
+  },
+  'pbix-additives-coverage': {
+    label: '⑦ تغطية الادوية والاضافات (Power BI)', desc: 'إجمالى الرصيد/ميناء إضافات/تعاقدات إضافات/الإجمالى الكلى/الاستهلاك/المتاح يكفى يوم حتى تاريخ',
+    fn: F => A.contractAdditivesCoverage(F),
+  },
+  /* تسجيل العقود + تفصيلها في جدول واحد — خيار «تجميعى / تفصيلي» (بلا تكرار بيانات) */
+  'contract-unified': {
+    label: '⑧ عقود الاستيراد — تسجيل + تفصيل (موحّد)', desc: 'صف لكل عقد في «تجميعى»، وصف لكل بند تفصيلي (باخرة/ميناء وصول/شركات) في «تفصيلي»',
+    fn: F => A.contractUnified(F),
   },
 };
 
@@ -449,21 +520,32 @@ const routes = {
     ok(res, { done: true });
   },
 
-  /* ---------- صلاحيات الشاشات (يضبطها المدير لكل دور) ---------- */
-  'GET /api/tabs': async (q, res, body, req, me) => ok(res, {
-    tabs: TABS,
-    perms: { admin: TAB_IDS.slice(), accountant: await tabsOf('accountant'), viewer: await tabsOf('viewer') },
-  }),
+  /* ---------- صلاحيات الشاشات (يضبطها المدير لكل مستخدم على حدة) ---------- */
+  'GET /api/tabs': async (q, res, body, req, me) => {
+    const users = await Auth.listUsers();
+    const perms = {};
+    for (const u of users) perms[u.id] = u.role === 'admin' ? TAB_IDS.slice() : tabsOfUser(u);
+    ok(res, { tabs: TABS, users: users.map(u => ({ id: u.id, username: u.username, full_name: u.full_name, role: u.role, roleLabel: Auth.roleLabel(u.role) })), perms });
+  },
 
-  'POST /api/tabs/save': async (q, res, body) => {
+  'POST /api/tabs/save': async (q, res, body, req, me) => {
     const src = (body && body.perms) || {};
-    const clean = {};
-    for (const role of ['accountant', 'viewer']) {
-      const arr = Array.isArray(src[role]) ? src[role].map(String) : [];
-      clean[role] = TAB_IDS.filter(t => arr.includes(t));   // ترشيح صارم ضد أي مدخلات غير معروفة
+    const users = await Auth.listUsers();
+    const byId = new Map(users.map(u => [u.id, u]));
+    for (const [idKey, arr] of Object.entries(src)) {
+      const uid = Number(idKey);
+      const u = byId.get(uid);
+      if (!u) continue;                                   // مستخدم غير معروف → تجاهُل
+      if (u.role === 'admin') continue;                   // المدير يملك كل الشاشات دائماً
+      /* ترشيح صارم ضد أي معرّفات شاشات غير معروفة */
+      const clean = TAB_IDS.filter(t => (Array.isArray(arr) ? arr : []).map(String).includes(t));
+      await DB.run('UPDATE users SET tabs = $1, updated_at = now() WHERE id = $2',
+        [JSON.stringify(clean), uid]);
     }
-    await DB.setSetting('tab_perms', JSON.stringify(clean));
-    ok(res, { perms: { admin: TAB_IDS.slice(), ...clean } });
+    const users2 = await Auth.listUsers();
+    const perms = {};
+    for (const u of users2) perms[u.id] = u.role === 'admin' ? TAB_IDS.slice() : tabsOfUser(u);
+    ok(res, { perms });
   },
 
   /* ---------- البيانات الأساسية: الأصناف (المجموعة والتصنيف أعمدة داخل items) ---------- */
@@ -476,9 +558,12 @@ const routes = {
       clsState: q.get('clsstate'),
     }))),
 
-  'POST /api/md/items/save': check(async (q, res, body) => ok(res, await M.saveItem(body || {}))),
+  /* قائمة الأصناف الموحدة (قراءة فقط) — لأي مستخدم مسجل مهما كانت شاشاته.
+     تستخدمها قوائم الاختيار في كل التقارير والإدخالات والفلاتر (بالقيمة الكود). */
+  'GET /api/items/all': check(async (q, res) =>
+    ok(res, await M.listItems({ limit: q.get('limit') || 20000 }))),
 
-  'POST /api/md/items/sync': check(async (q, res) => ok(res, await M.syncFromMovements())),
+  'POST /api/md/items/save': check(async (q, res, body) => ok(res, await M.saveItem(body || {}))),
 
   'POST /api/md/items/delete': check(async (q, res, body) => ok(res, await M.deleteItem(body || {}))),
 
@@ -509,6 +594,7 @@ const routes = {
   'POST /api/md/locs/warehouse/save': check(async (q, res, body) => ok(res, await M.saveWarehouse(body || {}))),
 
   'POST /api/md/locs/warehouse/delete': check(async (q, res, body) => ok(res, await M.deleteWarehouse(body || {}))),
+  'POST /api/md/locs/warehouse/report-active': check(async (q, res, body) => ok(res, await M.setWarehouseReportActive((body || {}).code, (body || {}).active))),
 
   /* ---------- البيانات الأساسية: أنواع الحركات ---------- */
   'GET /api/md/mtypes': check(async (q, res) => ok(res, await M.listMtypes({ q: q.get('q'), catFrom: q.get('cat_from'), catTo: q.get('cat_to') }))),
@@ -522,6 +608,16 @@ const routes = {
   'POST /api/md/mtypes/category/save': check(async (q, res, body) => ok(res, await M.saveCategory(body || {}))),
 
   'POST /api/md/mtypes/category/delete': check(async (q, res, body) => ok(res, await M.deleteCategory(body || {}))),
+
+  /* ---------- البيانات الأساسية: مراجع عقود الاستيراد (موردين/مصادر/موانئ) ---------- */
+  'GET /api/md/refs': check(async (q, res) => ok(res, await M.listRefs(q.get('kind')))),
+
+  'POST /api/md/refs/save': check(async (q, res, body) => ok(res, await M.saveRef(body || {}))),
+
+  'POST /api/md/refs/delete': check(async (q, res, body) => ok(res, await M.deleteRef(body || {}))),
+
+  /* كل القوائم المرجعية دفعة واحدة — تغذّي القوائم المنسدلة في نماذج العقود */
+  'GET /api/contracts/refs': check(async (q, res) => ok(res, await M.listAllRefs())),
 
   'GET /api/users': async (q, res) => ok(res, await Auth.listUsers()),
 
@@ -597,60 +693,34 @@ const routes = {
 
   'GET /api/health': async (q, res) => ok(res, { ...(await DB.info()), now: new Date().toISOString() }),
 
-  'GET /api/overview': async (q, res) => {
-    const F = A.parseFilters(q);
-    ok(res, A.hasFilters(F) ? await A.overview(F) : await overviewCached());
-  },
-
-  'GET /api/quality': async (q, res) => {
-    if (q.get('run') === '1') await quality.runRules();
-    ok(res, await quality.listIssues(A.parseFilters(q)));
-  },
-
-  'GET /api/reconcile': async (q, res) => ok(res, await A.reconcile({
-    limit: Number(q.get('limit') || 100),
-    offset: Number(q.get('offset') || 0),
-    onlyMismatch: q.get('all') !== '1',
-    F: A.parseFilters(q),
-  })),
-
   'GET /api/dims': async (q, res) => ok(res, await A.dims(q)),
 
   /* تقرير شاشة المبيعات اليومية: تفصيلي/صنف/مكان/شركة/عميل — بدون التكلفة + قيمة البيع للوحدة */
-  'GET /api/sales/day': async (q, res) => ok(res, await A.salesDaily(A.parseFilters(q), q.get('by') || 'detail', Number(q.get('limit') || 20000))),
+  'GET /api/sales/day': async (q, res) => ok(res, await A.salesDaily(A.parseFilters(q), q.get('by') || 'detail', q.get('by2') || '', q.get('per') || '', Number(q.get('limit') || 20000))),
 
   /* طريقة ربط التكلفة بالمبيعات (المستند المرجع + الصنف / المكان) */
   'POST /api/settings/cost': check(async (q, res, body) => {
     const r = await A.setCostLink((body && body.link) || '');
-    await DB.delSetting('overview_cache');   // تغيير الطريقة يغيّر أرقام المؤشرات → لا كاش قديم
     ok(res, r);
   }),
 
-  'GET /api/movements/report': async (q, res) => ok(res, await A.movementsReport(A.parseFilters(q), Number(q.get('limit') || 2000))),
+  'GET /api/movements/report': async (q, res) => ok(res, await A.movementsReport(A.parseFilters(q), q.get('by') || 'detail', q.get('by2') || '', q.get('per') || '', Number(q.get('limit') || 2000))),
 
-  /* ---------- تقارير مخازن: تفصيلي • إجمالي (بمستوى) • فترات ---------- */
-  'GET /api/movements/detail': async (q, res) => ok(res, await A.movementsDetail(A.parseFilters(q), Number(q.get('limit') || 20000))),
-  'GET /api/movements/total': async (q, res) => ok(res, await A.movementsBreakdown(A.parseFilters(q), q.get('by') || 'place', Number(q.get('limit') || 20000))),
-  'GET /api/movements/periods': async (q, res) => ok(res, await A.movementsPeriods(A.parseFilters(q))),
-
-  'GET /api/inventory/place': async (q, res) => ok(res, await A.inventoryByPlace(A.parseFilters(q))),
-  'GET /api/inventory/class': async (q, res) => ok(res, await A.inventoryByClass(A.parseFilters(q))),
-
-  /* ---------- تقارير أرصدة: تفصيلي • إجمالي (بمستوى) • فترات ---------- */
-  'GET /api/inventory/detail': async (q, res) => ok(res, await A.inventoryDetail(A.parseFilters(q), Number(q.get('limit') || 20000))),
-  'GET /api/inventory/total': async (q, res) => ok(res, await A.inventoryBreakdown(A.parseFilters(q), q.get('by') || 'place', Number(q.get('limit') || 20000))),
-  'GET /api/inventory/periods': async (q, res) => ok(res, await A.inventoryPeriods(A.parseFilters(q))),
+  'GET /api/inventory/report': async (q, res) => ok(res, await A.inventoryReport(A.parseFilters(q), q.get('by') || 'detail', q.get('by2') || '', q.get('per') || '', Number(q.get('limit') || 20000))),
   'GET /api/span': async (q, res) => ok(res, await A.dateSpan()),
 
   /* ---------- البورصة اليومية ---------- */
   'GET /api/borse': async (q, res) => {
     const days = Number(q.get('days') || 120);
     const item = q.get('item') || '';
+    const from = q.get('from') || '';
+    const to = q.get('to') || '';
     const [summary, latest, series, usd, recent] = await Promise.all([
-      A.borseSummary(), A.borseLatest(), A.borseSeries({ days, item }),
-      A.borseUsd(days), A.borseRecent(60),
+      A.borseSummary(), A.borseLatest(),
+      A.borseSeries({ days, item, from, to }),
+      A.borseUsd(days, from, to), A.borseRecent(60, from, to),
     ]);
-    ok(res, { days, item, summary, latest, series, usd, recent });
+    ok(res, { days, item, from, to, summary, latest, series, usd, recent });
   },
 
   'GET /api/borse/status': async (q, res) => ok(res, await borseStatus()),
@@ -702,6 +772,9 @@ const routes = {
     ok(res, { from, to, item, fields: PE.FIELDS, ...g });
   },
 
+  /* لوحة «نظرة» — آخر سعر مسجَّل لكل صنف */
+  'GET /api/prices/latest': async (q, res) => ok(res, { rows: await PE.latest() }),
+
   'GET /api/prices/overrides': async (q, res) =>
     ok(res, await PE.history(Number(q.get('limit') || 300))),
 
@@ -729,12 +802,6 @@ const routes = {
 
   'GET /api/costs/status': async (q, res) => ok(res, await CE.status()),
 
-  'POST /api/costs/rebuild': async (q, res, body) => {
-    const full = !body || body.full !== false;
-    const r = full ? await CE.rebuildAll() : await CE.flush();
-    ok(res, { ...r, status: await CE.status() });
-  },
-
   'GET /api/import/status': async (q, res) => {
     const id = Number(q.get('id'));
     const j = jobs[id];
@@ -760,7 +827,7 @@ const routes = {
     fs.copyFileSync(staged, dest);
     try { fs.unlinkSync(staged); } catch (_) {}
     const id = startImportJob(dest, {
-      password: pw || undefined, only: [cat], asSource: as || undefined,
+      password: pw || undefined, only: datasetsFor(cat), asSource: as || undefined,
     });
     ok(res, { jobId: id, path: dest, replacing: !!as });
   },
@@ -776,8 +843,8 @@ const routes = {
              MAX(imported_at) last_imported,
              SUM(rows_inserted)::int rows_total,
              SUM(rows_skipped)::int rows_skipped
-      FROM imports WHERE dataset = $1
-      GROUP BY file_name, file_path`, [cat]);
+      FROM imports WHERE dataset = ANY($1)
+      GROUP BY file_name, file_path`, [datasetsFor(cat)]);
     const up = uploadsDir(cat).toLowerCase();
     const list = (files || []).map(r => {
       const p = path.normalize(String(r.file_path || ''));
@@ -806,10 +873,12 @@ const routes = {
     const p = path.normalize(String(file));
     const cond = tbl => `regexp_replace(COALESCE(${tbl === 'imports' ? 'file_path' : 'source_file'},''), '/', chr(92),'g') =
       regexp_replace($1, '/', chr(92),'g')`;
-    const agg = { movements: 0, sales: 0, balances: 0, prices: 0 };
-    for (const tbl of ['movements', 'sales', 'balances', 'prices']) {
+    const agg = {};
+    const tables = ['movements', 'sales', 'balances', 'prices'];
+    for (const tbl of tables) {
       const r = await DB.get(`SELECT COUNT(*)::int c FROM ${tbl} WHERE ${cond(tbl)}`, [p]);
-      if (r.c > 0) { await DB.run(`DELETE FROM ${tbl} WHERE ${cond(tbl)}`, [p]); agg[tbl] = r.c; }
+      if (r.c > 0) { await DB.run(`DELETE FROM ${tbl} WHERE ${cond(tbl)}`, [p]); }
+      agg[tbl] = r.c;
     }
     await DB.run(`DELETE FROM imports WHERE ${cond('imports')}`, [p]);
     let deletedFile = null;
@@ -821,6 +890,9 @@ const routes = {
   },
 
   /* ---------- الإدخال اليدوي للبيانات اليومية (حركات/مبيعات/أرصدة/بورصة/أسعار) ---------- */
+  /* معاينة «الرقم داخلي» التالي لعقد جديد — نفس معادلة التوليد التلقائي */
+  'GET /api/daily/preview-no': check(async (q, res) =>
+    ok(res, { internal_no: await DE.generateInternalNo(q.get('classification') || '', q.get('date') || '') })),
   'GET /api/daily/list': check(async (q, res) => ok(res, await DE.list({
     cat: q.get('cat'), limit: q.get('limit'), from: q.get('from'), to: q.get('to'), item: q.get('item'),
   }))),
@@ -850,15 +922,22 @@ const routes = {
     const def = REPORTS[name];
     if (!def) return bad(res, 'اسم تقرير غير معروف');
     const F = A.parseFilters(q);
-    const isRaw = !!def.raw || String(name).endsWith('-raw');
-    const rows = await def.fn(F);
+    let rows;
+    try {
+      rows = await def.fn(F);
+    } catch (e) {
+      return bad(res, 'خطأ في التقرير: ' + (e && e.message ? e.message : e), 500);
+    }
+    const isRaw = !!def.raw || String(name).endsWith('-raw') || F.mode === 'raw';
     /* فلترة فلاتر رؤوس الأعمدة القادمة من الواجهة (التقارير الخام) — في الذاكرة قبل الترقيم */
-    const base = isRaw ? applyColFilters(rows, q.get('cols')) : rows;
-    /* التقارير الخام: ترقيم صفحات على مستوى الذاكرة (offset/limit)
-       حتى لا تُجَمّد الشاشة بعشرات الآلاف من الصفوف في جدول واحد.
-       pageSize الافتراضي 1000 صف — والتصدير CSV يظل كامل الصفوف. */
+    let base = isRaw ? applyColFilters(rows, q.get('cols')) : rows;
+    /* شاشات عقود الاستيراد: بحث + تاريخ + حالة العقد — في الذاكرة قبل الترقيم */
+    if (isRaw) base = await contractViewFilter(name, base, q);
+    /* التقارير الخام: ترقيم صفحات على مستوى الذاكرة (offset/limit) —
+       والواجهة تطلب حجماً كبيراً جداً (100000) لعرض كل الصفوف دفعة واحدة،
+       والحد الأعلى هنا أمان للذاكرة. والتصدير CSV يظل كامل الصفوف. */
     if (isRaw) {
-      const size = Math.min(5000, Math.max(1, Number(q.get('pageSize') || 1000)));
+      const size = Math.min(100000, Math.max(1, Number(q.get('pageSize') || 1000)));
       const pages = Math.max(1, Math.ceil(base.length / size));
       const page = Math.min(pages, Math.max(1, Number(q.get('page') || 1)));
       return ok(res, {
@@ -877,7 +956,13 @@ const routes = {
     const def = REPORTS[name];
     if (!def) return bad(res, 'اسم تقرير غير معروف');
     const F = A.parseFilters(q);
-    const rows = await def.fn(F);
+    let rows;
+    try {
+      rows = await def.fn(F);
+    } catch (e) {
+      return bad(res, 'خطأ في التقرير: ' + (e && e.message ? e.message : e), 500);
+    }
+    rows = await contractViewFilter(name, rows, q);
     const csv = toCsv(rows);
     res.writeHead(200, {
       'Content-Type': 'text/csv; charset=utf-8',
@@ -894,34 +979,40 @@ const TABS = [
   { id: 'md-items', label: 'الأصناف الأساسية' },
   { id: 'md-locations', label: 'المواقع والمصانع' },
   { id: 'md-movetypes', label: 'أنواع الحركات' },
+  { id: 'md-contractrefs', label: 'مراجع العقود' },
   { id: 'inventory', label: 'المخزون والمطابقة' },
   { id: 'sales', label: 'المبيعات والربحية' },
   { id: 'movements', label: 'الحركات' },
   { id: 'borse', label: 'البورصة اليومية' },
   { id: 'prices', label: 'الأسعار اليومية' },
   { id: 'costs', label: 'التكلفة اليومية' },
-  { id: 'quality', label: 'جودة البيانات' },
+  { id: 'contracts', label: 'عقود الاستيراد' },
   { id: 'reports', label: 'التقارير' },
 ];
 const TAB_IDS = TABS.map(t => t.id);
 const TAB_LABEL = Object.fromEntries(TABS.map(t => [t.id, t.label]));
 /* الافتراضي قبل أي تعديل من المدير: لوحة التحكم (المستخدمون والصلاحيات) للمدير فقط،
    والبقية للمحاسب كاملاً، والمشاهد للشاشات كلها عدا لوحة التحكم.
-   الاستيراد ليس شاشة (أُزيل التبويب العام) بل صلاحية تُفعِّل أزرار الاستيراد اليومي. */
+   الاستيراد ليس شاشة (أُزيل التبويب العام) بل صلاحية تُفعِّل أزرار الاستيراد اليومي.
+   الافتراضي يُمنح للمستخدم عند أول إنشاء له (عمود users.tabs) — بعدها كل مستخدم
+   يُضبط شاشاته على حدة، والدور لا يعدّلها. */
 const DEFAULT_TABS = {
   admin: TAB_IDS.slice(),
   accountant: TAB_IDS.filter(t => t !== 'dashboard'),
   viewer: TAB_IDS.filter(t => t !== 'dashboard'),
 };
-async function tabsOf(role) {
-  if (role === 'admin') return TAB_IDS.slice();
-  try {
-    const raw = await DB.getSetting('tab_perms');
-    const saved = raw ? JSON.parse(raw) : null;
-    if (saved && Array.isArray(saved[role]))
-      return TAB_IDS.filter(t => saved[role].includes(t));
-  } catch (_) { /* إعداد تالف → الافتراضي */ }
-  return (DEFAULT_TABS[role] || TAB_IDS).slice();
+function tabsForRole(role) { return (DEFAULT_TABS[role] || TAB_IDS).slice(); }
+/** شاشات المستخدم المسموح بها: users.tabs (JSON) إن وُجد، وإلا افتراضي دوره */
+function tabsOfUser(u) {
+  if (!u) return TAB_IDS.slice();
+  if (u.role === 'admin') return TAB_IDS.slice();
+  if (u.tabs) {
+    try {
+      const arr = JSON.parse(u.tabs);
+      if (Array.isArray(arr)) return TAB_IDS.filter(t => arr.includes(t));
+    } catch (_) { /* عمود تالف → الافتراضي */ }
+  }
+  return tabsForRole(u.role);
 }
 /* مسارات API محمية بصلاحية الشاشة: بادئة المسار ← الشاشات التي تكفي للوصول.
    المسارات الشائعة (overview/health/span...) خارج القائمة عمداً،
@@ -932,17 +1023,17 @@ const TAB_API = [
   ['/api/md/locs', ['md-locations']],
   ['/api/md/mtypes', ['md-movetypes']],
   ['/api/md/mtypes/categories', ['md-movetypes']],
+  ['/api/md/refs', ['md-contractrefs']],
   ['/api/inventory', ['inventory']],
-  ['/api/reconcile', ['inventory']],
   ['/api/sales', ['sales']],
   ['/api/movements', ['movements']],
   ['/api/borse', ['borse']],
   ['/api/prices', ['prices']],
   ['/api/costs', ['costs']],
-  ['/api/quality', ['quality']],
   ['/api/reports', ['reports']],
   ['/api/report', ['reports']],
   ['/api/export', ['reports']],
+  ['/api/contracts', ['contracts']],
 ];
 
 /* ---------- المصادقة ---------- */
@@ -953,7 +1044,7 @@ async function pubUser(u) {
     role: u.role, roleLabel: Auth.roleLabel(u.role),
     mustChange: !!u.must_change,
     perms: r ? r.perms : [],
-    tabs: await tabsOf(u.role),
+    tabs: tabsOfUser(u),
   };
 }
 
@@ -974,6 +1065,7 @@ const PERM_ROUTES = {
   'GET /api/files/daily': 'import',
   'POST /api/files/delete': 'import',
   'GET /api/daily/list': 'import',
+  'GET /api/daily/preview-no': 'import',
   'POST /api/daily/save': 'import',
   'POST /api/daily/delete': 'import',
   'POST /api/borse/fetch': 'sync',
@@ -981,7 +1073,6 @@ const PERM_ROUTES = {
   'POST /api/borse/override/delete': 'sync',
   'POST /api/prices/override': 'sync',
   'POST /api/prices/override/delete': 'sync',
-  'POST /api/costs/rebuild': 'sync',
   'POST /api/settings/cost': 'master',
   'GET /api/users': 'users',
   'POST /api/users': 'users',
@@ -990,7 +1081,6 @@ const PERM_ROUTES = {
   'POST /api/tabs/save': 'users',
   /* البيانات الأساسية: الإضافة والتعديل بصلاحية master */
   'POST /api/md/items/save': 'master',
-  'POST /api/md/items/sync': 'master',
   'POST /api/md/items/delete': 'master',
   'POST /api/md/items/groups/save': 'master',
   'POST /api/md/items/groups/delete': 'master',
@@ -1002,15 +1092,18 @@ const PERM_ROUTES = {
   'POST /api/md/locs/unit/delete': 'master',
   'POST /api/md/locs/warehouse/save': 'master',
   'POST /api/md/locs/warehouse/delete': 'master',
+  'POST /api/md/locs/warehouse/report-active': 'master',
   'POST /api/md/mtypes/save': 'master',
   'POST /api/md/mtypes/delete': 'master',
   'POST /api/md/mtypes/category/save': 'master',
   'POST /api/md/mtypes/category/delete': 'master',
+  'POST /api/md/refs/save': 'master',
+  'POST /api/md/refs/delete': 'master',
 };
 
 const PERM_LABEL = {
   import: 'استيراد', sync: 'جلب البورصة والتعديل اليدوي على الأسعار',
-  quality: 'إعادة فحص الجودة', users: 'إدارة المستخدمين',
+  users: 'إدارة المستخدمين',
   master: 'الإضافة والتعديل في البيانات الأساسية',
 };
 
@@ -1028,7 +1121,6 @@ const server = http.createServer((req, res) => {
       return 'stop';
     }
     let need = PERM_ROUTES[key] || null;
-    if (key === 'GET /api/quality' && u.searchParams.get('run') === '1') need = 'quality';
     if (need && !Auth.can(me, need)) {
       send(res, 403, {
         ok: false, error: 'forbidden',
@@ -1040,7 +1132,7 @@ const server = http.createServer((req, res) => {
     if (me.role !== 'admin') {
       const hit = TAB_API.find(([p]) => u.pathname === p || u.pathname.startsWith(p + '/'));
       if (hit) {
-        const allowed = await tabsOf(me.role);
+        const allowed = tabsOfUser(me);
         if (!hit[1].some(t => allowed.includes(t))) {
           send(res, 403, {
             ok: false, error: 'forbidden',
@@ -1091,7 +1183,7 @@ const server = http.createServer((req, res) => {
         fs.writeFileSync(staged, Buffer.concat(chunks));
         let analysis;
         try {
-          analysis = analyzePreviewDeep(staged, { maxRows: 8, only: [cat], password: pw || undefined });
+          analysis = analyzePreviewDeep(staged, { maxRows: 8, only: datasetsFor(cat), password: pw || undefined });
         } catch (e) {
           try { fs.unlinkSync(staged); } catch (_) {}
           return bad(res, 'تعذّرت قراءة الملف: ' + (e.message || 'خطأ'));
@@ -1123,6 +1215,15 @@ const server = http.createServer((req, res) => {
     const seeded = await Auth.seedAdmin();   // إنشاء مدير النظام عند أول تشغيل
     const info = await DB.info();
     const fetchAt = await BF.fetchTime();
+    server.on('error', e => {
+      if (e.code === 'EADDRINUSE') {
+        console.error(`المنفذ ${PORT} مشغول — خادم آخر يعمل على http://${HOST}:${PORT} بالفعل`);
+        console.error('أوقفه ثم أعد التشغيل، أو غيّر PORT في ملف الإعداد.');
+      } else {
+        console.error('!!! خطأ في الخادم:', e.message);
+      }
+      process.exit(1);
+    });
     server.listen(PORT, HOST, () => {
       console.log('==============================================');
       console.log('  نظام متابعة الاستهلاك والتكاليف');

@@ -214,6 +214,15 @@ async function grid({ from, to, item } = {}) {
   };
 }
 
+/** آخر سعر مسجَّل لكل صنف (لوحة «نظرة») */
+async function latest() {
+  return DB.all(`
+    SELECT DISTINCT ON (item_code)
+           item_code, item, price_date, cost_land, market_land, currency
+      FROM prices
+     ORDER BY item_code, price_date DESC, id DESC`);
+}
+
 /** حفظ/تحديث تعديل (يسري من eff_date فما بعد) */
 async function set({ item_code, eff_date, field, value, note, user_id } = {}) {
   if (!FIELD_KEYS.includes(field)) throw new Error('عمود غير معروف');
@@ -267,6 +276,6 @@ async function history(limit = 300) {
 
 module.exports = {
   FIELDS, FIELD_KEYS,
-  grid, set, remove, history,
+  grid, latest, set, remove, history,
   iso, num, today, daysAgo, dateRange,
 };

@@ -5,6 +5,7 @@
  * كل الأرقام تُحسب من الجداول الخام داخل قاعدة البيانات (لا اعتماد على تقارير Excel).
  */
 const { all, get, run, tx, setSetting, getSetting, delSetting } = require('./db');
+const pbix = require('./pbix');
 
 /* ---------- قاعدة احتساب التكلفة ---------- */
 /**
@@ -118,7 +119,7 @@ async function profitCte(F = {}) {
            /* أبعاد مشتقة من locations/items — تخدم التفصيل والفلتر والمجموعة معاً */
            s.unit_code, s.storage_loc, COALESCE(NULLIF(s.price_uom,''), i.uom) uom,
            i.class_code, ${CLS_EXPR} cls, i.group_code, ${GRP_EXPR} grp,
-           l.company_code, l.currency
+           l.company_code, l.company_name, l.unit_name, l.currency
       FROM sales s
       ${SALES_JOIN}
       LEFT JOIN mv ON ${joinSql}
@@ -146,23 +147,25 @@ const EMPTY = '__EMPTY__';
 const RANGE_DIMS = ['place', 'company', 'unit', 'item', 'cust', 'dir', 'mtype', 'storage', 'cls', 'grp'];
 
 function parseFilters(q) {
-  const get = k => { const v = q ? String(q.get(k) || '') : ''; return v.trim(); };
+  const get = k => { 
+    const v = q ? String(q.get(k) || '') : ''; 
+    try { return decodeURIComponent(v).trim(); } catch { return v.trim(); }
+  };
+  console.log('DEBUG parseFilters q.get(kind):', JSON.stringify(q.get('kind')));
   const F = {
     from: get('from'), to: get('to'),
     place: get('place'), company: get('company'), unit: get('unit'),
     item: get('item'), cust: get('cust'), dir: get('dir'), mtype: get('mtype'),
     storage: get('storage'), cls: get('cls'), grp: get('grp'),
     sev: get('sev'), ent: get('ent'),
+    mode: get('mode'),
+    by: get('by'), by2: get('by2'), per: get('per'),
+    kind: get('kind'),
   };
   for (const k of RANGE_DIMS) { F[k + '_from'] = get(k + '_from'); F[k + '_to'] = get(k + '_to'); }
   return F;
 }
 
-function hasFilters(F = {}) {
-  return ['from', 'to', 'place', 'company', 'unit', 'item', 'cust', 'dir', 'mtype', 'storage', 'cls', 'grp']
-    .some(k => !!F[k])
-    || RANGE_DIMS.some(k => F[k + '_from'] || F[k + '_to']);
-}
 
 /* خريطة الأعمدة لكل جدول (بعامودها المؤهَّل بالاسم المستعار) */
 const SALES_COLS = {
@@ -210,155 +213,8 @@ function conds(F = {}, map = {}, start = 1) {
 const noDates = F => ({ ...F, from: '', to: '' });
 
 /* ---------- المؤشرات الرئيسية ---------- */
-async function overview(F = {}) {
-  const cw = await costWhere();
-  const wm = conds(F, MOV_COLS);
-  const wb = conds(F, BAL_COLS);
-  const { cte, params, method } = await profitCte(F);
-
-  /* المبيعات + تكلفة الربط + نسبة التغطية في استعلام واحد على CTE الربحية */
-  const sales = await get(`${cte}
-    SELECT COUNT(*)::int lines, COUNT(DISTINCT invoice_doc)::int docs,
-           COALESCE(SUM(value),0)::float value, COALESCE(SUM(qty),0)::float qty,
-           COALESCE(SUM(cost),0)::float cost,
-           COUNT(*) FILTER (WHERE matched)::int matched_lines,
-           COALESCE(SUM(value) FILTER (WHERE matched),0)::float matched_value,
-           MIN(invoice_date) dmin, MAX(invoice_date) dmax
-    FROM sp`, params);
-  const costAll = await get(`SELECT COUNT(*)::int lines
-                             FROM movements m WHERE ${cw}`);
-  const bal = await get(`
-    SELECT COUNT(*)::int lines,
-           COALESCE(SUM(open_val),0)::float open_val, COALESCE(SUM(close_val),0)::float close_val,
-           COALESCE(SUM(open_qty),0)::float open_qty, COALESCE(SUM(close_qty),0)::float close_qty
-    FROM balances b ${wb.sql ? 'WHERE ' + wb.sql : ''}`, wb.params);
-  const mov = await get(`
-    SELECT COUNT(*)::int lines, COALESCE(SUM(qty),0)::float qty, COALESCE(SUM(amount),0)::float amount,
-           MIN(post_date) dmin, MAX(post_date) dmax
-    FROM movements m ${wm.sql ? 'WHERE ' + wm.sql : ''}`, wm.params);
-
-  const counts = {
-    items: (await get(`SELECT COUNT(*)::int c FROM items WHERE kind='item'`)).c,
-    locations: (await get('SELECT COUNT(*)::int c FROM locations')).c,
-    movement_types: (await get('SELECT COUNT(*)::int c FROM movement_types')).c,
-    movements: mov.lines,
-    sales: sales.lines,
-    balances: bal.lines,
-    sources: (await get(`SELECT COUNT(DISTINCT source_file)::int c FROM movements`)).c,
-  };
-
-  const cogs = Math.abs(sales.cost || 0);
-  const revenue = sales.value || 0;
-  return {
-    period: { salesFrom: sales.dmin, salesTo: sales.dmax, movFrom: mov.dmin, movTo: mov.dmax },
-    counts,
-    revenue,
-    revenueDocs: sales.docs,
-    cogs,
-    grossProfit: revenue - cogs,
-    marginPct: revenue ? ((revenue - cogs) / revenue) * 100 : 0,
-    /* نسبة التغطية: أي جزء من المبيعات وُجدت له حركة تكلفة مقابلة (شفافية الربط) */
-    cost: {
-      method,
-      label: COST_LINKS[method].label,
-      lines: sales.lines,
-      matchedLines: sales.matched_lines,
-      linesPct: sales.lines ? (sales.matched_lines / sales.lines) * 100 : 0,
-      value: revenue,
-      matchedValue: sales.matched_value,
-      valuePct: revenue ? (sales.matched_value / revenue) * 100 : 0,
-    },
-    inventory: {
-      openVal: bal.open_val, closeVal: bal.close_val,
-      openQty: bal.open_qty, closeQty: bal.close_qty,
-      changeVal: bal.close_val - bal.open_val,
-      lines: bal.lines,
-    },
-    movements: { lines: mov.lines, qty: mov.qty, amount: mov.amount },
-    costRule: await detectCostRule(),
-    costLines: costAll.lines,
-  };
-}
 
 /* ---------- مطابقة الأرصدة: رصيد نهاية التاريخ السابق ⇐ رصيد بداية التاريخ التالي ---------- */
-async function reconcile({ limit = 100, offset = 0, onlyMismatch = true, F = {} } = {}) {
-  /* فلاتر غير التاريخية تُطبَّق في SQL؛ والتاريخ يُرشِّح الأزواج في الذاكرة حسب تاريخ الزوج اللاحق */
-  const wb = conds(noDates(F), BAL_COLS);
-  const rows = await all(`
-    WITH per AS (
-      /* المفتاح قد يحمل أكثر من سطر في الملف نفسه (107 مفاتيح مكررة بقيم مختلفة)
-         → نجمّع القيم بمجموع SUM كما فعل الكود القديم، ووصفياً MAX */
-      SELECT item, company_code, unit_code, storage_loc, balance_date,
-             MAX(item_desc) item_desc, MAX(place) place,
-             SUM(open_qty)::float open_qty, SUM(open_val)::float open_val,
-             SUM(close_qty)::float close_qty, SUM(close_val)::float close_val
-      FROM balances b ${wb.sql ? 'WHERE ' + wb.sql : ''}
-      GROUP BY item, company_code, unit_code, storage_loc, balance_date
-    ), seq AS (
-      SELECT p.*,
-             LAG(balance_date) OVER w AS prev_date,
-             LAG(close_qty)    OVER w AS prev_close_qty,
-             LAG(close_val)    OVER w AS prev_close_val
-      FROM per p
-      WINDOW w AS (PARTITION BY item, company_code, unit_code, storage_loc ORDER BY balance_date)
-    )
-    SELECT item, item_desc, company_code, unit_code, storage_loc, place,
-           prev_date, balance_date AS next_date,
-           prev_close_qty, prev_close_val, open_qty, open_val
-    FROM seq
-    WHERE prev_date IS NOT NULL
-  `, wb.params);
-
-  let norm = rows.map(r => ({
-    ...r,
-    close_val: r.prev_close_val || 0,    // نهاية التاريخ السابق
-    close_qty: r.prev_close_qty || 0,
-    mv_val: 0, mv_qty: 0,                // لا تدخل الحركات في هذه المطابقة
-    diff_val: (r.prev_close_val || 0) - (r.open_val || 0),
-    diff_qty: (r.prev_close_qty || 0) - (r.open_qty || 0),
-  }));
-
-  /* فلتر التاريخ: يعرض الأزواج التي يقع تاريخها اللاحق ضمن النطاق */
-  if (F.from) norm = norm.filter(r => !r.next_date || r.next_date >= F.from);
-  if (F.to) norm = norm.filter(r => !r.next_date || r.next_date <= F.to);
-
-  const mismatches = norm.filter(r => Math.abs(r.diff_val) > 1 || Math.abs(r.diff_qty) > 0.001);
-  const totalDiff = norm.reduce((s, r) => s + r.diff_val, 0);
-
-  await tx(async () => {
-    await run('DELETE FROM recon');
-    if (norm.length) {
-      const chunk = 2000;
-      for (let i = 0; i < norm.length; i += chunk) {
-        const part = norm.slice(i, i + chunk);
-        const params = [];
-        const tuples = part.map(r => {
-          const vals = [
-            `${r.item}|${r.company_code}|${r.unit_code}|${r.storage_loc}|${r.prev_date}->${r.next_date}`,
-            r.item, r.item_desc, r.company_code, r.unit_code, r.storage_loc, r.place,
-            r.prev_date, r.next_date,
-            r.open_val, 0, r.close_val, r.diff_val,
-            r.open_qty, 0, r.close_qty, r.diff_qty, new Date().toISOString(),
-          ];
-          return '(' + vals.map(v => { params.push(v === undefined ? null : v); return '$' + params.length; }).join(', ') + ')';
-        });
-        await run(`INSERT INTO recon
-          (key,item,item_desc,company_code,unit_code,storage_loc,place,prev_date,next_date,open_val,moves_val,close_val,diff_val,
-           open_qty,moves_qty,close_qty,diff_qty,calc_at) VALUES ${tuples.join(', ')}`, params);
-      }
-    }
-  });
-
-  const filtered = onlyMismatch ? mismatches : norm;
-  filtered.sort((a, b) => Math.abs(b.diff_val) - Math.abs(a.diff_val));
-  return {
-    keys: norm.length,
-    matched: norm.length - mismatches.length,
-    mismatches: mismatches.length,
-    totalDiff,
-    sample: filtered.slice(offset, offset + limit),
-  };
-}
 
 /* ---------- تحليل المبيعات (مبنية على CTE الربحية الموحّد) ---------- */
 /* تكلفة التجمع = مطلق صافي حركاته (المردودات تُخصم من الإصدارات) — نفس
@@ -370,60 +226,10 @@ const withProfit = rows => rows.map(r => ({
   marginPct: r.value ? (((r.value || 0) - (r.cost || 0)) / r.value) * 100 : 0,
 }));
 
-async function salesByPlace(F = {}) {
-  const { cte, params, method } = await profitCte(F);
-  const rows = await all(`${cte}
-    SELECT COALESCE(NULLIF(place,''),'(غير محدد)') place,
-           COUNT(*)::int lines, COUNT(DISTINCT invoice_doc)::int docs,
-           COALESCE(SUM(value),0)::float value, COALESCE(SUM(qty),0)::float qty,
-           COALESCE(ABS(SUM(cost)),0)::float cost,
-           COUNT(*) FILTER (WHERE matched)::int matched_lines
-      FROM sp GROUP BY 1 ORDER BY ABS(COALESCE(SUM(value),0)) DESC`, params);
-  return withProfit(rows).map(r => ({ ...r, method }));
-}
 
-async function salesByItem(F = {}, limit = 50) {
-  const { cte, params } = await profitCte(F);
-  const rows = await all(`${cte}
-    SELECT item, MAX(item_desc) descr, MAX(place) place,
-           COUNT(*)::int lines,
-           COALESCE(SUM(value),0)::float value, COALESCE(SUM(qty),0)::float qty,
-           COALESCE(ABS(SUM(cost)),0)::float cost
-      FROM sp GROUP BY item ORDER BY ABS(COALESCE(SUM(value),0)) DESC LIMIT $${params.length + 1}`,
-    [...params, limit]);
-  return withProfit(rows);
-}
 
-async function salesByMonth(F = {}) {
-  const { cte, params } = await profitCte(F);
-  const rows = await all(`${cte}
-    SELECT SUBSTR(invoice_date,1,7) ym, COUNT(*)::int lines,
-           COALESCE(SUM(value),0)::float value, COALESCE(SUM(qty),0)::float qty,
-           COALESCE(ABS(SUM(cost)),0)::float cost
-      FROM sp GROUP BY 1 ORDER BY 1`, params);
-  return withProfit(rows);
-}
 
-async function salesByCustomer(F = {}, limit = 50) {
-  const { cte, params } = await profitCte(F);
-  const rows = await all(`${cte}
-    SELECT COALESCE(NULLIF(beneficiary,''),'(غير محدد)') customer, COUNT(*)::int lines,
-           COALESCE(SUM(value),0)::float value, COALESCE(SUM(tax),0)::float tax,
-           COALESCE(ABS(SUM(cost)),0)::float cost
-      FROM sp GROUP BY 1 ORDER BY ABS(COALESCE(SUM(value),0)) DESC LIMIT $${params.length + 1}`,
-    [...params, limit]);
-  return withProfit(rows);
-}
 
-async function salesByClass(F = {}) {
-  const { cte, params } = await profitCte(F);
-  const rows = await all(`${cte}
-    SELECT COALESCE(doc_class,'') || COALESCE(doc_status,'') combo, COUNT(*)::int lines,
-           COALESCE(SUM(value),0)::float value, COALESCE(SUM(qty),0)::float qty,
-           COALESCE(ABS(SUM(cost)),0)::float cost
-      FROM sp GROUP BY 1 ORDER BY ABS(COALESCE(SUM(value),0)) DESC`, params);
-  return withProfit(rows);
-}
 
 /* ================= تقارير المبيعات الثلاثة ================= */
 
@@ -457,58 +263,10 @@ async function salesDetail(F = {}, limit = 5000) {
   return withProfit(rows);
 }
 
-/* ٢) التقرير الإجمالي — نفس الأرقام مجمّعة على مستوى واحد يختاره المستخدم.
-     المستويات: item (الصنف) • place (المكان) • company (الشركة) • cust (العميل) */
-const TOTAL_LEVELS = {
-  item:    { label: 'الصنف',    col: 'sp.item',        key: 'COALESCE(NULLIF(sp.item,\'\'),\'(غير محدد)\')', withDescr: true },
-  place:   { label: 'المكان',   col: 'sp.place',       key: 'COALESCE(NULLIF(sp.place,\'\'),\'(غير محدد)\')' },
-  company: { label: 'الشركة',   col: 'sp.company_code',key: 'COALESCE(NULLIF(sp.company_code,\'\'),\'(بدون شركة)\')' },
-  cust:    { label: 'العميل',   col: 'sp.beneficiary', key: 'COALESCE(NULLIF(sp.beneficiary,\'\'),\'(غير محدد)\')' },
-};
-async function salesTotalBy(F = {}, by = 'item', limit = 2000) {
-  const lv = TOTAL_LEVELS[by] ? by : 'item';
-  const { cte, params } = await profitCte(F);
-  const lim = Math.max(1, Math.min(Number(limit) || 2000, 20000));
-  const rows = await all(`${cte}
-    SELECT ${TOTAL_LEVELS[lv].key} k${TOTAL_LEVELS[lv].withDescr
-      ? ', MAX(sp.item_desc) descr, MAX(NULLIF(sp.uom,\'\')) uom' : ''},
-           COUNT(*)::int lines, COUNT(DISTINCT invoice_doc)::int docs,
-           COALESCE(SUM(value),0)::float value, COALESCE(SUM(qty),0)::float qty,
-           COALESCE(SUM(tax),0)::float tax,
-           COALESCE(ABS(SUM(cost)),0)::float cost,
-           COUNT(*) FILTER (WHERE matched)::int matched_lines
-      FROM sp GROUP BY 1
-     ORDER BY ABS(COALESCE(SUM(value),0)) DESC LIMIT ${lim}`, params);
-  return { level: lv, label: TOTAL_LEVELS[lv].label, rows: withProfit(rows) };
-}
-
 /* ٣) تقرير الفترات — بالأشهر، وبالأعوام فوقها */
-async function salesByPeriod(F = {}) {
-  const { cte, params } = await profitCte(F);
-  const months = await all(`${cte}
-    SELECT SUBSTR(invoice_date,1,7) ym,
-           COUNT(*)::int lines, COUNT(DISTINCT invoice_doc)::int docs,
-           COALESCE(SUM(value),0)::float value, COALESCE(SUM(qty),0)::float qty,
-           COALESCE(ABS(SUM(cost)),0)::float cost
-      FROM sp WHERE invoice_date IS NOT NULL AND invoice_date <> ''
-     GROUP BY 1 ORDER BY 1`, params);
-  const years = await all(`${cte}
-    SELECT SUBSTR(invoice_date,1,4) ym,
-           COUNT(*)::int lines, COUNT(DISTINCT invoice_doc)::int docs,
-           COALESCE(SUM(value),0)::float value, COALESCE(SUM(qty),0)::float qty,
-           COALESCE(ABS(SUM(cost)),0)::float cost
-      FROM sp WHERE invoice_date IS NOT NULL AND invoice_date <> ''
-     GROUP BY 1 ORDER BY 1`, params);
-  return {
-    months: withProfit(months).map(r => ({ ...r, level: 'شهر' })),
-    years: withProfit(years).map(r => ({ ...r, level: 'سنة' })),
-  };
-}
-
-/* تقرير شاشة «المبيعات اليومية»: تفصيلي (كل الأبعاد) أو مجمّع على مستوى
-   صنف/مكان/شركة/عميل/مخزن — بدون أي بنود خاصة بالتكلفة (تكلفة/ربح/هامش/ضريبة)
-   مع إضافة «قيمة البيع للوحدة» = قيمة البيع ÷ الكمية */
-async function salesDaily(F = {}, by = 'detail', limit = 20000) {
+/* تقرير شاشة «المبيعات اليومية»: تفصيلي (كل الأبعاد) أو مجمّع على مستويين
+   (أساسي {صنف/مجموعة/تصنيف} × تفصيل {مكان/شركة/عميل/مخزن/وحدة}) */
+async function salesDaily(F = {}, by = 'detail', by2 = '', per = '', limit = 20000) {
   const lim = Math.max(1, Math.min(Number(limit) || 20000, 20000));
   const clean = rows => rows.map(r => {
     const qty = Number(r.qty) || 0, value = Number(r.value) || 0;
@@ -522,52 +280,61 @@ async function salesDaily(F = {}, by = 'detail', limit = 20000) {
     out.unit_value = qty ? Math.round((value / qty) * 100) / 100 : null;   // قيمة البيع للوحدة
     return out;
   });
-  if (by === 'detail') {
+  if (by === 'detail' && !by2) {
     return { level: 'detail', label: 'تفصيلي', rows: clean(await salesDetail(F, lim)) };
   }
-  if (by === 'item') {
-    const t = await salesTotalBy(F, 'item', lim);
-    return { level: 'item', label: t.label, rows: clean(t.rows) };
-  }
-  if (BREAKDOWN_GROUPS[by]) {
-    const t = await salesBreakdown(F, by, lim);
-    return { level: by, label: t.label, rows: clean(t.rows) };
-  }
-  return { level: 'detail', label: 'تفصيلي', rows: clean(await salesDetail(F, lim)) };
+  const t = await salesGroup(F, by === 'detail' ? 'item' : by, by2, per, lim);
+  return { level: t.level, label: t.label, by2: t.by2, label2: t.label2, per: t.per, perLabel: t.perLabel, rows: clean(t.rows) };
 }
-
-/* تفصيل الأصناف داخل كل مجموعة (مكان/شركة/عميل/مخزن):
-   كل مجموعة مع كل صنف بيع تحتها — يعطي دلالة فعلية بدل الإجمالي الواحد */
-const BREAKDOWN_GROUPS = {
-  place:   { label: 'المكان', expr: "COALESCE(NULLIF(sp.place,''),'(غير محدد)') g" },
-  company: { label: 'الشركة', expr: "COALESCE(NULLIF(sp.company_code,''),'(بدون شركة)') g" },
-  cust:    { label: 'العميل', expr: "COALESCE(NULLIF(sp.beneficiary,''),'(غير محدد)') g" },
-  storage: { label: 'المخزن', expr: "COALESCE(NULLIF(sp.storage_loc,''),'(بدون مخزن)') g" },
+/* ===== تجميع على مستوى الفترة: أسبوعي/شهري/ربع سنوي/نصف سنوي/3أرباع/سنوي =====
+/* التواريخ نصية (YYYY-MM-DD) — نشتق منها الفترة بمقاطع وإلا اليوم الأسبوعي ب(Date) */
+const PERIOD_EXPRS = {
+  week:    d => `TO_CHAR(TO_DATE(SUBSTR(${d},1,10),'YYYY-MM-DD'),'IYYY-IW')`,
+  month:   d => `SUBSTR(${d},1,7)`,
+  quarter: d => `SUBSTR(${d},1,4) || '-Q' || ((CAST(SUBSTR(${d},6,2) AS integer) + 2) / 3)`,
+  half:    d => `SUBSTR(${d},1,4) || '-H' || ((CAST(SUBSTR(${d},6,2) AS integer) + 5) / 6)`,
+  q3:      d => `SUBSTR(${d},1,4) || '-9M' || ((CAST(SUBSTR(${d},6,2) AS integer) + 8) / 9)`,
+  year:    d => `SUBSTR(${d},1,4)`,
 };
-async function salesBreakdown(F = {}, by = 'place', limit = 20000) {
-  const lv = BREAKDOWN_GROUPS[by] ? by : 'place';
-  const g = BREAKDOWN_GROUPS[lv];
+const PERIOD_LABELS = { week: 'أسبوعي', month: 'شهري', quarter: 'ربع سنوي', half: 'نصف سنوي', q3: '3 أرباع', year: 'سنوي' };
+
+/* تجميع المبيعات على مستويين: أساسي (صنف/مجموعة/تصنيف) x تفصيل (مكان/شركة/عميل/مخزن/وحدة) */
+const SALES_G1 = {
+  item: { label: 'الصنف', expr: "COALESCE(NULLIF(sp.item,''),'(بدون صنف)')" },
+  grp:  { label: 'المجموعة', expr: "COALESCE(NULLIF(sp.grp,''),'(غير محدد)')" },
+  cls:  { label: 'التصنيف', expr: "COALESCE(NULLIF(sp.cls,''),'(غير محدد)')" },
+};
+const SALES_G2 = {
+  place:   { label: 'المكان', expr: "COALESCE(NULLIF(sp.place,''),'(غير محدد)')" },
+  company: { label: 'الشركة', expr: "COALESCE(NULLIF(sp.company_name,''), sp.company_code, '(بدون شركة)')" },
+  cust:    { label: 'العميل', expr: "COALESCE(NULLIF(sp.beneficiary,''),'(غير محدد)')" },
+  storage: { label: 'المخزن', expr: "COALESCE(NULLIF(sp.storage_loc,''),'(بدون مخزن)')" },
+  unit:    { label: 'الوحدة', expr: "COALESCE(NULLIF(sp.unit_name,''), sp.unit_code, '(بدون وحدة)')" },
+};
+async function salesGroup(F = {}, by = 'item', by2 = '', per = '', limit = 20000) {
+  const g1 = SALES_G1[by] || SALES_G1.item;
+  const has2 = !!(by2 && SALES_G2[by2]);
+  const g2 = has2 ? SALES_G2[by2] : null;
+  const perE = per && PERIOD_EXPRS[per] ? PERIOD_EXPRS[per]("sp.invoice_date") : null;
   const { cte, params } = await profitCte(F);
   const lim = Math.max(1, Math.min(Number(limit) || 20000, 20000));
+  const itemExtra = by === 'item' ? `, MAX(sp.item_desc) item_desc, COALESCE(MAX(NULLIF(sp.uom,'')),'') uom` : '';
+  const sel = `${perE ? perE + ' per, ' : ''}${g1.expr} g1${has2 ? `, ${g2.expr} g2` : ''}${itemExtra}`;
+  const grp = [perE, g1.expr, has2 ? g2.expr : null].filter(Boolean).join(", ");
   const rows = await all(`${cte}
-    SELECT ${g.expr}, sp.item item, MAX(sp.item_desc) item_desc, MAX(NULLIF(sp.uom,'')) uom,
+    SELECT ${sel},
            COUNT(*)::int lines, COUNT(DISTINCT invoice_doc)::int docs,
            COALESCE(SUM(qty),0)::float qty, COALESCE(SUM(value),0)::float value,
            COALESCE(SUM(tax),0)::float tax,
            COALESCE(ABS(SUM(cost)),0)::float cost,
            COUNT(*) FILTER (WHERE matched)::int matched_lines
-      FROM sp GROUP BY 1, sp.item
-     ORDER BY 1 ASC, ABS(COALESCE(SUM(value),0)) DESC, sp.item
+      FROM sp GROUP BY ${grp}
+     ORDER BY 1 ASC, ABS(COALESCE(SUM(value),0)) DESC
      LIMIT ${lim}`, params);
-  return { level: lv, label: g.label, rows: withProfit(rows) };
+  return { level: by, label: g1.label, by2: has2 ? by2 : '', label2: has2 ? g2.label : '',
+    per: perE ? per : '', perLabel: perE ? PERIOD_LABELS[per] : '', rows: withProfit(rows) };
 }
 
-/* ================= تقارير مخازن (الحركات) الثلاث ================= */
-
-/* صفوف الحركات الحية بعد إسقاط الإلغاء — مطابقة دقيقة بترتيب زمني (FIFO) داخل
-   نفس المفتاح، وهي نفس نتيجة دلاء التسع في movementsReport: أول min(|أ|,|ب|)
-   صف يُلغى والبقية تبقى **بتاريخها** — فتقارير الفترة والتفصيل تبقى على نفس
-   الأرقام الصافية المعروضة في شاشة الحركات. */
 function movementsNetCte(wm) {
   const w = wm && wm.sql ? 'WHERE ' + wm.sql : '';
   return `
@@ -644,57 +411,42 @@ async function movementsDetail(F = {}, limit = 20000) {
      ORDER BY post_date, ABS(COALESCE(SUM(amount),0)) DESC, item
      LIMIT ${lim}`, wm.params);
 }
-
-/* ٢) إجمالي — تجميع على مستوى يختاره المستخدم، مفصل على الصنف (مجموعة × صنف) */
-const MOV_GROUPS = {
-  item:    { label: 'الصنف',      expr: "COALESCE(NULLIF(item,''),'(غير محدد)')" },
-  place:   { label: 'المكان',     expr: 'place' },
-  company: { label: 'الشركة',     expr: "COALESCE(NULLIF(company_code,''),'(بدون شركة)')" },
-  storage: { label: 'المخزن',     expr: 'storage_loc' },
-  unit:    { label: 'الوحدة',     expr: "COALESCE(NULLIF(unit_code,''),'(بدون وحدة)')" },
-  dir:     { label: 'التوجيه',    expr: 'direction' },
-  mtype:   { label: 'نوع الحركة', expr: "COALESCE(NULLIF(move_type,''),'(غير محدد)')" },
+/* تجميع الحركات على مستويين: أساسي (صنف/مجموعة/تصنيف) x تفصيل (مكان/شركة/وحدة/مخزن) */
+const MOV_G1 = {
+  item: { label: 'الصنف', expr: "COALESCE(NULLIF(net.item,''),'(بدون صنف)')" },
+  grp:  { label: 'المجموعة', expr: GRP_EXPR },
+  cls:  { label: 'التصنيف', expr: CLS_EXPR },
 };
-async function movementsBreakdown(F = {}, by = 'place', limit = 20000) {
+const MOV_G2 = {
+  place:   { label: 'المكان', expr: "COALESCE(NULLIF(net.place,''),'(غير محدد)')" },
+  company: { label: 'الشركة', expr: "COALESCE(NULLIF(l.company_name,''), net.company_code, '(بدون شركة)')" },
+  unit:    { label: 'الوحدة', expr: "COALESCE(NULLIF(l.unit_name,''), net.unit_code, '(بدون وحدة)')" },
+  storage: { label: 'المخزن', expr: "COALESCE(NULLIF(net.storage_loc,''),'(بدون مخزن)')" },
+};
+async function movementsGroup(F = {}, by = 'item', by2 = '', per = '', limit = 20000) {
   const wm = conds(F, MOV_COLS);
-  const lv = MOV_GROUPS[by] ? by : 'place';
-  const g = MOV_GROUPS[lv];
+  const g1 = MOV_G1[by] || MOV_G1.item;
+  const has2 = !!(by2 && MOV_G2[by2]);
+  const g2 = has2 ? MOV_G2[by2] : null;
+  const perE = per && PERIOD_EXPRS[per] ? PERIOD_EXPRS[per]('net.post_date') : null;
   const lim = Math.max(1, Math.min(Number(limit) || 20000, 20000));
-  const isItem = lv === 'item';
-  const sel = isItem
-    ? `item k, MAX(item_desc) descr, COALESCE(MAX(NULLIF(uom,'')),'') uom`
-    : `${g.expr} g, item, MAX(item_desc) descr, COALESCE(MAX(NULLIF(uom,'')),'') uom`;
-  const key = isItem ? 'item' : `${g.expr}, item`;
-  const ord = isItem ? 'ABS(COALESCE(SUM(amount),0)) DESC, item'
-                     : '1 ASC, ABS(COALESCE(SUM(amount),0)) DESC, item';
+  const needJoin = by === 'cls' || by === 'grp' || by2 === 'cls' || by2 === 'grp' || by2 === 'company' || by2 === 'unit';
+  const join = needJoin ? " LEFT JOIN items i ON i.code = net.item AND i.kind = 'item' LEFT JOIN locations l ON l.unit_code = net.unit_code" : '';
+  const itemExtra = by === 'item' ? `, MAX(net.item_desc) item_desc, COALESCE(MAX(NULLIF(net.uom,'')),'') uom` : '';
+  const sel = `${perE ? perE + ' per, ' : ''}${g1.expr} g1${has2 ? `, ${g2.expr} g2` : ''}${itemExtra}`;
+  const grp = [perE, g1.expr, has2 ? g2.expr : null].filter(Boolean).join(", ");
   const rows = await all(`${movementsNetCte(wm)}
     SELECT ${sel}, COUNT(*)::int lines,
            ${MN_IN_Q}::float in_qty, ${MN_OUT_Q}::float out_qty,
            ${MN_IN_V}::float in_val, ${MN_OUT_V}::float out_val,
-           SUM(qty)::float qty, SUM(amount)::float amount
-      FROM net GROUP BY ${key}
-     ORDER BY ${ord} LIMIT ${lim}`, wm.params);
-  return { level: lv, label: g.label, rows };
+           SUM(net.qty)::float qty, SUM(net.amount)::float amount
+      FROM net${join} GROUP BY ${grp}
+     ORDER BY 1 ASC, ABS(COALESCE(SUM(net.amount),0)) DESC
+     LIMIT ${lim}`, wm.params);
+  return { level: by, label: g1.label, by2: has2 ? by2 : '', label2: has2 ? g2.label : '',
+    per: perE ? per : '', perLabel: perE ? PERIOD_LABELS[per] : '', rows };
 }
 
-/* ٣) فترات — بالأشهر ثم بالأعوام */
-async function movementsPeriods(F = {}) {
-  const wm = conds(F, MOV_COLS);
-  const q = len => `${movementsNetCte(wm)}
-    SELECT SUBSTR(post_date,1,${len}) ym,
-           COUNT(*)::int lines, COUNT(DISTINCT item)::int items,
-           ${MN_IN_Q}::float in_qty, ${MN_OUT_Q}::float out_qty,
-           ${MN_IN_V}::float in_val, ${MN_OUT_V}::float out_val,
-           SUM(qty)::float qty, SUM(amount)::float amount
-      FROM net WHERE post_date IS NOT NULL AND post_date <> ''
-     GROUP BY 1 ORDER BY 1`;
-  const months = await all(q(7), wm.params);
-  const years = await all(q(4), wm.params);
-  return {
-    months: months.map(r => ({ ...r, level: 'شهر' })),
-    years: years.map(r => ({ ...r, level: 'سنة' })),
-  };
-}
 
 /* ================= تقارير أرصدة المخازن الثلاثة ================= */
 const INV_JOIN = `LEFT JOIN items i ON i.code = b.item AND i.kind = 'item'`;
@@ -725,109 +477,505 @@ async function inventoryDetail(F = {}, limit = 20000) {
      ORDER BY b.balance_date DESC, b.item
      LIMIT ${lim}`, wb.params);
 }
-
-/* ٢) إجمالي — تجميع على مستوى يختاره المستخدم، مفصل على الصنف (مجموعة × صنف) */
-async function inventoryBreakdown(F = {}, by = 'place', limit = 20000) {
+/* تجميع الأرصدة على مستويين: أساسي (صنف/مجموعة/تصنيف) x تفصيل (مكان/شركة/وحدة/مخزن) */
+const INV_G1 = {
+  item: { label: 'الصنف', expr: "COALESCE(NULLIF(b.item,''),'(بدون صنف)')" },
+  grp:  { label: 'المجموعة', expr: GRP_EXPR },
+  cls:  { label: 'التصنيف', expr: CLS_EXPR },
+};
+const INV_G2 = {
+  place:   { label: 'المكان', expr: "COALESCE(NULLIF(b.place,''),'(غير محدد)')" },
+  company: { label: 'الشركة', expr: "COALESCE(NULLIF(l.company_name,''), l.company_code, '(بدون شركة)')" },
+  unit:    { label: 'الوحدة', expr: "COALESCE(NULLIF(l.unit_name,''), b.unit_code, '(بدون وحدة)')" },
+  storage: { label: 'المخزن', expr: "COALESCE(NULLIF(b.storage_loc,''),'(بدون مخزن)')" },
+};
+async function inventoryGroup(F = {}, by = 'item', by2 = '', per = '', limit = 20000) {
   const wb = conds(F, BAL_COLS);
-  const lv = INV_GROUPS[by] ? by : 'place';
-  const g = INV_GROUPS[lv];
+  const g1 = INV_G1[by] || INV_G1.item;
+  const has2 = !!(by2 && INV_G2[by2]);
+  const g2 = has2 ? INV_G2[by2] : null;
+  const perE = per && PERIOD_EXPRS[per] ? PERIOD_EXPRS[per]('b.balance_date') : null;
   const lim = Math.max(1, Math.min(Number(limit) || 20000, 20000));
-  const isItem = lv === 'item';
-  const sel = isItem
-    ? `b.item k, MAX(b.item_desc) descr`
-    : `${g.expr} g, b.item, MAX(b.item_desc) descr`;
-  const key = isItem ? 'b.item' : `${g.expr}, b.item`;
-  const ord = isItem ? 'ABS(COALESCE(SUM(b.close_val),0)) DESC, b.item'
-                     : '1 ASC, ABS(COALESCE(SUM(b.close_val),0)) DESC, b.item';
+  const itemExtra = by === 'item' ? `, MAX(COALESCE(NULLIF(i.descr,''),NULLIF(b.item_desc,''))) item_desc, COALESCE(MAX(NULLIF(i.uom,'')),'') uom` : '';
+  const sel = `${perE ? perE + ' per, ' : ''}${g1.expr} g1${has2 ? `, ${g2.expr} g2` : ''}${itemExtra}`;
+  const grp = [perE, g1.expr, has2 ? g2.expr : null].filter(Boolean).join(", ");
   const rows = await all(`
     SELECT ${sel}, COUNT(*)::int lines, COUNT(DISTINCT b.balance_date)::int days,
            COALESCE(SUM(b.open_qty),0)::float open_qty,
            COALESCE(SUM(b.open_val),0)::float open_val,
            COALESCE(SUM(b.close_qty),0)::float close_qty,
            COALESCE(SUM(b.close_val),0)::float close_val
-      FROM balances b ${INV_JOIN}
+      FROM balances b
+      LEFT JOIN items i ON i.code = b.item
+      LEFT JOIN locations l ON l.unit_code = b.unit_code
       ${wb.sql ? 'WHERE ' + wb.sql : ''}
-     GROUP BY ${key}
-     ORDER BY ${ord} LIMIT ${lim}`, wb.params);
-  return { level: lv, label: g.label, rows };
+     GROUP BY ${grp}
+     ORDER BY 1 ASC, ABS(COALESCE(SUM(b.close_val),0)) DESC
+     LIMIT ${lim}`, wb.params);
+  return { level: by, label: g1.label, by2: has2 ? by2 : '', label2: has2 ? g2.label : '',
+    per: perE ? per : '', perLabel: perE ? PERIOD_LABELS[per] : '', rows };
 }
 
-/* ٣) فترات — افتتاحي أول تاريخ + ختامي آخر تاريخ لكل سنة ثم كل شهر */
-async function inventoryPeriods(F = {}) {
-  const wb = conds(F, BAL_COLS);
-  const w = wb.sql ? 'WHERE ' + wb.sql : '';
-  const q = len => `
-    WITH f AS (SELECT b.* FROM balances b ${w}),
-    fl AS (SELECT SUBSTR(balance_date,1,${len}) ym, MIN(balance_date) mn, MAX(balance_date) mx
-             FROM f WHERE balance_date IS NOT NULL AND balance_date <> '' GROUP BY 1)
-    SELECT fl.ym,
-      (SELECT COALESCE(SUM(f2.open_qty),0)::float  FROM f f2 WHERE f2.balance_date = fl.mn) open_qty,
-      (SELECT COALESCE(SUM(f2.open_val),0)::float  FROM f f2 WHERE f2.balance_date = fl.mn) open_val,
-      (SELECT COALESCE(SUM(f2.close_qty),0)::float FROM f f2 WHERE f2.balance_date = fl.mx) close_qty,
-      (SELECT COALESCE(SUM(f2.close_val),0)::float FROM f f2 WHERE f2.balance_date = fl.mx) close_val,
-      (SELECT COUNT(*)::int FROM f f2 WHERE f2.balance_date BETWEEN fl.mn AND fl.mx) lines,
-      (SELECT COUNT(DISTINCT f2.item)::int FROM f f2 WHERE f2.balance_date BETWEEN fl.mn AND fl.mx) items
-    FROM fl ORDER BY fl.ym`;
-  const months = await all(q(7), wb.params);
-  const years = await all(q(4), wb.params);
+
+/* ================= تقارير عقود الاستيراد ================= */
+/* فلاتر العقود: التاريخ على «تاريخ التعاقد»، والتصنيف على classification،
+   والبحث (item) على الرقم الداخلي. */
+const CON_REG_COLS = { date: 'contract_date', cls: 'classification', item: 'internal_no' };
+/* القيمة المتوقعة للعقد = الكمية × سعر CIF المتوقع */
+const CON_EXPVAL = '(COALESCE(quantity,0) * COALESCE(expected_cif_price,0))';
+/* مستويات التجميع (تُستخدم أساسياً وتفصيلياً) */
+const CON_REG_GROUPS = {
+  cls:   { label: 'التصنيف',       expr: "COALESCE(NULLIF(classification,''),'(غير محدد)')" },
+  sup:   { label: 'المورد',        expr: "COALESCE(NULLIF(supplier,''),'(غير محدد)')" },
+  src:   { label: 'المصدر',        expr: "COALESCE(NULLIF(source_country,''),'(غير محدد)')" },
+  cat:   { label: 'تصنيف التعاقد', expr: "COALESCE(NULLIF(contract_category,''),'(غير محدد)')" },
+  type:  { label: 'نوع التعاقد',   expr: "COALESCE(NULLIF(contract_type,''),'(غير محدد)')" },
+  stat:  { label: 'حالة العقد',    expr: "COALESCE(NULLIF(contract_status,''),'(غير محدد)')" },
+  ship:  { label: 'الشحن',         expr: "COALESCE(NULLIF(shipping_type,''),'(غير محدد)')" },
+  ccomp: { label: 'شركة التعاقد',  expr: "COALESCE(NULLIF(contracting_company,''),'(غير محدد)')" },
+};
+
+
+/* ================= صفحات Power BI لعقود الاستيراد (إعادة بناء) =================
+   تُبنى من جداول العقود المستوردة نفسها. المقاييس المحسوبة هنا مُعاد بناؤها من منطق
+   البيانات وأوراق «متابعة الربط/التحميل» في ملف Excel — لأن مقاييس DAX داخل ملف
+   الـPBIX مرتبطة بنموذج سحابي وغير قابلة للاستخراج محلياً. الأعمدة المباشرة
+   (الأسعار/الأرصدة/الكميات) مطابقة للمصدر تماماً، والمشتقة موضّحة صيغتها.
+   ============================================================================== */
+const AR_MONTH_NAMES = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+  'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+/** «2026-07-01» ← «يوليو 2026» (شهر عربى للعرض والتجميع) */
+function arMonthLabel(iso) {
+  const m = /^(\d{4})-(\d{2})/.exec(String(iso || ''));
+  return m ? `${AR_MONTH_NAMES[+m[2] - 1]} ${m[1]}` : '';
+}
+/** تطبيع اسم التصنيف: حذف التطويل والمسافات وتوحيد الهمزات/الياء/التاء المربوطة */
+function clsKey(s) {
+  return String(s || '')
+    .replace(/[\u0640\s]/g, '')
+    .replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه');
+}
+const numf = v => (v === null || v === undefined || v === '' ? 0 : Number(v) || 0);
+const r2 = n => Math.round(numf(n) * 100) / 100;
+
+/* ---------- محور التصنيف الموحَّد (Canonical Class Axis) ----------
+   الربط الصحيح بين عقود الاستيراد وبيانات النظام العام يجري **بالكود** لا بالاسم:
+     v_class.class_code = contract_items.code = items.group_code   (كلها 1001..5002)
+     contract_balances.item_code = نفس فضاء الأكواد
+   ويُبنى منه المحور الموحَّد مرة واحدة لكل استدعاء، فيُستخدم في كل تقارير العقود.
+   المصدر الأساسي هو العرض الموحّد «v_class» (كل أعمدة الـVIEW المتاحة):
+     class_code, class_name, direction, kind, class_erp_code, class_erp_desc,
+     erp_item_count, source.
+   فإن تعذّر الاستعلام أو رجع فارغاً → نرجع للبناء اليدوى (contract_items + items)
+   كاحتياط فقط (classAxisManual). نوع التصنيف (main/additive/other) يأتي من الـVIEW،
+   ويُشتق احتياطاً من «الاتجاه» (خامات/إضافات/أخرى) ثم من class_erp_code
+   (101/204=main، 102=additive). */
+function kindOfDirection(dir) {
+  const d = clsKey(dir);
+  if (d.includes('اضافات') || d.includes('ادويه')) return 'additive';
+  if (d.includes('خامات')) return 'main';
+  if (d.includes('اخري')) return 'other';
+  return null;
+}
+function kindOfClassCode(cc) {
+  const c = String(cc || '').trim();
+  if (c === '101' || c === '204') return 'main';    /* خامات / خامات معبأ */
+  if (c === '102') return 'additive';               /* إضافات */
+  if (c) return 'other';                            /* أخرى / علف / دشيشة / مركزات ... */
+  return null;
+}
+/* البناء اليدوي السابق — يُستخدم كاحتياط فقط إذا تعذّر قراءة v_class أو رجعت فارغة */
+async function classAxisManual() {
+  const [ci, grps, cls] = await Promise.all([
+    all(`SELECT code, name, direction FROM contract_items`),
+    /* صفوف المجموعة نفسها بلا تصنيف — فيُشتق تصنيفها من صفوف الأصناف (كما في master.js) */
+    all(`SELECT r.code, r.descr,
+                (SELECT MAX(i.class_code) FROM items i WHERE i.kind='item' AND i.group_code=r.code) class_code,
+                (SELECT MAX(i.class_desc) FROM items i WHERE i.kind='item' AND i.group_code=r.code) class_desc
+           FROM items r WHERE r.kind='group'`),
+    all(`SELECT code, descr FROM items WHERE kind='class'`),
+  ]);
+  const byCode = new Map();
+  const byKey = new Map();
+  const clsDesc = new Map(cls.map(c => [String(c.code).trim(), c.descr]));
+  const reg = (code, name, extra = {}) => {
+    const cd = String(code || '').trim();
+    if (!cd) return;
+    const cur = byCode.get(cd) || { code: cd };
+    if (name && !cur.name) cur.name = String(name).trim();
+    for (const k in extra) if (extra[k] !== undefined && extra[k] !== '') cur[k] = extra[k];
+    cur.kind = kindOfDirection(cur.direction) || kindOfClassCode(cur.class_code);
+    cur.class_desc = cur.class_desc || clsDesc.get(String(cur.class_code || '').trim()) || '';
+    byCode.set(cd, cur);
+  };
+  /* عقود الاستيراد أولاً (اسمها واتجاهها هو المرجع)، ثم مجموعات النظام (تصنيفها) */
+  for (const c of ci) reg(c.code, c.name, { direction: c.direction, ci: 1 });
+  for (const g of grps) reg(g.code, g.descr, { class_code: g.class_code, class_desc: g.class_desc, erp: 1 });
+  /* فهرسة الأسماء بعد اكتمالها */
+  for (const m of byCode.values()) { const k = clsKey(m.name); if (k && !byKey.has(k)) byKey.set(k, m.code); }
+  return { byCode, byKey, clsDesc };
+}
+/* المحور الأساسي: كل أعمدة العرض الموحّد v_class (الأساس التعاقدي + تكملة ERP)،
+   ثم الاحتياطى classAxisManual() عند تعذّر الاستعلام أو فراغ النتيجة. */
+async function classAxis() {
+  try {
+    const rows = await all(`SELECT class_code, class_name, direction, kind,
+                                   class_erp_code, class_erp_desc, erp_item_count, source
+                            FROM v_class
+                            ORDER BY CASE source WHEN 'both' THEN 0 WHEN 'contract' THEN 1 ELSE 2 END,
+                                     class_code`);
+    if (rows && rows.length) {
+      const byCode = new Map();
+      const byKey = new Map();
+      const byKeySrc = new Map();
+      const clsDesc = new Map();
+      const prio = s => (s === 'both' ? 0 : s === 'contract' ? 1 : 2);
+      for (const r of rows) {
+        const cd = String(r.class_code || '').trim();
+        if (!cd) continue;
+        const cc = String(r.class_erp_code || '').trim();
+        const meta = {
+          code: cd,
+          name: String(r.class_name || '').trim() || cd,
+          direction: r.direction || '',
+          class_code: cc,
+          class_desc: r.class_erp_desc || '',
+          kind: r.kind || kindOfDirection(r.direction) || kindOfClassCode(cc),
+          erp_item_count: numf(r.erp_item_count),
+          source: r.source || '',
+        };
+        if (cc && !clsDesc.has(cc)) clsDesc.set(cc, meta.class_desc);
+        byCode.set(cd, meta);
+        /* فهرس بالاسم للاحتياط فقط عند غياب الكود — وأولوية للصف التعاقدي
+           (both/contract) عند تشابه الأسماء مع مجموعة ERP (erp) */
+        const k = clsKey(meta.name);
+        if (k) {
+          const p = prio(meta.source);
+          const cur = byKeySrc.get(k);
+          if (cur === undefined || p < cur) { byKey.set(k, cd); byKeySrc.set(k, p); }
+        }
+      }
+      if (byCode.size) return { byCode, byKey, clsDesc };
+    }
+  } catch (e) {
+    console.log('classAxis: تعذّر قراءة v_class — البناء اليدوي الاحتياطى:', e.message);
+  }
+  return classAxisManual();
+}
+/** يحلّ كوداً أو اسماً إلى بيانات التصنيف المعيارية (كود + اسم + نوع).
+ *  الأفضلية دائماً لـ class_code: يُجرَّب الكود مباشرةً فى byCode أولاً،
+ *  ثم يُستخدم clsKey (فهرس الاسم) كاحتياط عند غياب الكود فقط. */
+function resolveClass(axis, codeOrName, fallbackName) {
+  const raw = String(codeOrName == null ? '' : codeOrName).trim();
+  let meta = raw ? axis.byCode.get(raw) : null;
+  if (!meta && raw) { const c = axis.byKey.get(clsKey(raw)); if (c) meta = axis.byCode.get(c); }
+  if (!meta && fallbackName) { const c = axis.byKey.get(clsKey(fallbackName)); if (c) meta = axis.byCode.get(c); }
+  if (meta) return meta;
+  return { code: '', name: (fallbackName || raw || '').trim(), direction: '', class_code: '', class_desc: '', kind: null };
+}
+
+/**
+ * بناء مجموعة «تغطية الخامات» لكل تصنيف من كل جداول العقود في خطوة واحدة.
+ * الربط بالكود (contract_items.code = items.group_code = contract_balances.item_code)، ثم
+ * تُجمَّع المقاييس من محرّك Power BI (src/pbix.js) ليطابق الناتج النموذج حرفياً.
+ */
+/* ==============================================================================
+   صفحات عقود الاستيراد — فوق «محرّك Power BI» (src/pbix.js)
+   كل رقم هنا يُحسب بنفس Power Query + DAX فى النموذج، فيطابق Power BI حرفياً.
+   فلتر التاريخ المفرد (بطاقة التاريخ أعلى الصفحة) يُطبَّق على «الارصدة» فقط،
+   ولا يُطبَّق على «تاريخ التعاقد» (تطبيقه هو سبب اختلاف الأرقام سابقاً).
+   المرجع: _handover/pbix-model/  (m-queries/ + MODEL.txt + DAX)
+   ============================================================================== */
+
+/** التاريخ المفرد المختار فى بطاقة التاريخ (from = to) أو '' */
+function pbixDate(F = {}) {
+  const f = F && F.from ? String(F.from).slice(0, 10) : '';
+  const t = F && F.to ? String(F.to).slice(0, 10) : '';
+  return (f && t && f === t) ? f : '';
+}
+
+/** يبني نموذج Power BI مع تطبيق فلتر التاريخ على الارصدة + فلاتر التصنيف/الصنف */
+async function pbixModel(F = {}) {
+  const model = await pbix.loadModel({ balanceDate: pbixDate(F) || null });
+  if (F.cls) {
+    const k = clsKey(F.cls);
+    model.reg = model.reg.filter(r => clsKey(r.classification) === k);
+    model.bal = model.bal.filter(b => clsKey(b.classification) === k);
+  }
+  if (F.item) {
+    const it = String(F.item).toLowerCase();
+    model.reg = model.reg.filter(r => String(r.internal_no).toLowerCase().includes(it));
+  }
+  model.regByNo = new Map();
+  for (const r of model.reg) if (r.internal_no) model.regByNo.set(r.internal_no, r);
+  return model;
+}
+
+/** تصنيفات الأرصدة مجمّعة على التصنيف (جانب المخزون — لا يعتمد على العقود) */
+function balClasses(model) {
+  const m = new Map();
+  for (const b of model.bal) {
+    const k = String(b.classification || '');
+    const o = m.get(k) || { total: 0, consumption: 0, contract_add: 0, port_add: 0, total_add: 0,
+      daily_rate: 0, price_usd: 0, market_price: 0, expenses: 0, days_enough: 0, enough_until: '' };
+    o.total += numf(b.total_balance);
+    o.consumption += numf(b.consumption);
+    o.contract_add += numf(b.contract_additions);
+    o.port_add += numf(b.port_additions);
+    o.total_add += numf(b.total_add);
+    o.daily_rate += numf(b.daily_rate);
+    o.price_usd = o.price_usd || numf(b.price_usd);
+    o.market_price = o.market_price || numf(b.market_price);
+    o.expenses = o.expenses || numf(b.expenses);
+    o.days_enough = o.days_enough || numf(b.days_enough);
+    o.enough_until = o.enough_until || b.enough_until || '';
+    m.set(k, o);
+  }
+  return m;
+}
+
+/**
+ * تغطية الخامات: صف لكل تصنيف تجمع مقاييس Power BI (النشطة) + جانبالارصدة.
+ * تُغذّي صفحات: ① الرئيسية ② موقف الربط ⑤ التكلفة ⑥ الخامات الرئيسية ⑦ الإضافات.
+ */
+async function contractCoverage(F = {}) {
+  const axis = await classAxis();
+  const model = await pbixModel(F);
+  const balMap = balClasses(model);
+
+  /* فلتر نوع التصنيف: "بورصة" (3 أصناف) / "خامات" / "اضافات" */
+  const kindFilter = F && F.kind ? String(F.kind).trim() : '';
+  console.log('DEBUG kindFilter:', JSON.stringify(kindFilter));
+
+  /* التصنيفات: تصنيفات العقود أولاً (بترتيب التسجيل) ثم أرصدة بلا عقود */
+  const order = [];
+  const seen = new Set();
+  for (const r of model.reg) { const c = String(r.classification || ''); if (c && !seen.has(c)) { seen.add(c); order.push(c); } }
+  for (const b of model.bal) { const c = String(b.classification || ''); if (c && !seen.has(c)) { seen.add(c); order.push(c); } }
+
+  const isMainName = cls => /ذره|صويا|بذره|دوارالشمس|دوارشمس|ديجياس|جلوتين|تفلبنجر|كسب|دريس|سيلاج/.test(clsKey(cls));
+
+  /* تطبيق فلتر نوع التصنيف */
+  let filteredOrder = order;
+  if (kindFilter === 'بورصة') {
+    filteredOrder = order.filter(cls => {
+      const k = clsKey(cls);
+      return k === 'الذره' || k === 'الصويا' || k === 'البذره';
+    });
+  } else if (kindFilter === 'خامات') {
+    // خامات = التصنيفات الرئيسية (main) حسب v_class.kind (لا نمط الاسم)
+    filteredOrder = order.filter(cls => resolveClass(axis, cls, cls).kind === 'main');
+  } else if (kindFilter === 'اضافات') {
+    // إضافات = التصنيفات الفرعية (additive) حسب v_class.kind (لا نمط الاسم)
+    filteredOrder = order.filter(cls => resolveClass(axis, cls, cls).kind === 'additive');
+  }
+
+  const zero = { total: 0, consumption: 0, contract_add: 0, port_add: 0, total_add: 0, daily_rate: 0,
+    price_usd: 0, market_price: 0, expenses: 0, days_enough: 0, enough_until: '' };
+
+  const rows = filteredOrder.map(cls => {
+    const ctx = model.reg.filter(r => String(r.classification) === cls);
+    const m = pbix.measures(model, ctx);
+    const meta = resolveClass(axis, cls, cls);
+    const b = balMap.get(cls) || zero;
+    const nos = new Set(ctx.map(r => r.internal_no));
+    const maxBourse = model.hedge.filter(h => nos.has(String(h.internal_no)))
+      .reduce((mx, h) => Math.max(mx, numf(h.exchange_price)), 0);
+    const premNum = ctx.reduce((s, r) => s + numf(r.avg_hedge_price) * numf(r.hedge_sum), 0);
+    const premDen = ctx.reduce((s, r) => s + numf(r.hedge_sum), 0);
+    const currentCost = b.price_usd * b.daily_rate + b.expenses;
+    return {
+      cls: cls || '(غير محدد)',
+      class_code: meta.code || meta.class_code || '',
+      class_desc: meta.class_desc || '',
+      direction: meta.direction || '',
+      contracts: new Set(ctx.map(r => r.internal_no).filter(Boolean)).size,
+      contracted: r2(m.qtyContract),
+      expected_value: r2(ctx.reduce((s, r) => s + numf(r.required_value), 0)),
+      hedged: r2(ctx.reduce((s, r) => s + numf(r.hedge_sum), 0)),
+      remaining_open: r2(m.remaining),
+      paid: r2(m.paidActive),
+      released: r2(m.releasedActive),
+      paid_unpriced: r2(m.paidNoPricing),
+      paid_not_opened: r2(m.paidUnopened),
+      sold: r2(m.soldActive),
+      balance: r2(m.totalBalance),
+      factory: r2(m.factory),
+      port: r2(m.portBalance),
+      coverage_balance: r2(m.coverage),
+      position: r2(m.totalBalance),
+      consumption: r2(m.consumption),
+      contract_additions: r2(b.contract_add),
+      port_additions: r2(b.port_add),
+      items_total: r2(b.total_add),
+      balance_raw: r2(b.total),
+      available_days: r2(m.availableDays),
+      total_days: r2(m.totalDays),
+      /* متوسط مرجّح لبريم الربط (عرض فقط — المقاييس المعتمدة تأتى من المحرّك) */
+      net_premium: r2(premDen ? premNum / premDen : 0),
+      max_bourse: r2(maxBourse),
+      days_enough: r2(b.days_enough),
+      enough_until: b.enough_until || '',
+      daily_rate: r2(b.daily_rate),
+      price_usd: r2(b.price_usd),
+      current_cost: r2(currentCost),
+      market_price: r2(b.market_price),
+      diff: r2(b.market_price - currentCost),
+      kind: meta.kind || null,
+    };
+  });
+  return { rows };
+}
+
+/* صفحة ① الصفحة الرئيسية — بطاقات مؤشرات Power BI (مباشرة من المحرّك) */
+async function contractPbixCards(F = {}) {
+  const model = await pbixModel(F);
+  const m = pbix.measures(model, null);
+  /* رصيد التغطية للذرة/الصويا/البذرة بالمطابقة الحرفية كما فى DAX:
+     «الذرة» بلا تطويل لا تطابق شيئاً → BLANK ≥ 0 → LONG، تماماً كـ Power BI */
+  const cov = name => numf(pbix.coreMeasures(model,
+    model.reg.filter(r => String(r.classification) === name)).coverage);
+  const arrow = v => (v >= 0 ? 'LONG' : 'SHORT');
   return {
-    months: months.map(r => ({ ...r, level: 'شهر' })),
-    years: years.map(r => ({ ...r, level: 'سنة' })),
+    hedge_position: 'الذرة ' + arrow(cov('الذرة')) +
+      '\nالصويا ' + arrow(cov('الصويا')) +
+      '\nالبذرة ' + arrow(cov('البذرة')),
+    /* لون موقف الربط من نفس قياس Power BI */
+    hedge_color: m.hedge_color,
+    /* الريت اليومى: سعر الإغلاق من بنك مصر فى البورصة للتاريخ المحدد فى فلتر التاريخ */
+    daily_rate_sum: await (async () => {
+      const f = F && F.from ? String(F.from).slice(0, 10) : '';
+      const t = F && F.to ? String(F.to).slice(0, 10) : '';
+      const from = f || '1900-01-01';
+      const to = t || '2100-01-01';
+      const rows = await all(`SELECT usd_rate FROM borse WHERE usd_rate IS NOT NULL AND borse_date >= $1 AND borse_date <= $2 ORDER BY borse_date DESC, id DESC LIMIT 1`, [from, to]);
+      return rows && rows[0] ? r2(rows[0].usd_rate) : 0;
+    })(),
+    /* عدد مراكب الذرة = COUNTROWS(تسجيل_العقود) للذرة غير FINISH وغير انتهاء التفريغ */
+    corn_vessels: numf(m.activeCornCount),
+    /* قيمة المطلوب سداده = Sum of قيمة المطلوب سداده */
+    docs_value: r2(m.sumRequiredValue),
   };
 }
 
-async function costByMonth(F = {}) {
-  const cw = await costWhere();
-  const wm = conds(F, MOV_COLS);
-  return all(`
-    SELECT SUBSTR(m.post_date,1,7) ym, ABS(SUM(m.amount))::float cost, COUNT(*)::int lines
-    FROM movements m WHERE ${cw} AND m.post_date IS NOT NULL${wm.sql ? ' AND ' + wm.sql : ''}
-    GROUP BY 1 ORDER BY 1`, wm.params);
+/* صفحة ② موقف ربط الخامات — تصنيف × مقاييس الربط */
+async function contractHedgePosition(F = {}) {
+  const cov = await contractCoverage(F);
+  return cov.rows.map(r => ({
+    cls: r.cls, paid_unpriced: r.paid_unpriced, remaining_open: r.remaining_open,
+    factory: r.factory, coverage_balance: r.coverage_balance, position: r.position,
+    contracts: r.contracts, days_enough: r.days_enough, hedged: r.hedged, contracted: r.contracted,
+  })).sort((a, b) => Math.abs(b.contracted) - Math.abs(a.contracted));
 }
+
+/* صفحة ③ تقرير مراكب الذرة — تفصيل + ملخص + بطاقات (من محرّك Power BI) */
+async function contractCornVessels(F = {}) {
+  const model = await pbixModel(F);
+  const corn = model.reg.filter(r => clsKey(r.classification).includes('ذره'));
+
+  const rows = corn.map(r => {
+    const priced = numf(r.hedge_sum) > 0;
+    const paid = numf(r.pay_sum) > 0;
+    return {
+      source: r.source || '', supplier: r.supplier || '',
+      quantity: r2(r.quantity), shipping: r.shipping_type || '', shipping_value: r2(r.shipping_value),
+      pricing_status: priced ? 'مسعر' : 'بدون تسعير', cif: r2(r.expected_cif_price),
+      vessel: r.vessel || '', payment_status: paid ? 'مسدد' : 'بدون سداد',
+      expected_arrival: r.expected_arrival || '', vessel_status: r.vessel_status || '',
+      net_premium: r2(pbix.netPremium(model, r)), arrival_month: r.month_ar || arMonthLabel(r.expected_arrival),
+      max_bourse: r2(numf(r.avg_exchange)), final_net_premium: r2(pbix.finalNetPremium(model, r)),
+    };
+  }).sort((a, b) => (a.expected_arrival < b.expected_arrival ? 1 : -1));
+
+  const bySource = new Map();
+  rows.forEach(r => {
+    const o = bySource.get(r.source) || { source: r.source, qty: 0, vessels: new Set() };
+    o.qty += r.quantity; if (r.vessel) o.vessels.add(r.vessel);
+    bySource.set(r.source, o);
+  });
+  const summary = [...bySource.values()].map(o => ({ source: o.source, qty: r2(o.qty), vessels: o.vessels.size }));
+  const allVessels = new Set(rows.map(r => r.vessel).filter(Boolean));
+  const cards = {
+    corn_qty: r2(rows.reduce((s, r) => s + r.quantity, 0)),
+    corn_vessels: allVessels.size,
+    priced_qty: r2(rows.filter(r => r.pricing_status === 'مسعر').reduce((s, r) => s + r.quantity, 0)),
+    position: r2(rows.reduce((s, r) => s + r.quantity, 0) - rows.filter(r => r.payment_status === 'مسدد').reduce((s, r) => s + r.quantity, 0)),
+    priced_unpaid_qty: r2(rows.filter(r => r.pricing_status === 'مسعر' && r.payment_status !== 'مسدد').reduce((s, r) => s + r.quantity, 0)),
+  };
+  return { rows, summary, cards };
+}
+
+/* صفحة ④ تقرير قيمة المستندات — قيمة المطلوب سداده (من محرّك Power BI) */
+async function contractDocsValue(F = {}) {
+  const model = await pbixModel(F);
+  const rows = model.reg.map(r => ({
+    supplier: r.supplier || '', classification: r.classification || '',
+    expected_payment: r.expected_payment_date || '', status: r.contract_status || '',
+    to_pay_qty: r2(r.required_qty), cif_actual: r2(r.expected_cif_price),
+    /* قيمة المطلوب سداده = سعر CIF متوقع × كمية المطلوب سداده (خام) */
+    value: r2(r.required_value),
+    pay_month: arMonthLabel(r.expected_payment_date),
+  }));
+  const agg = (keyOf, keyName) => {
+    const m = new Map();
+    rows.forEach(r => {
+      const k = keyOf(r);
+      const o = m.get(k) || { key: k, value: 0, qty: 0, lines: 0 };
+      o.value += r.value; o.qty += r.to_pay_qty; o.lines += 1; m.set(k, o);
+    });
+    return [...m.values()].map(o => ({ [keyName]: o.key, value: r2(o.value), qty: r2(o.qty), lines: o.lines }))
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  };
+  const m = new Map();
+  rows.forEach(r => {
+    const k = r.classification || '(غير محدد)';
+    const o = m.get(k) || { cls: k, months: new Map(), total: 0 };
+    o.months.set(r.pay_month || '(غير محدد)', (o.months.get(r.pay_month || '(غير محدد)') || 0) + r.value);
+    o.total += r.value; m.set(k, o);
+  });
+  const byClassMonth = [...m.values()].map(o => ({
+    cls: o.cls, total: r2(o.total),
+    months: [...o.months.entries()].map(([month, value]) => ({ month, value: r2(value) }))
+      .sort((a, b) => a.month.localeCompare(b.month)),
+  })).sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+  return { rows, byClass: agg(r => r.classification || '(غير محدد)', 'cls'), byMonth: agg(r => r.pay_month || '(غير محدد)', 'month'), byClassMonth };
+}
+
+/* صفحة ⑤ تكلفة الخامات المسعرة — أسعار وأرصدة لكل تصنيف */
+async function contractPricedCosts(F = {}) {
+  const cov = await contractCoverage(F);
+  return cov.rows.filter(r => r.daily_rate || r.price_usd || r.market_price)
+    .map(r => ({ cls: r.cls, daily_rate: r.daily_rate, price_usd: r.price_usd, current_cost: r.current_cost, market_price: r.market_price, diff: r.diff }))
+    .sort((a, b) => Math.abs(b.current_cost) - Math.abs(a.current_cost));
+}
+
+/* صفحة ⑥ تغطية خامات رئيسية */
+async function contractMainCoverage(F = {}) {
+  const cov = await contractCoverage(F);
+  return cov.rows.filter(r => r.kind === 'main')
+    .map(r => ({
+      cls: r.cls, factory: r.factory, port: r.port, paid_not_opened: r.paid_not_opened,
+      to_pay: r.paid, contracted: r.contracted, sold: r.sold, balance: r.balance,
+      consumption: r.consumption, days_enough: r.days_enough, enough_until: r.enough_until,
+    })).sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
+}
+
+/* صفحة ⑦ تغطية الادوية والاضافات */
+async function contractAdditivesCoverage(F = {}) {
+  const cov = await contractCoverage(F);
+  return cov.rows.filter(r => r.kind === 'additive')
+    .map(r => ({
+      cls: r.cls, balance: r.balance_raw, port_additions: r.port_additions,
+      contract_additions: r.contract_additions, items_total: r.items_total,
+      consumption: r.consumption, days_enough: r.available_days || r.days_enough, enough_until: r.enough_until,
+    })).sort((a, b) => Math.abs(b.items_total) - Math.abs(a.items_total));
+}
+
 
 /* ---------- تحليل الحركات ---------- */
-async function movementsByDirection(F = {}) {
-  const wm = conds(F, MOV_COLS);
-  return all(`
-    SELECT COALESCE(NULLIF(m.direction,''),'(غير محدد)') direction,
-           COUNT(*)::int lines, SUM(m.qty)::float qty, SUM(m.amount)::float amount,
-           SUM(CASE WHEN m.amount > 0 THEN m.amount ELSE 0 END)::float inbound,
-           SUM(CASE WHEN m.amount < 0 THEN m.amount ELSE 0 END)::float outbound
-    FROM movements m ${wm.sql ? 'WHERE ' + wm.sql : ''}
-    GROUP BY 1 ORDER BY COUNT(*) DESC`, wm.params);
-}
 
-async function movementsByMonth(F = {}) {
-  const wm = conds(F, MOV_COLS);
-  return all(`
-    SELECT SUBSTR(m.post_date,1,7) ym,
-           SUM(CASE WHEN m.amount > 0 THEN m.amount ELSE 0 END)::float inbound,
-           SUM(CASE WHEN m.amount < 0 THEN m.amount ELSE 0 END)::float outbound,
-           SUM(m.amount)::float net, COUNT(*)::int lines
-    FROM movements m WHERE m.post_date IS NOT NULL${wm.sql ? ' AND ' + wm.sql : ''}
-    GROUP BY 1 ORDER BY 1`, wm.params);
-}
 
-async function movementsByPlace(F = {}) {
-  const wm = conds(F, MOV_COLS);
-  return all(`
-    SELECT COALESCE(NULLIF(m.place,''),'(غير محدد)') place, COUNT(*)::int lines,
-           SUM(CASE WHEN m.amount > 0 THEN m.amount ELSE 0 END)::float inbound,
-           SUM(CASE WHEN m.amount < 0 THEN m.amount ELSE 0 END)::float outbound,
-           SUM(m.amount)::float net
-    FROM movements m ${wm.sql ? 'WHERE ' + wm.sql : ''}
-    GROUP BY 1 ORDER BY COUNT(*) DESC`, wm.params);
-}
 
-async function topMovementItems(F = {}, limit = 30) {
-  const wm = conds(F, MOV_COLS);
-  return all(`
-    SELECT m.item, MAX(m.item_desc) descr, MAX(m.place) place,
-           COUNT(*)::int lines, SUM(m.qty)::float qty, SUM(m.amount)::float amount
-    FROM movements m ${wm.sql ? 'WHERE ' + wm.sql : ''}
-    GROUP BY m.item ORDER BY ABS(COALESCE(SUM(m.amount),0)) DESC LIMIT $${wm.params.length + 1}`,
-    [...wm.params, limit]);
-}
 
 /* ---------- تقرير حركات السيستم: إسقاط الإلغاءات + صافي كل توجيه ---------- */
 /**
@@ -891,55 +1039,54 @@ const V_NEG = '(l_mm + l_pm + l_0m)';        // قيمة بإشارة سالبة
 const LIVE_QTY = `(${Q_POS} * aq - ${Q_NEG} * aq)`;
 const LIVE_VAL = `(${V_POS} * aa - ${V_NEG} * aa)`;
 const LIVE_CNT = `(l_pp + l_mm + l_pm + l_mp + l_p0 + l_m0 + l_0p + l_0m + l_00)`;
-
-async function movementsReport(F = {}, limit = 2000) {
+async function movementsReport(F = {}, by = 'detail', by2 = '', per = '', limit = 2000) {
   const wm = conds(F, MOV_COLS);
   const cte = movementsLiveCte(wm);
   const lim = Math.max(1, Math.min(Number(limit) || 2000, 20000));
-  const directions = await all(`${cte}
-    SELECT direction,
-           SUM(${LIVE_CNT})::int lines,
-           SUM(${Q_POS} * aq)::float in_qty,
-           SUM(${V_POS} * aa)::float in_val,
-           SUM(${Q_NEG} * aq)::float out_qty,
-           SUM(${V_NEG} * aa)::float out_val,
-           SUM(${LIVE_QTY})::float qty,
-           SUM(${LIVE_VAL})::float amount
-      FROM live GROUP BY direction
-      ORDER BY SUM(${LIVE_CNT}) DESC`, wm.params);
-  const rows = await all(`${cte}
-    SELECT item, item_desc, uom, direction, storage_loc, place,
-           SUM(${LIVE_CNT})::int lines,
-           SUM(${LIVE_QTY})::float qty,
-           SUM(${LIVE_VAL})::float amount
-      FROM live
-     GROUP BY item, item_desc, uom, direction, storage_loc, place
-    HAVING SUM(${LIVE_CNT}) > 0
-     ORDER BY ABS(SUM(${LIVE_VAL})) DESC, direction, item
-     LIMIT ${lim}`, wm.params);
-  return { directions, rows, removedNote: 'أرقام صافية بعد إسقاط حركات الإلغاء' };
+  if (by === 'detail' && !by2 && !per) {
+    const rows = await all(`${cte}
+      SELECT item, item_desc, uom, direction, storage_loc, place,
+             SUM(${LIVE_CNT})::int lines, SUM(${LIVE_QTY})::float qty,
+             SUM(${LIVE_VAL})::float amount
+        FROM live
+       GROUP BY item, item_desc, uom, direction, storage_loc, place
+       HAVING SUM(${LIVE_CNT}) > 0
+       ORDER BY ABS(SUM(${LIVE_VAL})) DESC, direction, item
+       LIMIT ${lim}`, wm.params);
+    return { level: 'detail', label: 'تفصيلي', rows, removedNote: 'أرقام صافية بعد إسقاط حركات الإلغاء' };
+  }
+  const t = await movementsGroup(F, by === 'detail' ? 'item' : by, by2, per, lim);
+  return { level: t.level, label: t.label, by2: t.by2, label2: t.label2, per: t.per, perLabel: t.perLabel, rows: t.rows,
+    removedNote: 'أرقام صافية بعد إسقاط حركات الإلغاء' };
+}
+async function inventoryReport(F = {}, by = 'detail', by2 = '', per = '', limit = 20000) {
+  const wb = conds(F, BAL_COLS);
+  const lim = Math.max(1, Math.min(Number(limit) || 20000, 20000));
+  const base = () => `SELECT COALESCE(NULLIF(b.item,''),'(بدون صنف)') item,
+    MAX(COALESCE(NULLIF(i.descr,''),NULLIF(b.item_desc,''))) item_desc,
+    COALESCE(MAX(NULLIF(i.uom,'')),'') uom,
+    COALESCE(NULLIF(b.place,''),'(غير محدد)') place,
+    COALESCE(NULLIF(b.storage_loc,''),'(بدون مخزن)') storage_loc,
+    COALESCE(NULLIF(b.unit_code,''),'(بدون وحدة)') unit_code,
+    COALESCE(NULLIF(l.company_code,''),'(بدون شركة)') company_code,
+    SUM(b.open_qty)::float open_qty, SUM(b.close_qty)::float close_qty,
+    SUM(b.open_val)::float open_val, SUM(b.close_val)::float close_val,
+    MAX(${CLS_EXPR}) cls,
+    MAX(${GRP_EXPR}) grp
+  FROM balances b
+  LEFT JOIN items i ON i.code = b.item
+  LEFT JOIN locations l ON l.unit_code = b.unit_code
+  ${wb.sql ? 'WHERE ' + wb.sql : ''}
+  GROUP BY 1, 4, 5, 6, 7, i.class_desc, i.class_code, i.group_desc, i.group_code`;
+  if (by === 'detail' && !by2 && !per) {
+    const rows = await all(`${base()} ORDER BY ABS(SUM(b.close_val)) DESC LIMIT ${lim}`, wb.params);
+    return { level: 'detail', label: 'تفصيلي', rows };
+  }
+  const t = await inventoryGroup(F, by === 'detail' ? 'item' : by, by2, per, lim);
+  return { level: t.level, label: t.label, by2: t.by2, label2: t.label2, per: t.per, perLabel: t.perLabel, rows: t.rows };
 }
 
-/* ---------- توزيع المخزون ---------- */
-async function inventoryByPlace(F = {}) {
-  const wb = conds(F, BAL_COLS);
-  return all(`
-    SELECT COALESCE(NULLIF(b.place,''),'(غير محدد)') place,
-           SUM(b.open_qty)::float open_qty, SUM(b.close_qty)::float close_qty,
-           SUM(b.open_val)::float open_val, SUM(b.close_val)::float close_val
-    FROM balances b ${wb.sql ? 'WHERE ' + wb.sql : ''}
-    GROUP BY 1 ORDER BY COALESCE(SUM(b.close_val),0) DESC`, wb.params);
-}
 
-async function inventoryByClass(F = {}) {
-  const wb = conds(F, BAL_COLS);
-  return all(`
-    SELECT COALESCE(i.class_desc,'(غير مصنف)') cls,
-           SUM(b.close_val)::float close_val, SUM(b.close_qty)::float close_qty
-    FROM balances b LEFT JOIN items i ON i.code = b.item
-    ${wb.sql ? 'WHERE ' + wb.sql : ''}
-    GROUP BY 1 ORDER BY COALESCE(SUM(b.close_val),0) DESC`, wb.params);
-}
 
 /* ---------- قوائم الفلاتر: القيم المميزة لبُعد معين في جدول معين ---------- */
 /* المبيعات تُقرأ مع locations/items — فأبعاد الشركة والتصنيف والمجموعة تُشتق منهما */
@@ -974,9 +1121,11 @@ async function dateSpan() {
   const borse = await get('SELECT MIN(borse_date) a, MAX(borse_date) b FROM borse');
   const prices = await get('SELECT MIN(price_date) a, MAX(price_date) b FROM prices');
   const costs = await get('SELECT MIN(cost_date) a, MAX(cost_date) b FROM daily_costs');
+  const creg = await get("SELECT MIN(NULLIF(contract_date,'')) a, MAX(NULLIF(contract_date,'')) b FROM contract_registrations");
   return {
     movements: [mov.a, mov.b], sales: [sal.a, sal.b], balances: [bal.a, bal.b],
     borse: [borse.a, borse.b], prices: [prices.a, prices.b], costs: [costs.a, costs.b],
+    contracts: [creg.a, creg.b],
   };
 }
 
@@ -1011,26 +1160,43 @@ async function borseLatest() {
     FROM c GROUP BY 1 ORDER BY 1`);
 }
 
+/** نافذة زمنية للرسم/السجل: نطاق تاريخ صريح (من/إلى) إن حُدِّد، وإلا «آخر N يوم» */
+async function borseWindow(days, from, to) {
+  const span = await get('SELECT MIN(borse_date) a, MAX(borse_date) b FROM borse');
+  const min = span && span.a ? String(span.a) : null;
+  const max = span && span.b ? String(span.b) : null;
+  if (!min) return null;
+  let f = from ? String(from) : '';
+  let t = to ? String(to) : '';
+  /* بلا نطاق صريح → نرجع لحدّ «آخر N يوم» كما كان */
+  if (!f && !t) return { from: await borseCutoff(days), to: max };
+  /* طرف واحد فقط → نكمل الطرف الآخر من حدّي البيانات */
+  if (!f) f = min;
+  if (!t) t = max;
+  if (f > t) { const x = f; f = t; t = x; }
+  return { from: f, to: t };
+}
+
 /** سلسلة الإغلاق اليومي لكل صنف ضمن فترة */
-async function borseSeries({ days = 120, item = '' } = {}) {
-  const cutoff = await borseCutoff(days);
-  if (!cutoff) return [];
+async function borseSeries({ days = 120, item = '', from = '', to = '' } = {}) {
+  const w = await borseWindow(days, from, to);
+  if (!w || !w.from) return [];
   return all(`
     SELECT borse_date, item, item_code, close, usd_rate
     FROM borse
-    WHERE close IS NOT NULL AND borse_date >= $1
-      AND ($2 = '' OR item = $2 OR item_code = $2)
-    ORDER BY borse_date`, [cutoff, item || '']);
+    WHERE close IS NOT NULL AND borse_date >= $1 AND borse_date <= $2
+      AND ($3 = '' OR item = $3 OR item_code = $3)
+    ORDER BY borse_date`, [w.from, w.to, item || '']);
 }
 
 /** ريت الدولار اليومي المسجَّل */
-async function borseUsd(days = 120) {
-  const cutoff = await borseCutoff(days);
-  if (!cutoff) return [];
+async function borseUsd(days = 120, from = '', to = '') {
+  const w = await borseWindow(days, from, to);
+  if (!w || !w.from) return [];
   return all(`
     SELECT DISTINCT ON (borse_date) borse_date, usd_rate
-    FROM borse WHERE usd_rate IS NOT NULL AND borse_date >= $1
-    ORDER BY borse_date`, [cutoff]);
+    FROM borse WHERE usd_rate IS NOT NULL AND borse_date >= $1 AND borse_date <= $2
+    ORDER BY borse_date`, [w.from, w.to]);
 }
 
 /** ملخص الورقة + قائمة الأصناف للفلتر */
@@ -1055,21 +1221,59 @@ async function borseSummary() {
   };
 }
 
-/** سجل التسجيلات اليومية (آخر الصفوف كما في الملف) */
-async function borseRecent(limit = 60) {
-  return all(`SELECT * FROM borse ORDER BY borse_date DESC, id DESC LIMIT $1`, [limit]);
+/** سجل التسجيلات اليومية (آخر الصفوف كما في الملف) — ويحترم نطاق تاريخ إن حُدِّد */
+async function borseRecent(limit = 60, from = '', to = '') {
+  const f = from ? String(from) : '';
+  const t = to ? String(to) : '';
+  if (!f && !t) {
+    return all(`SELECT * FROM borse ORDER BY borse_date DESC, id DESC LIMIT $1`, [limit]);
+  }
+  if (f && !t) {
+    return all(`SELECT * FROM borse WHERE borse_date >= $1 ORDER BY borse_date DESC, id DESC LIMIT $2`, [f, limit]);
+  }
+  if (!f && t) {
+    return all(`SELECT * FROM borse WHERE borse_date <= $1 ORDER BY borse_date DESC, id DESC LIMIT $2`, [t, limit]);
+  }
+  return all(`SELECT * FROM borse WHERE borse_date >= $1 AND borse_date <= $2 ORDER BY borse_date DESC, id DESC LIMIT $3`, [f, t, limit]);
+}
+
+/* ================= تقرير موحّد: تسجيل العقود + تفصيلها في جدول واحد =================
+   قراءة من الجداول نفسها بالـ LEFT JOIN — لا تكرار ولا اشتقاق:
+   - «تجميعى» (افتراضي): صف لكل عقد (تسجيل) + عدد التفصيلات.
+   - «تفصيلي»: صف لكل بند تفصيلي (حقول التسجيل + حقول التفصيل). */
+async function contractUnified(F = {}) {
+  const w = conds(F, { date: 'r.contract_date', cls: 'r.classification', item: 'r.internal_no' });
+  const where = w.sql ? ' WHERE ' + w.sql : '';
+  if (F.mode === 'detail') {
+    return all(`SELECT r.internal_no, r.contract_date, r.classification, r.supplier,
+        r.source_country, r.contracting_company, r.contract_no, r.quantity,
+        r.expected_cif_price, r.expected_payment_date, r.contract_status,
+        d.internal_company, d.external_company, d.detail_quantity, d.vessel_name,
+        d.arrival_port, d.expected_arrival, d.operation_start, d.operation_end, d.vessel_status
+      FROM contract_registrations r
+      LEFT JOIN contract_details d ON d.internal_no = r.internal_no
+      ${where}
+      ORDER BY r.internal_no, d.id`, w.params);
+  }
+  return all(`SELECT r.internal_no, r.contract_date, r.classification, r.supplier,
+      r.source_country, r.contracting_company, r.contract_no, r.quantity,
+      r.expected_cif_price, r.expected_payment_date, r.contract_status,
+      (SELECT COUNT(*) FROM contract_details d WHERE d.internal_no = r.internal_no)::int AS detail_lines
+    FROM contract_registrations r ${where}
+    ORDER BY r.internal_no`, w.params);
 }
 
 module.exports = {
-  overview, reconcile, detectCostRule, costWhere, dateSpan,
+  detectCostRule, costWhere, dateSpan,
   detectCostLink, setCostLink, profitCte, COST_LINKS,
-  parseFilters, hasFilters, dims,
-  salesByPlace, salesByItem, salesByMonth, salesByCustomer, salesByClass, costByMonth,
-  salesDetail, salesTotalBy, salesByPeriod, TOTAL_LEVELS, salesDaily,
-  salesBreakdown, BREAKDOWN_GROUPS,
-  movementsByDirection, movementsByMonth, movementsByPlace, topMovementItems, movementsReport,
-  movementsDetail, movementsBreakdown, movementsPeriods, MOV_GROUPS,
-  inventoryByPlace, inventoryByClass,
-  inventoryDetail, inventoryBreakdown, inventoryPeriods, INV_GROUPS,
+  parseFilters, dims,
+  salesDetail, salesDaily, salesGroup,
+  movementsReport,
+  movementsDetail, movementsGroup,
+  inventoryReport,
+  inventoryDetail, inventoryGroup,
+  contractPbixCards, contractHedgePosition, contractCornVessels, contractDocsValue,
+  contractPricedCosts, contractMainCoverage, contractAdditivesCoverage,
+  contractUnified,
   borseLatest, borseSeries, borseUsd, borseSummary, borseRecent, borseCutoff,
 };

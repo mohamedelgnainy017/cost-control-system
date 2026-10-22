@@ -13,8 +13,8 @@ const COOKIE = 'ccs_token';
 
 const ROLES = {
   /* master = إضافة وتعديل البيانات الأساسية (الأصناف والمواقع وأنواع الحركات) */
-  admin:      { label: 'مدير',   perms: ['import', 'sync', 'quality', 'users', 'master'] },
-  accountant: { label: 'محاسب',  perms: ['import', 'sync', 'quality', 'master'] },
+  admin:      { label: 'مدير',   perms: ['import', 'sync', 'users', 'master'] },
+  accountant: { label: 'محاسب',  perms: ['import', 'sync', 'master'] },
   viewer:     { label: 'مشاهد',  perms: [] },
 };
 
@@ -58,7 +58,7 @@ async function createSession(user, ip, ua) {
 async function getSession(token) {
   if (!token || typeof token !== 'string' || token.length < 20) return null;
   return get(`
-    SELECT s.token, s.expires_at, u.id, u.username, u.full_name, u.role, u.active, u.must_change
+    SELECT s.token, s.expires_at, u.id, u.username, u.full_name, u.role, u.active, u.must_change, u.tabs
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token = $1 AND s.expires_at > now() AND u.active`, [token]);
@@ -87,7 +87,7 @@ function readCookie(req, name) {
 /* ---------- المستخدمون ---------- */
 async function listUsers() {
   return all(`
-    SELECT id, username, full_name, role, active, must_change,
+    SELECT id, username, full_name, role, active, must_change, tabs,
            to_char(last_login, 'YYYY-MM-DD HH24:MI') last_login,
            to_char(created_at, 'YYYY-MM-DD') created_at
     FROM users ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'accountant' THEN 1 ELSE 2 END, username`);

@@ -1,0 +1,12 @@
+{
+  // ============================================================
+  //  إصلاح عرض النص العربي داخل محرر VS Code (لهذا المشروع)
+  //  يُكمل الإعداد العام في: %APPDATA%\Code\User\settings.json
+  // ============================================================
+  "editor.fontFamily": "Consolas, 'Segoe UI', Tahoma, 'Simplified Arabic Fixed', 'Arial', monospace",
+  "editor.fontLigatures": true,
+  "terminal.integrated.fontFamily": "Consolas, 'Segoe UI', Tahoma, monospace",
+  "terminal.integrated.gpuAcceleration": "off",
+  "files.encoding": "utf8",
+  "files.autoGuessEncoding": true
+}

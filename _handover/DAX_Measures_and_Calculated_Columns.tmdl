@@ -1,0 +1,573 @@
+/// =============================================================================
+/// TMDL - Measures & Calculated Columns
+/// Source: pbix_ready2.pbix
+/// Compatible with: Power BI Project (.pbip), Tabular Editor 3, Analysis Services
+/// =============================================================================
+
+table 'الارصدة'
+
+	column 'كمية المتاح اضافات' = [اجمالى الرصيد]+[ميناء إضافات]
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'المتاح يكفى حتى' =
+		VAR DaysAvailable = [المتاح يكفى]
+		RETURN
+		    TODAY() + DaysAvailable
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'الاجمالى الكلى' = [كمية المتاح اضافات]+[تعاقدات إضافات]
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'الاجمالى يكفى حتى' =
+		VAR DaysAvailable = [الاجمالى يكفى]
+		RETURN
+		    TODAY() + DaysAvailable
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'المتاح يكفى' = DIVIDE([كمية المتاح اضافات],'الارصدة'[الاستهلاك])
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'الاجمالى يكفى' = DIVIDE([الاجمالى الكلى],'الارصدة'[الاستهلاك])
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'المتاح يكفى يوم  حتى تاريخ' = INT('الارصدة'[المتاح يكفى]) & " DAY  " & FORMAT('الارصدة'[المتاح يكفى حتى], "YYYY-MM-DD")
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'الاجمالى يكفى يوم  حتى تاريخ' = INT('الارصدة'[الاجمالى يكفى]) & " DAY  " & FORMAT('الارصدة'[الاجمالى يكفى حتى], "YYYY-MM-DD")
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'تكلفة حالية' = [الريت اليومى]*[السعر بالدولار]+[المصاريف]
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'الفرق' = [سعر السوق]-[تكلفة حالية]
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	measure 'كمية رصيد' = SUM([اجمالى الرصيد])
+
+
+table 'الافراج'
+
+	measure 'كمية افراج' = SUM([كمية الافراج])
+
+
+table 'التحميل'
+
+	measure 'كمية تحميل' = SUM([كمية التحميل])
+
+
+table 'الربط'
+
+	column 'الكمية التراكمية' =
+		CALCULATE(
+		    SUM('الربط'[كمية الربط]),
+		    FILTER(
+		        ALL('الربط'),
+		        'الربط'[الصنف] = EARLIER('الربط'[الصنف])
+		        &&
+		        'الربط'[Index] >= EARLIER('الربط'[Index])
+		    )
+		)
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'الكمية السابقة' = [الكمية التراكمية]-[كمية الربط]
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+
+table 'السداد'
+
+	measure 'كمية سداد' = SUM([كمية السداد])
+
+
+table 'بيع_خارجى'
+
+	measure 'كمية بيع' = SUM([كمية المبيعات])
+
+
+table 'تسجيل_العقود'
+
+	column 'وصول متوقع (Month)' = FORMAT('تسجيل_العقود'[وصول متوقع], "MM - yyyy")
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'سداد متوقع (Month)' = MONTH([متوقع سداد])
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'شهر عربى سداد متوقع' =
+		SWITCH(
+		    MONTH([متوقع سداد]),
+		    1, "يناير",
+		    2, "فبراير",
+		    3, "مارس",
+		    4, "أبريل",
+		    5, "مايو",
+		    6, "يونيو",
+		    7, "يوليو",
+		    8, "أغسطس",
+		    9, "سبتمبر",
+		    10, "أكتوبر",
+		    11, "نوفمبر",
+		    12, "ديسمبر"
+		) & " - " & FORMAT([متوقع سداد], "yy")
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'وصول متوقع (Month Index)' = MONTH([وصول متوقع])
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'وصول متوقع على الصنف' = YEAR('تسجيل_العقود'[وصول متوقع]) * 10000 + MONTH('تسجيل_العقود'[وصول متوقع]) * 100 + DAY('تسجيل_العقود'[وصول متوقع])&[AUTO]&[الرقم داخلي]
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'بداية تشغيل (Month Index)' = MONTH([بداية تشغيل])
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'بداية تشغيل (Month)' = FORMAT([بداية تشغيل], "MMM")
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'رقم الشهر الفريد وصول' =
+		IF(
+		    ISBLANK([وصول متوقع]),
+		    BLANK(),
+		    INT(FORMAT([وصول متوقع], "YYYYMM"))
+		)
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	column 'رقم الشهر الفريد سدلد' =
+		IF(
+		    ISBLANK([متوقع سداد]),
+		    BLANK(),
+		    INT(FORMAT([متوقع سداد], "YYYYMM"))
+		)
+		dataType: double
+		isDataTypeInferred: false
+		summarizeBy: none
+		type: calculated
+
+	measure 'Active ما تم دفعه وفتحه فعليا (السداد)' =
+		CALCULATE(
+		    [كمية سداد],
+		    'تسجيل_العقود'[موقف العقد] <> "FINISH"
+		)
+
+	measure 'Active ما تم سحبه' =
+		CALCULATE(
+		    [كمية تحميل],
+		    'تسجيل_العقود'[موقف العقد]  <> "FINISH"
+		)
+
+	measure 'Active المتبقى من الكمية المفتوحة' = [Active ما تم دفعه وفتحه فعليا (السداد)]-[Active ما تم سحبه]
+
+	measure 'Active رصيد المصانع' =
+		CALCULATE(
+		    [كمية رصيد],
+		    TREATAS(
+		        VALUES('تسجيل_العقود'[التصنيف]),
+		        'الارصدة'[التصنيف]
+		    )
+		)
+
+	measure 'Active الكميات المدفوعة بدون تسعير' = [Active ما تم دفعه وفتحه فعليا (السداد)]-[Active كمية ربط تقديرى]
+
+	measure 'Active رصيد التغطية' = ([Active المتبقى من الكمية المفتوحة]+[Active رصيد المصانع])-[Active الكميات المدفوعة بدون تسعير]
+
+	measure 'Active Position' = IF([Active رصيد التغطية]<0,"Position SHORT","Position LONG")
+
+	measure 'Active عدد الايام' =
+		CALCULATE(
+		    SUMX(
+		        'الارصدة',
+		        DIVIDE( CALCULATE([Active رصيد التغطية]), 'الارصدة'[الاستهلاك] )
+		    ),
+		    TREATAS( VALUES('تسجيل_العقود'[التصنيف]), 'الارصدة'[التصنيف] ),
+		    KEEPFILTERS( 'تسجيل_العقود'[موقف العقد] <> "FINISH" )
+		)
+
+	measure 'Active عدد العقود' =
+		CALCULATE(
+		    SUMX(
+		        'الارصدة',
+		        DIVIDE( CALCULATE([Active رصيد التغطية]), 'الارصدة'[اللوط] )
+		    ),
+		    TREATAS( VALUES('تسجيل_العقود'[التصنيف]), 'الارصدة'[التصنيف] ),
+		    KEEPFILTERS( 'تسجيل_العقود'[موقف العقد] <> "FINISH" )
+		)
+
+	measure 'Activeكمية مراكب الذرة' =
+		CALCULATE(
+		    [كمية التعاقد],
+		   'تسجيل_العقود'[موقف العقد] <> "FINISH",
+		    'تسجيل_العقود'[التصنيف] = "الــــــــــذرة"
+		)
+
+	measure 'كمية التعاقد' = SUM([الكمية])
+
+	measure 'Active عدد مراكب الذرة' =
+		CALCULATE(
+		    COUNTROWS('تسجيل_العقود'),
+		    'تسجيل_العقود'[موقف العقد] <> "FINISH",
+		    'تسجيل_العقود'[التصنيف] = "الــــــــــذرة"
+		)
+
+	measure 'Activeاجمالي كميات مسعرة الذرة' =
+		CALCULATE(
+		    [Active رصيد التغطية],
+		    'تسجيل_العقود'[التصنيف] = "الــــــــــذرة"
+		)
+
+	measure 'Active كميات مسعرة بدون سداد الذرة' =
+		CALCULATE(
+		    [Active الكميات المدفوعة بدون تسعير],
+		    'تسجيل_العقود'[التصنيف] = "الــــــــــذرة"
+		)
+
+	measure 'Active كمية المطلوب سداده' =
+		CALCULATE (
+		    SUM('تسجيل_العقود'[كمية المطلوب سداده]),
+		    'تسجيل_العقود'[حالة التجميع] <> "مستبعد",
+		    'تسجيل_العقود'[موقف العقد] <> "FINISH",
+		    FILTER (
+		        VALUES ( 'تسجيل_العقود' ),
+		        [كمية المطلوب سداده] > 200
+		    )
+		)
+
+	measure 'كمية مطلوب سدادها' = SUM([كمية المطلوب سداده])
+
+	measure 'Active سعر CIF المتوقع الفعلي' =
+		CALCULATE (
+		    SELECTEDVALUE('تسجيل_العقود'[سعر CIF متوقع]),
+		    'تسجيل_العقود'[حالة التجميع] <> "مستبعد",
+		    'تسجيل_العقود'[موقف العقد] <> "FINISH",
+		    FILTER ( VALUES ( 'تسجيل_العقود' ), [كمية المطلوب سداده] > 200 )
+		)
+
+	measure 'Active كمية ربط تقديرى' =
+		CALCULATE(
+		    [ربط تقديرى],
+		  'تسجيل_العقود'[موقف العقد] <> "FINISH"
+		)
+
+	measure 'ربط تقديرى' = SUM([كمية الربط تقديرى])
+
+	measure 'Active كمية مدفوعة وغير مفتوحة' =
+		CALCULATE(
+		   CALCULATE( [Active ما تم دفعه وفتحه فعليا (السداد)]-[Active ما تم الافراج عنه],
+		  'تسجيل_العقود'[موقف العقد] = "UNDER"
+		  || 'تسجيل_العقود'[موقف العقد] = "ACTIVE"
+		))
+
+	measure 'Active كمية مطلوب سدادها' =
+		CALCULATE(
+		    [كمية مطلوب سدادها],
+		    'تسجيل_العقود'[موقف العقد] IN { "UNDER", "ACTIVE" },
+		    'تسجيل_العقود'[موقف سداد] <> "منتظر"
+		)
+
+	measure 'Active كمية تعاقدات' =
+		CALCULATE(
+		    [كمية التعاقد],
+		  'تسجيل_العقود'[موقف العقد] = ""
+		)
+
+	measure 'Active رصيد متاح ميناء' =
+		IF(
+		    [Active كمية مدفوعة وغير مفتوحة] = [Active المتبقى من الكمية المفتوحة],
+		    BLANK(),
+		    [Active المتبقى من الكمية المفتوحة]
+		)-[Active كمية مدفوعة وغير مفتوحة]
+
+	measure 'Active اجمالى الرصيد' =
+		IF (
+		    ISBLANK ( [Active كمية مدفوعة وغير مفتوحة] ),
+		    0,
+		    [Active كمية مدفوعة وغير مفتوحة]
+		)
+		    + IF (
+		        ISBLANK ( [Active كمية مطلوب سدادها] ),
+		        0,
+		        [Active كمية مطلوب سدادها]
+		    )
+		    + IF ( ISBLANK ( [Active كمية تعاقدات] ), 0, [Active كمية تعاقدات] )
+		    + IF ( ISBLANK ( [Active رصيد متاح ميناء] ), 0, [Active رصيد متاح ميناء] )
+		    + IF ( ISBLANK ( [Active رصيد المصانع] ), 0, [Active رصيد المصانع] )-[Activeما تم بيعه]
+
+	measure 'Active كمية الاستهلاك' =
+		CALCULATE(
+		    SUM('الارصدة'[الاستهلاك]),
+		    TREATAS(
+		        VALUES('تسجيل_العقود'[التصنيف]),
+		        'الارصدة'[التصنيف]
+		    )
+		)
+
+	measure 'Active اجمالى المتاح' = [Active رصيد متاح ميناء]+[Active رصيد المصانع]
+
+	measure 'Active المتاح يكفى' = DIVIDE([Active اجمالى المتاح],[Active كمية الاستهلاك])
+
+	measure 'Active الاجمالى يكفى' = DIVIDE([Active اجمالى الرصيد],[Active كمية الاستهلاك])
+
+	measure 'Active ما تم الافراج عنه' =
+		CALCULATE(
+		    [كمية افراج],
+		  'تسجيل_العقود'[موقف العقد] <> "FINISH"
+		)
+
+	measure 'Activeما تم بيعه' =
+		CALCULATE(
+		    [كمية بيع],
+		  'تسجيل_العقود'[موقف العقد] <> "FINISH"
+		)
+
+	measure 'Sum of قيمة المطلوب سداده' =
+		VAR CurrentSum = SUM('تسجيل_العقود'[قيمة المطلوب سداده])
+		RETURN
+		IF(CurrentSum = 0, BLANK(), CurrentSum)
+
+	measure 'موقف ربط الخامات' =
+		VAR Corn =
+		    CALCULATE(
+		        [Active رصيد التغطية],
+		        'تسجيل_العقود'[التصنيف] = "الذرة"
+		    )
+		
+		VAR Soy =
+		    CALCULATE(
+		        [Active رصيد التغطية],
+		        'تسجيل_العقود'[التصنيف] = "الصويا"
+		    )
+		
+		VAR Seed =
+		    CALCULATE(
+		        [Active رصيد التغطية],
+		        'تسجيل_العقود'[التصنيف] = "البذرة"
+		    )
+		
+		VAR CornArrow =
+		    IF(Corn >= 0, "LO" , "SH")
+		
+		VAR SoyArrow =
+		    IF(Soy >= 0, "LO" , "SH")
+		
+		VAR SeedArrow =
+		    IF(Seed >= 0, "LO" , "SH")
+		
+		RETURN
+		    "الذرة " & CornArrow &
+		    "     الصويا " & SoyArrow &
+		    "     البذرة " & SeedArrow
+
+	measure 'موقف ربط الخامات لون' =
+		VAR Corn =
+		    CALCULATE(
+		        [Active رصيد التغطية],
+		        'تسجيل_العقود'[التصنيف] = "الذرة"
+		    )
+		
+		VAR Soy =
+		    CALCULATE(
+		        [Active رصيد التغطية],
+		        'تسجيل_العقود'[التصنيف] = "الصويا"
+		    )
+		
+		VAR Seed =
+		    CALCULATE(
+		        [Active رصيد التغطية],
+		        'تسجيل_العقود'[التصنيف] = "البذرة"
+		    )
+		
+		VAR ShortCount =
+		    IF(Corn < 0, 1, 0) +
+		    IF(Soy < 0, 1, 0) +
+		    IF(Seed < 0, 1, 0)
+		
+		RETURN
+		    IF(ShortCount > 0, "#F2ADAD","#B7D1C4")
+
+	measure 'مسمى كميات مسعرة' =
+		VAR CurrentValue = [Active كميات مسعرة بدون سداد الذرة]
+		RETURN
+		    SWITCH(
+		        TRUE(),
+		        ISBLANK(CurrentValue), "لا توجد بيانات",
+		        CurrentValue >= 0, "كميات مسددة بدون تسعير",
+		        CurrentValue < 0, "كميات مسعرة بدون سداد"
+		    )
+
+	measure 'صافي البريم' =
+		[صافي البريم النهائي]+ COALESCE(SELECTEDVALUE('تسجيل_العقود'[قيمة الشحن])/0.393685, 0
+		
+		
+		)
+
+	measure 'المتاح خامات يكفى حتى' =
+		VAR DaysCount = INT([Active المتاح يكفى])
+		RETURN
+		    TODAY() + DaysCount
+
+	measure 'الاجمالى خامات يكفى حتى' =
+		VAR DaysCount = INT([Active الاجمالى يكفى])
+		RETURN
+		    TODAY() + DaysCount
+
+	measure 'أعلى قيمة بورصة' =
+		COALESCE(
+		    -- الشرط الأول: جلب أكبر قيمة من جدول الرولينج
+		    CALCULATE( MAX('الرولينج'[بورصة الرولينج]) ),
+		
+		    -- الشرط الثاني: إذا كان الأول فارغاً، يجلب أكبر قيمة من جدول الربط
+		    CALCULATE( MAX('الربط'[بورصة الربط]) ),
+		
+		    -- الشرط الثالث: إذا كان الثاني فارغاً، يجلب أكبر قيمة من عمود بورصة التعاقد
+		    CALCULATE( MAX('تسجيل_العقود'[بورصة التعاقد]) )
+		)
+
+	measure 'لون اعلى قيمة بورصة' = MONTH([أعلى قيمة بورصة])
+
+	measure 'صافي البريم النهائي' =
+		VAR CurrentInternalNo = SELECTEDVALUE('تسجيل_العقود'[الرقم داخلي])
+		VAR CurrentCategory   = SELECTEDVALUE('تسجيل_العقود'[التصنيف])
+		VAR OriginalPremium   = SELECTEDVALUE('تسجيل_العقود'[بريم التعاقد])
+		
+		-- 1. جلب بريم الربط الأساسي بشكل معزول (إن وُجد)
+		VAR RabtPremium =
+		    CALCULATE(
+		        AVERAGE('تسجيل_العقود'[بريم التعاقد]),
+		        FILTER(
+		            ALL('تسجيل_العقود'),
+		            'تسجيل_العقود'[الرقم داخلي] = CurrentInternalNo && 'تسجيل_العقود'[التصنيف] = CurrentCategory
+		        )
+		    )
+		
+		-- 2. تحديد السعر الأساسي (الربط أولاً، وإلا التعاقد)
+		VAR BasePremium = IF(ISBLANK(RabtPremium), OriginalPremium, RabtPremium)
+		
+		-- 3. حساب المتوسط المرجح التراكمي لكل بورصة رولينج مستقلة وعزلها تماماً
+		VAR RollingCumulativeImpact =
+		    SUMX(
+		        CALCULATETABLE(
+		            DISTINCT('الرولينج'[بورصة الرولينج]),
+		            FILTER(
+		                ALL('الرولينج'),
+		                'الرولينج'[الرقم الداخلي] = CurrentInternalNo && 'الرولينج'[الصنف] = CurrentCategory
+		            )
+		        ),
+		        VAR CurrentBourse = 'الرولينج'[بورصة الرولينج]
+		        RETURN
+		        CALCULATE(
+		            DIVIDE(
+		                SUMX('الرولينج', 'الرولينج'[كمية الترويل] * 'الرولينج'[سعر الرولينج]),
+		                SUM('الرولينج'[كمية الترويل]),
+		                0
+		            ),
+		            FILTER(
+		                ALL('الرولينج'),
+		                'الرولينج'[الرقم الداخلي] = CurrentInternalNo &&
+		                'الرولينج'[الصنف] = CurrentCategory &&
+		                'الرولينج'[بورصة الرولينج] = CurrentBourse
+		            )
+		        )
+		    )
+		
+		RETURN
+		BasePremium + COALESCE(RollingCumulativeImpact, 0)
+
+	measure 'الاجمالى خامات يكفى يوم  حتى تاريخ' = INT('تسجيل_العقود'[Active الاجمالى يكفى]) & " DAY  " & FORMAT('تسجيل_العقود'[الاجمالى خامات يكفى حتى], "YYYY-MM-DD")
+
+	measure 'المتاح خامات يكفى يوم  حتى تاريخ' = INT('تسجيل_العقود'[Active المتاح يكفى]) & " DAY  " & FORMAT('تسجيل_العقود'[المتاح خامات يكفى حتى], "YYYY-MM-DD")
+
+	measure 'لون شهر الوصول' =
+		VAR CurrentDate = MAX([وصول متوقع])
+		VAR UniqueMonth = (YEAR(CurrentDate) * 12) + MONTH(CurrentDate)
+		VAR ColorIndex = MOD(UniqueMonth, 5)
+		RETURN
+		IF(
+		    ISBLANK(CurrentDate),
+		    BLANK(),
+		    SWITCH(
+		        ColorIndex,
+		        0, "#5DADE2", -- أزرق مائي واضح
+		            1, "#48C9B0", -- أخضر فيروزي مميز
+		            2, "#F4D03F", -- أصفر خردلي معتدل
+		            3, "#EB984E", -- برتقالي هادئ
+		            4, "#AF7AC5"  -- بنفسجي أوركيد مريح
+		    )
+		)
+
+	measure 'لون فترة السداد' =
+		VAR CurrentDate = MAX([متوقع سداد])
+		VAR UniqueMonth = (YEAR(CurrentDate) * 12) + MONTH(CurrentDate)
+		VAR ColorIndex = MOD(UniqueMonth, 5)
+		RETURN
+		IF(
+		    ISBLANK(CurrentDate) || CurrentDate = 0,
+		    BLANK(),
+		    FORMAT(
+		        SWITCH(
+		            ColorIndex,
+		            0, "#5DADE2", -- أزرق مائي واضح
+		            1, "#48C9B0", -- أخضر فيروزي مميز
+		            2, "#F4D03F", -- أصفر خردلي معتدل
+		            3, "#EB984E", -- برتقالي هادئ
+		            4, "#AF7AC5"  -- بنفسجي أوركيد مريح
+		        ),
+		        "General Number"
+		    )
+		)
+

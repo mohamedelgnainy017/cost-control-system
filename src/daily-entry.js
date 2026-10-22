@@ -76,8 +76,166 @@ const DATE_COL = {
   borse: 'borse_date', prices: 'price_date',
 };
 
+/* ---------------- الإدخال اليدوي لعقود الاستيراد ----------------
+   مسار العقود اليومي: تسجيل العقد ← تفصيلى العقد ← التحميل/الربط/الرول/الافراج ← السداد.
+   كل جدول يحمل «الرقم داخلي» كمفتاح الربط، ويُوسم الصف اليدوي source_file='manual'
+   حتى يبقى مستقلاً عن صفوف الملفات المستوردة (تُعدَّل وتُحذف من الشاشة اليدوية فقط).
+   الأعمدة مطابقة تماماً لأعمدة جدول الاستيراد في src/importer.js لتفادي أي انحراف. */
+const CONTRACT_SPEC = {
+  contract_registrations: {
+    date: 'contract_date',
+    required: ['contract_date', 'classification'],
+    dates: ['contract_date', 'expected_payment_date'],
+    nums: ['quantity', 'shipping_value', 'initial_price', 'expected_cif_price'],
+    cols: ['internal_no', 'contract_category', 'contract_type', 'contract_date', 'classification',
+      'supplier', 'source_country', 'contracting_company', 'contract_no', 'quantity', 'contract_premium',
+      'shipping_type', 'shipping_value', 'initial_price', 'contract_exchange', 'expected_payment_date',
+      'contract_status', 'expected_cif_price', 'notes', 'source_file'],
+  },
+  contract_details: {
+    date: 'expected_arrival',
+    required: ['internal_no'],
+    dates: ['expected_arrival', 'operation_start', 'operation_end'],
+    nums: ['detail_quantity'],
+    cols: ['internal_no', 'classification', 'source_country', 'external_company', 'internal_company',
+      'contract_no', 'detail_quantity', 'vessel_name', 'arrival_port', 'expected_arrival',
+      'operation_start', 'loading_duration', 'operation_end', 'contract_status', 'vessel_status',
+      'notes', 'source_file'],
+  },
+  contract_payments: {
+    date: 'payment_date',
+    required: ['internal_no', 'payment_date'],
+    dates: ['payment_date'],
+    nums: ['payment_quantity', 'payment_price', 'exchange_rate'],
+    cols: ['internal_no', 'payment_date', 'payment_company', 'item', 'supplier', 'contract_no',
+      'internal_company', 'payment_type', 'price_type', 'payment_status', 'payment_quantity',
+      'payment_price', 'exchange_rate', 'responsible_person', 'notes', 'source_file'],
+  },
+  contract_loading: {
+    date: 'loading_date',
+    required: ['internal_no', 'loading_date'],
+    dates: ['loading_date'],
+    nums: ['loading_quantity'],
+    cols: ['internal_no', 'loading_date', 'contract_no', 'item', 'vessel_name', 'loading_type',
+      'loading_quantity', 'notes', 'source_file'],
+  },
+  contract_hedge: {
+    date: 'hedge_date',
+    required: ['internal_no', 'hedge_date'],
+    dates: ['hedge_date'],
+    nums: ['contract_count', 'hedge_quantity', 'exchange_price', 'hedge_premium', 'hedge_price', 'hedge_value'],
+    cols: ['internal_no', 'hedge_date', 'supplier', 'contract_no', 'item', 'contract_exchange',
+      'contract_count', 'hedge_quantity', 'exchange_price', 'hedge_exchange', 'hedge_premium',
+      'hedge_price', 'hedge_value', 'notes', 'source_file'],
+  },
+  contract_roll: {
+    date: 'roll_date',
+    required: ['internal_no', 'roll_date'],
+    dates: ['roll_date'],
+    nums: ['roll_quantity', 'rolling_price'],
+    cols: ['internal_no', 'roll_date', 'contract_no', 'supplier', 'item', 'roll_quantity',
+      'contract_exchange', 'hedge_exchange', 'previous_exchange', 'rolling_exchange', 'rolling_price',
+      'notes', 'source_file'],
+  },
+  contract_release: {
+    date: 'release_date',
+    required: ['internal_no', 'release_date'],
+    dates: ['release_date'],
+    nums: ['release_quantity'],
+    cols: ['internal_no', 'release_date', 'contract_no', 'item', 'vessel_name', 'release_quantity',
+      'release_type', 'notes', 'source_file'],
+  },
+};
+for (const [cat, sp] of Object.entries(CONTRACT_SPEC)) { COLS[cat] = sp.cols; DATE_COL[cat] = sp.date; }
+
+/** أي عمود يُستخدم لفلتر «الصنف» — بعض جداول العقود بلا عمود item */
+const ITEM_COL = { contract_details: null, contract_registrations: null, contract_payments: 'item' };
+
+/* ---------------- توليد «الرقم داخلي» تلقائياً (نفس معادلة ورقة Excel) ----------------
+   <بادئة التصنيف><رقم الشهر MM>-<تسلسل 5 أرقام>  مثال: ذرة في أكتوبر ← CO10-00001
+   التسلسل = أكبر رقم سابق بنفس البادئة والشهر + 1 (يُحسب من صفوف التسجيل المخزَّنة). */
+const CLS_PREFIX = [
+  ['الذرة', 'CO'], ['الصويا', 'SO'], ['صويا 44', 'S4'], ['البذرة', 'SE'],
+  ['دى جى اس', 'DG'], ['دوار الشمس', 'SF'], ['جلوتين', 'GL'],
+];
+/** تطبيع اسم التصنيف: حذف التطويل والمسافات وتوحيد الهمزات/الياء/التاء المربوطة */
+function normCls(s) {
+  return String(s || '').replace(/[\u0640\s]/g, '')
+    .replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه');
+}
+/** بادئة التصنيف (XX لغير المعروف) */
+function contractPrefix(classification) {
+  const k = normCls(classification);
+  const hit = CLS_PREFIX.find(([name]) => normCls(name) === k);
+  return hit ? hit[1] : 'XX';
+}
+/** توحيد اسم التصنيف المُدخل إلى الصيغة المخزَّنة فعلاً (لمطابقة صفوف الاستيراد) */
+async function canonicalClassification(raw) {
+  const s = str(raw);
+  if (!s) return null;
+  const k = normCls(s);
+  const rows = await all(`SELECT classification FROM contract_registrations
+     WHERE classification IS NOT NULL AND classification <> '' GROUP BY classification`);
+  const hit = rows.find(r => normCls(r.classification) === k);
+  return hit ? hit.classification : s;
+}
+/** الرقم داخلي التالي: <بادئة><شهر>-<تسلسل 5> */
+async function generateInternalNo(classification, contractDate) {
+  const m = /^(\d{4})-(\d{2})/.exec(str(contractDate));
+  if (!m) return null;
+  const stamp = contractPrefix(classification) + m[2] + '-';
+  const r = await get(
+    `SELECT MAX(CAST(RIGHT(internal_no, 5) AS INTEGER)) AS mx
+       FROM contract_registrations
+      WHERE internal_no LIKE $1 || '%' AND RIGHT(internal_no, 5) ~ '^[0-9]+$'`, [stamp]);
+  const next = Number((r && r.mx) || 0) + 1;
+  return stamp + String(next).padStart(5, '0');
+}
+
+/* رسائل الحقول الإلزامية بالعربية */
+const REQ_LABEL = {
+  internal_no: 'الرقم داخلي', contract_date: 'تاريخ التعاقد', classification: 'التصنيف',
+  payment_date: 'تاريخ السداد', loading_date: 'تاريخ التحميل', hedge_date: 'تاريخ الربط',
+  roll_date: 'تاريخ الترويل', release_date: 'تاريخ الافراج',
+};
+
+/** بناء صف عقد يدوي من حقول الشاشة — التحقق من الإلزام وتحويل الأنواع/التواريخ */
+async function buildContractRow(cat, d) {
+  const sp = CONTRACT_SPEC[cat];
+  d = { ...(d || {}) };
+  /* توحيد التصنيف مع المخزَّن، ثم توليد «الرقم داخلي» لتسجيل عقد جديد بلا رقم */
+  if (cat === 'contract_registrations') {
+    if (sp.required.includes('classification')) {
+      const canon = await canonicalClassification(d.classification);
+      if (canon) d.classification = canon;
+    }
+    if (!str(d.internal_no)) {
+      const gen = await generateInternalNo(str(d.classification), str(d.contract_date));
+      if (gen) d.internal_no = gen;
+    }
+  }
+  for (const k of sp.required) {
+    if (!str(d[k])) throw new Error('حقل مطلوب: ' + (REQ_LABEL[k] || k));
+  }
+  const row = sp.cols.map(c => {
+    if (c === 'source_file') return MANUAL;
+    if (sp.dates.includes(c)) return str(d[c]) || null;
+    if (sp.nums.includes(c)) return num(d[c]);
+    return str(d[c]) || null;
+  });
+  /* قيمة الربط = كمية الربط × سعر الربط (إن لم تُدخَل صراحةً) — نفس منطق تقرير الربط */
+  if (cat === 'contract_hedge') {
+    const i = sp.cols.indexOf('hedge_value');
+    if ((row[i] === null || row[i] === 0) && row[sp.cols.indexOf('hedge_quantity')] && row[sp.cols.indexOf('hedge_price')]) {
+      row[i] = Math.round(row[sp.cols.indexOf('hedge_quantity')] * row[sp.cols.indexOf('hedge_price')] * 100) / 100;
+    }
+  }
+  return row;
+}
+
 /** يبني صف الإدراج/التحديث بعد التحقق — يُرجع مصفوفة القيم بترتيب COLS[cat] */
 async function buildRow(cat, d) {
+  if (CONTRACT_SPEC[cat]) return await buildContractRow(cat, d);
   if (cat === 'movements') {
     const item = str(d.item), date = str(d.post_date);
     if (!item) throw new Error('كود الصنف مطلوب');
@@ -180,7 +338,10 @@ async function list({ cat, limit = 300, from, to, item } = {}) {
   const p = [MANUAL];
   if (from) { p.push(str(from)); where.push(`${dateCol} >= $${p.length}`); }
   if (to) { p.push(str(to)); where.push(`${dateCol} <= $${p.length}`); }
-  if (item) { p.push('%' + str(item) + '%'); where.push(`item ILIKE $${p.length}`); }
+  if (item) {
+    const icol = Object.prototype.hasOwnProperty.call(ITEM_COL, cat) ? ITEM_COL[cat] : 'item';
+    if (icol && COLS[cat].includes(icol)) { p.push('%' + str(item) + '%'); where.push(`${icol} ILIKE $${p.length}`); }
+  }
   const lim = Math.max(1, Math.min(Number(limit) || 300, 2000));
   const rows = await all(
     `SELECT * FROM ${cat} WHERE ${where.join(' AND ')}
@@ -188,4 +349,5 @@ async function list({ cat, limit = 300, from, to, item } = {}) {
   return { cat, rows };
 }
 
-module.exports = { save, remove, list, COLS, MANUAL, BORSE_LABELS };
+module.exports = { save, remove, list, COLS, MANUAL, BORSE_LABELS,
+  contractPrefix, generateInternalNo, canonicalClassification, normCls };

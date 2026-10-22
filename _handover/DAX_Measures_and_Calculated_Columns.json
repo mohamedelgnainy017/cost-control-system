@@ -1,0 +1,471 @@
+{
+  "measures": [
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active ما تم دفعه وفتحه فعليا (السداد)",
+      "Expression": "CALCULATE(\n    [كمية سداد],\n    'تسجيل_العقود'[موقف العقد] <> \"FINISH\"\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active ما تم سحبه",
+      "Expression": "CALCULATE(\n    [كمية تحميل],\n    'تسجيل_العقود'[موقف العقد]  <> \"FINISH\"\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active المتبقى من الكمية المفتوحة",
+      "Expression": "[Active ما تم دفعه وفتحه فعليا (السداد)]-[Active ما تم سحبه]",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active رصيد المصانع",
+      "Expression": "CALCULATE(\n    [كمية رصيد],\n    TREATAS(\n        VALUES('تسجيل_العقود'[التصنيف]),\n        'الارصدة'[التصنيف]\n    )\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active الكميات المدفوعة بدون تسعير",
+      "Expression": "[Active ما تم دفعه وفتحه فعليا (السداد)]-[Active كمية ربط تقديرى]",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active رصيد التغطية",
+      "Expression": "([Active المتبقى من الكمية المفتوحة]+[Active رصيد المصانع])-[Active الكميات المدفوعة بدون تسعير]",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active Position",
+      "Expression": "IF([Active رصيد التغطية]<0,\"Position SHORT\",\"Position LONG\")",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active عدد الايام",
+      "Expression": "CALCULATE( \n    SUMX(\n        'الارصدة',\n        DIVIDE( CALCULATE([Active رصيد التغطية]), 'الارصدة'[الاستهلاك] )\n    ), \n    TREATAS( VALUES('تسجيل_العقود'[التصنيف]), 'الارصدة'[التصنيف] ),\n    KEEPFILTERS( 'تسجيل_العقود'[موقف العقد] <> \"FINISH\" ) \n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active عدد العقود",
+      "Expression": "CALCULATE( \n    SUMX(\n        'الارصدة',\n        DIVIDE( CALCULATE([Active رصيد التغطية]), 'الارصدة'[اللوط] )\n    ), \n    TREATAS( VALUES('تسجيل_العقود'[التصنيف]), 'الارصدة'[التصنيف] ),\n    KEEPFILTERS( 'تسجيل_العقود'[موقف العقد] <> \"FINISH\" ) \n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Activeكمية مراكب الذرة",
+      "Expression": "CALCULATE(\n    [كمية التعاقد], \n   'تسجيل_العقود'[موقف العقد] <> \"FINISH\",\n    'تسجيل_العقود'[التصنيف] = \"الــــــــــذرة\"\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "كمية التعاقد",
+      "Expression": "SUM([الكمية])",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active عدد مراكب الذرة",
+      "Expression": "CALCULATE(\n    COUNTROWS('تسجيل_العقود'), \n    'تسجيل_العقود'[موقف العقد] <> \"FINISH\",\n    'تسجيل_العقود'[التصنيف] = \"الــــــــــذرة\"\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Activeاجمالي كميات مسعرة الذرة",
+      "Expression": "CALCULATE(\n    [Active رصيد التغطية], \n    'تسجيل_العقود'[التصنيف] = \"الــــــــــذرة\"\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active كميات مسعرة بدون سداد الذرة",
+      "Expression": "CALCULATE(\n    [Active الكميات المدفوعة بدون تسعير], \n    'تسجيل_العقود'[التصنيف] = \"الــــــــــذرة\"\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active كمية المطلوب سداده",
+      "Expression": "\nCALCULATE (\n    SUM('تسجيل_العقود'[كمية المطلوب سداده]),\n    'تسجيل_العقود'[حالة التجميع] <> \"مستبعد\",\n    'تسجيل_العقود'[موقف العقد] <> \"FINISH\",\n    FILTER (\n        VALUES ( 'تسجيل_العقود' ),\n        [كمية المطلوب سداده] > 200\n    )\n)\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "كمية مطلوب سدادها",
+      "Expression": "SUM([كمية المطلوب سداده])",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active سعر CIF المتوقع الفعلي",
+      "Expression": "\nCALCULATE (\n    SELECTEDVALUE('تسجيل_العقود'[سعر CIF متوقع]),\n    'تسجيل_العقود'[حالة التجميع] <> \"مستبعد\",\n    'تسجيل_العقود'[موقف العقد] <> \"FINISH\",\n    FILTER ( VALUES ( 'تسجيل_العقود' ), [كمية المطلوب سداده] > 200 )\n)\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active كمية ربط تقديرى",
+      "Expression": "CALCULATE(\n    [ربط تقديرى],\n  'تسجيل_العقود'[موقف العقد] <> \"FINISH\"\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "ربط تقديرى",
+      "Expression": "SUM([كمية الربط تقديرى])",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active كمية مدفوعة وغير مفتوحة",
+      "Expression": "CALCULATE(\n   CALCULATE( [Active ما تم دفعه وفتحه فعليا (السداد)]-[Active ما تم الافراج عنه],\n  'تسجيل_العقود'[موقف العقد] = \"UNDER\"\n  || 'تسجيل_العقود'[موقف العقد] = \"ACTIVE\"\n))",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active كمية مطلوب سدادها",
+      "Expression": "\nCALCULATE(\n    [كمية مطلوب سدادها],\n    'تسجيل_العقود'[موقف العقد] IN { \"UNDER\", \"ACTIVE\" },\n    'تسجيل_العقود'[موقف سداد] <> \"منتظر\"\n)\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active كمية تعاقدات",
+      "Expression": "CALCULATE(\n    [كمية التعاقد],\n  'تسجيل_العقود'[موقف العقد] = \"\"\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active رصيد متاح ميناء",
+      "Expression": "IF(\n    [Active كمية مدفوعة وغير مفتوحة] = [Active المتبقى من الكمية المفتوحة],\n    BLANK(),\n    [Active المتبقى من الكمية المفتوحة]\n)-[Active كمية مدفوعة وغير مفتوحة]",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active اجمالى الرصيد",
+      "Expression": "IF (\n    ISBLANK ( [Active كمية مدفوعة وغير مفتوحة] ),\n    0,\n    [Active كمية مدفوعة وغير مفتوحة]\n)\n    + IF (\n        ISBLANK ( [Active كمية مطلوب سدادها] ),\n        0,\n        [Active كمية مطلوب سدادها]\n    )\n    + IF ( ISBLANK ( [Active كمية تعاقدات] ), 0, [Active كمية تعاقدات] )\n    + IF ( ISBLANK ( [Active رصيد متاح ميناء] ), 0, [Active رصيد متاح ميناء] )\n    + IF ( ISBLANK ( [Active رصيد المصانع] ), 0, [Active رصيد المصانع] )-[Activeما تم بيعه]",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active كمية الاستهلاك",
+      "Expression": "CALCULATE(\n    SUM('الارصدة'[الاستهلاك]),\n    TREATAS(\n        VALUES('تسجيل_العقود'[التصنيف]),\n        'الارصدة'[التصنيف]\n    )\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active اجمالى المتاح",
+      "Expression": "[Active رصيد متاح ميناء]+[Active رصيد المصانع]",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active المتاح يكفى",
+      "Expression": "DIVIDE([Active اجمالى المتاح],[Active كمية الاستهلاك])",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active الاجمالى يكفى",
+      "Expression": "DIVIDE([Active اجمالى الرصيد],[Active كمية الاستهلاك])",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Active ما تم الافراج عنه",
+      "Expression": "CALCULATE(\n    [كمية افراج],\n  'تسجيل_العقود'[موقف العقد] <> \"FINISH\"\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Activeما تم بيعه",
+      "Expression": "CALCULATE(\n    [كمية بيع],\n  'تسجيل_العقود'[موقف العقد] <> \"FINISH\"\n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "السداد",
+      "Name": "كمية سداد",
+      "Expression": "SUM([كمية السداد])",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "التحميل",
+      "Name": "كمية تحميل",
+      "Expression": "SUM([كمية التحميل])",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "الارصدة",
+      "Name": "كمية رصيد",
+      "Expression": "SUM([اجمالى الرصيد])",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "الافراج",
+      "Name": "كمية افراج",
+      "Expression": "SUM([كمية الافراج])",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "بيع_خارجى",
+      "Name": "كمية بيع",
+      "Expression": "SUM([كمية المبيعات])",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "Sum of قيمة المطلوب سداده",
+      "Expression": "\nVAR CurrentSum = SUM('تسجيل_العقود'[قيمة المطلوب سداده])\nRETURN\nIF(CurrentSum = 0, BLANK(), CurrentSum)\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "موقف ربط الخامات",
+      "Expression": "\nVAR Corn =\n    CALCULATE(\n        [Active رصيد التغطية],\n        'تسجيل_العقود'[التصنيف] = \"الذرة\"\n    )\n\nVAR Soy =\n    CALCULATE(\n        [Active رصيد التغطية],\n        'تسجيل_العقود'[التصنيف] = \"الصويا\"\n    )\n\nVAR Seed =\n    CALCULATE(\n        [Active رصيد التغطية],\n        'تسجيل_العقود'[التصنيف] = \"البذرة\"\n    )\n\nVAR CornArrow =\n    IF(Corn >= 0, \"LO\" , \"SH\")\n\nVAR SoyArrow =\n    IF(Soy >= 0, \"LO\" , \"SH\")\n\nVAR SeedArrow =\n    IF(Seed >= 0, \"LO\" , \"SH\")\n\nRETURN\n    \"الذرة \" & CornArrow &\n    \"     الصويا \" & SoyArrow &\n    \"     البذرة \" & SeedArrow",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "موقف ربط الخامات لون",
+      "Expression": "\nVAR Corn =\n    CALCULATE(\n        [Active رصيد التغطية],\n        'تسجيل_العقود'[التصنيف] = \"الذرة\"\n    )\n\nVAR Soy =\n    CALCULATE(\n        [Active رصيد التغطية],\n        'تسجيل_العقود'[التصنيف] = \"الصويا\"\n    )\n\nVAR Seed =\n    CALCULATE(\n        [Active رصيد التغطية],\n        'تسجيل_العقود'[التصنيف] = \"البذرة\"\n    )\n\nVAR ShortCount =\n    IF(Corn < 0, 1, 0) +\n    IF(Soy < 0, 1, 0) +\n    IF(Seed < 0, 1, 0)\n\nRETURN\n    IF(ShortCount > 0, \"#F2ADAD\",\"#B7D1C4\")",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "مسمى كميات مسعرة",
+      "Expression": "\nVAR CurrentValue = [Active كميات مسعرة بدون سداد الذرة]\nRETURN\n    SWITCH(\n        TRUE(),\n        ISBLANK(CurrentValue), \"لا توجد بيانات\",\n        CurrentValue >= 0, \"كميات مسددة بدون تسعير\",\n        CurrentValue < 0, \"كميات مسعرة بدون سداد\"\n    )\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "صافي البريم",
+      "Expression": "\n [صافي البريم النهائي]+ COALESCE(SELECTEDVALUE('تسجيل_العقود'[قيمة الشحن])/0.393685, 0\n    \n    \n)",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "المتاح خامات يكفى حتى",
+      "Expression": "\nVAR DaysCount = INT([Active المتاح يكفى])\nRETURN\n    TODAY() + DaysCount\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "الاجمالى خامات يكفى حتى",
+      "Expression": "\nVAR DaysCount = INT([Active الاجمالى يكفى])\nRETURN\n    TODAY() + DaysCount\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "أعلى قيمة بورصة",
+      "Expression": "\nCOALESCE(\n    -- الشرط الأول: جلب أكبر قيمة من جدول الرولينج\n    CALCULATE( MAX('الرولينج'[بورصة الرولينج]) ),\n    \n    -- الشرط الثاني: إذا كان الأول فارغاً، يجلب أكبر قيمة من جدول الربط\n    CALCULATE( MAX('الربط'[بورصة الربط]) ),\n    \n    -- الشرط الثالث: إذا كان الثاني فارغاً، يجلب أكبر قيمة من عمود بورصة التعاقد\n    CALCULATE( MAX('تسجيل_العقود'[بورصة التعاقد]) )\n)\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "لون اعلى قيمة بورصة",
+      "Expression": "MONTH([أعلى قيمة بورصة])\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "صافي البريم النهائي",
+      "Expression": "\nVAR CurrentInternalNo = SELECTEDVALUE('تسجيل_العقود'[الرقم داخلي])\nVAR CurrentCategory   = SELECTEDVALUE('تسجيل_العقود'[التصنيف])\nVAR OriginalPremium   = SELECTEDVALUE('تسجيل_العقود'[بريم التعاقد])\n\n-- 1. جلب بريم الربط الأساسي بشكل معزول (إن وُجد)\nVAR RabtPremium = \n    CALCULATE(\n        AVERAGE('تسجيل_العقود'[بريم التعاقد]), \n        FILTER(\n            ALL('تسجيل_العقود'), \n            'تسجيل_العقود'[الرقم داخلي] = CurrentInternalNo && 'تسجيل_العقود'[التصنيف] = CurrentCategory\n        )\n    )\n\n-- 2. تحديد السعر الأساسي (الربط أولاً، وإلا التعاقد)\nVAR BasePremium = IF(ISBLANK(RabtPremium), OriginalPremium, RabtPremium)\n\n-- 3. حساب المتوسط المرجح التراكمي لكل بورصة رولينج مستقلة وعزلها تماماً\nVAR RollingCumulativeImpact = \n    SUMX(\n        CALCULATETABLE(\n            DISTINCT('الرولينج'[بورصة الرولينج]),\n            FILTER(\n                ALL('الرولينج'),\n                'الرولينج'[الرقم الداخلي] = CurrentInternalNo && 'الرولينج'[الصنف] = CurrentCategory\n            )\n        ),\n        VAR CurrentBourse = 'الرولينج'[بورصة الرولينج]\n        RETURN\n        CALCULATE(\n            DIVIDE(\n                SUMX('الرولينج', 'الرولينج'[كمية الترويل] * 'الرولينج'[سعر الرولينج]),\n                SUM('الرولينج'[كمية الترويل]),\n                0\n            ),\n            FILTER(\n                ALL('الرولينج'),\n                'الرولينج'[الرقم الداخلي] = CurrentInternalNo && \n                'الرولينج'[الصنف] = CurrentCategory && \n                'الرولينج'[بورصة الرولينج] = CurrentBourse\n            )\n        )\n    )\n\nRETURN\nBasePremium + COALESCE(RollingCumulativeImpact, 0)\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "الاجمالى خامات يكفى يوم  حتى تاريخ",
+      "Expression": "\nINT('تسجيل_العقود'[Active الاجمالى يكفى]) & \" DAY  \" & FORMAT('تسجيل_العقود'[الاجمالى خامات يكفى حتى], \"YYYY-MM-DD\")",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "المتاح خامات يكفى يوم  حتى تاريخ",
+      "Expression": "\nINT('تسجيل_العقود'[Active المتاح يكفى]) & \" DAY  \" & FORMAT('تسجيل_العقود'[المتاح خامات يكفى حتى], \"YYYY-MM-DD\")",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "لون شهر الوصول",
+      "Expression": "\nVAR CurrentDate = MAX([وصول متوقع])\nVAR UniqueMonth = (YEAR(CurrentDate) * 12) + MONTH(CurrentDate)\nVAR ColorIndex = MOD(UniqueMonth, 5) \nRETURN\nIF(\n    ISBLANK(CurrentDate), \n    BLANK(),\n    SWITCH(\n        ColorIndex,\n        0, \"#5DADE2\", -- أزرق مائي واضح\n            1, \"#48C9B0\", -- أخضر فيروزي مميز\n            2, \"#F4D03F\", -- أصفر خردلي معتدل\n            3, \"#EB984E\", -- برتقالي هادئ\n            4, \"#AF7AC5\"  -- بنفسجي أوركيد مريح\n    )\n)\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "Name": "لون فترة السداد",
+      "Expression": "\nVAR CurrentDate = MAX([متوقع سداد])\nVAR UniqueMonth = (YEAR(CurrentDate) * 12) + MONTH(CurrentDate)\nVAR ColorIndex = MOD(UniqueMonth, 5) \nRETURN\nIF(\n    ISBLANK(CurrentDate) || CurrentDate = 0, \n    BLANK(),\n    FORMAT(\n        SWITCH(\n            ColorIndex,\n            0, \"#5DADE2\", -- أزرق مائي واضح\n            1, \"#48C9B0\", -- أخضر فيروزي مميز\n            2, \"#F4D03F\", -- أصفر خردلي معتدل\n            3, \"#EB984E\", -- برتقالي هادئ\n            4, \"#AF7AC5\"  -- بنفسجي أوركيد مريح\n        ),\n        \"General Number\"\n    )\n)\n",
+      "DisplayFolder": NaN,
+      "Description": NaN
+    }
+  ],
+  "calculated_columns": [
+    {
+      "TableName": "تسجيل_العقود",
+      "ColumnName": "وصول متوقع (Month)",
+      "Expression": "FORMAT('تسجيل_العقود'[وصول متوقع], \"MM - yyyy\")"
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "ColumnName": "سداد متوقع (Month)",
+      "Expression": "MONTH([متوقع سداد])"
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "ColumnName": "شهر عربى سداد متوقع",
+      "Expression": "SWITCH(\n    MONTH([متوقع سداد]),\n    1, \"يناير\",\n    2, \"فبراير\",\n    3, \"مارس\",\n    4, \"أبريل\",\n    5, \"مايو\",\n    6, \"يونيو\",\n    7, \"يوليو\",\n    8, \"أغسطس\",\n    9, \"سبتمبر\",\n    10, \"أكتوبر\",\n    11, \"نوفمبر\",\n    12, \"ديسمبر\"\n) & \" - \" & FORMAT([متوقع سداد], \"yy\")"
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "ColumnName": "وصول متوقع (Month Index)",
+      "Expression": "MONTH([وصول متوقع])"
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "ColumnName": "وصول متوقع على الصنف",
+      "Expression": " YEAR('تسجيل_العقود'[وصول متوقع]) * 10000 + MONTH('تسجيل_العقود'[وصول متوقع]) * 100 + DAY('تسجيل_العقود'[وصول متوقع])&[AUTO]&[الرقم داخلي]"
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "ColumnName": "بداية تشغيل (Month Index)",
+      "Expression": "MONTH([بداية تشغيل])"
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "ColumnName": "بداية تشغيل (Month)",
+      "Expression": "FORMAT([بداية تشغيل], \"MMM\")"
+    },
+    {
+      "TableName": "الربط",
+      "ColumnName": "الكمية التراكمية",
+      "Expression": "\nCALCULATE(\n    SUM('الربط'[كمية الربط]),\n    FILTER(\n        ALL('الربط'),\n        'الربط'[الصنف] = EARLIER('الربط'[الصنف])\n        &&\n        'الربط'[Index] >= EARLIER('الربط'[Index])\n    )\n)"
+    },
+    {
+      "TableName": "الربط",
+      "ColumnName": "الكمية السابقة",
+      "Expression": "[الكمية التراكمية]-[كمية الربط]"
+    },
+    {
+      "TableName": "الارصدة",
+      "ColumnName": "كمية المتاح اضافات",
+      "Expression": "[اجمالى الرصيد]+[ميناء إضافات]"
+    },
+    {
+      "TableName": "الارصدة",
+      "ColumnName": "المتاح يكفى حتى",
+      "Expression": "\nVAR DaysAvailable = [المتاح يكفى]\nRETURN\n    TODAY() + DaysAvailable"
+    },
+    {
+      "TableName": "الارصدة",
+      "ColumnName": "الاجمالى الكلى",
+      "Expression": "[كمية المتاح اضافات]+[تعاقدات إضافات]"
+    },
+    {
+      "TableName": "الارصدة",
+      "ColumnName": "الاجمالى يكفى حتى",
+      "Expression": "\nVAR DaysAvailable = [الاجمالى يكفى]\nRETURN\n    TODAY() + DaysAvailable"
+    },
+    {
+      "TableName": "الارصدة",
+      "ColumnName": "المتاح يكفى",
+      "Expression": "DIVIDE([كمية المتاح اضافات],'الارصدة'[الاستهلاك])"
+    },
+    {
+      "TableName": "الارصدة",
+      "ColumnName": "الاجمالى يكفى",
+      "Expression": "DIVIDE([الاجمالى الكلى],'الارصدة'[الاستهلاك])"
+    },
+    {
+      "TableName": "الارصدة",
+      "ColumnName": "المتاح يكفى يوم  حتى تاريخ",
+      "Expression": "\nINT('الارصدة'[المتاح يكفى]) & \" DAY  \" & FORMAT('الارصدة'[المتاح يكفى حتى], \"YYYY-MM-DD\")"
+    },
+    {
+      "TableName": "الارصدة",
+      "ColumnName": "الاجمالى يكفى يوم  حتى تاريخ",
+      "Expression": "\nINT('الارصدة'[الاجمالى يكفى]) & \" DAY  \" & FORMAT('الارصدة'[الاجمالى يكفى حتى], \"YYYY-MM-DD\")"
+    },
+    {
+      "TableName": "الارصدة",
+      "ColumnName": "تكلفة حالية",
+      "Expression": "[الريت اليومى]*[السعر بالدولار]+[المصاريف]"
+    },
+    {
+      "TableName": "الارصدة",
+      "ColumnName": "الفرق",
+      "Expression": "[سعر السوق]-[تكلفة حالية]"
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "ColumnName": "رقم الشهر الفريد وصول",
+      "Expression": "\nIF(\n    ISBLANK([وصول متوقع]), \n    BLANK(), \n    INT(FORMAT([وصول متوقع], \"YYYYMM\"))\n)\n"
+    },
+    {
+      "TableName": "تسجيل_العقود",
+      "ColumnName": "رقم الشهر الفريد سدلد",
+      "Expression": "\nIF(\n    ISBLANK([متوقع سداد]), \n    BLANK(), \n    INT(FORMAT([متوقع سداد], \"YYYYMM\"))\n)\n"
+    }
+  ],
+  "summary": {
+    "total_measures": 49,
+    "total_calculated_columns": 21,
+    "tables_in_measures": [
+      "الارصدة",
+      "الافراج",
+      "التحميل",
+      "السداد",
+      "بيع_خارجى",
+      "تسجيل_العقود"
+    ],
+    "tables_in_calculated_columns": [
+      "الارصدة",
+      "الربط",
+      "تسجيل_العقود"
+    ]
+  }
+}
