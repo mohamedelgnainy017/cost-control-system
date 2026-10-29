@@ -18,6 +18,7 @@ const onlyArg = args.find(a => a.startsWith('--only='));
 const only = onlyArg ? onlyArg.slice('--only='.length).split(',').map(s => s.trim()).filter(Boolean) : undefined;
 const asArg = args.find(a => a.startsWith('--as='));
 const asSource = asArg ? asArg.slice('--as='.length) : undefined;
+const dryRun = args.includes('--dry-run');
 const filePath = path.resolve(file);
 
 (async () => {
@@ -38,7 +39,7 @@ const filePath = path.resolve(file);
     await DB.init();   // تجهيز المخطط (جداول جديدة قد تُضاف لاحقاً)
     console.log('جاري الاستيراد...');
     const t0 = Date.now();
-    const res = await importFile(filePath, { password, only, asSource });
+    const res = await importFile(filePath, { password, only, asSource, dryRun });
     const ms = Date.now() - t0;
 
     // تحديث إحصاءات المُخطط بعد كل استيراد حتى يبقى المخطط ثابت الدقة
@@ -56,6 +57,17 @@ const filePath = path.resolve(file);
       else console.log(`  ✓ ${t.label}: ${t.rows} صف${t.skipped ? ` (تم تجاوز ${t.skipped})` : ''}`);
     }
     for (const i of res.issues) console.log(`  ! ${i.message}`);
+    if (res.itemSync) {
+      console.log('مزامنة الأصناف من الحركات:');
+      console.log(`  إجمالي مستخرج: ${res.itemSync.totalExtracted}`);
+      console.log(`  موجود مسبقاً: ${res.itemSync.alreadyExisting}`);
+      console.log(`  جديد: ${res.itemSync.newItems}`);
+      if (res.itemSync.newCodes && res.itemSync.newCodes.length) {
+        console.log('  أكواد جديدة: ' + res.itemSync.newCodes.join(', '));
+      }
+      if (res.itemSync.dryRun) console.log('  (وضع dry-run — لم يُكتب أي شيء)');
+      else if (res.itemSync.inserted !== undefined) console.log(`  تم إدراج: ${res.itemSync.inserted}`);
+    }
     try { process.stdout.write('#RESULT ' + JSON.stringify({ ok: true, ms, result: res }) + '\n'); } catch (_) {}
   } catch (e) {
     console.error('خطأ: ' + e.message);

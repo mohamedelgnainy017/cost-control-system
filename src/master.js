@@ -22,6 +22,7 @@
  * أنواع الحركات: النوع والوصف الموجودان حالياً + وصف السيستم والتصنيف (جديد).
  */
 const { all, get, run } = require('./db');
+const MV = require('./master-validation');
 
 const str = v => (v === null || v === undefined ? '' : String(v).trim());
 const CODE9 = /^\d{9}$/;           // كود الصنف: 9 خانات مكتملة
@@ -49,7 +50,7 @@ async function listItems({ origin, q, limit = 500, group, cls, groupFrom, groupT
   p.push(Math.min(Number(limit) || 500, 20000));
   return all(`
     SELECT i.code, i.descr, i.uom, i.group_code, i.group_desc, i.class_code, i.class_desc,
-           COALESCE(i.origin,'mine') origin, i.source_file
+           COALESCE(i.origin,'mine') origin, i.source_file, i.movement_sheet_date, i.movement_sheet_name, i.status
     FROM items i
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY i.code
@@ -62,14 +63,14 @@ async function listItems({ origin, q, limit = 500, group, cls, groupFrom, groupT
  * المجموعة والتصنيف يُختاران من قوائم الكتالوج (كود + اسم)؛
  * إذا أُدخلت مجموعة ولم يُدخل تصنيف → يُرث الصنف تصنيف مجموعته من باقي الأصناف.
  */
-async function saveItem({ code, descr, uom, groupCode, groupDescr, classCode, classDescr, editCode }) {
+async function saveItem({ code, descr, uom, groupCode, groupDescr, classCode, classDescr, status, editCode }) {
   code = str(code); descr = str(descr); uom = str(uom);
   groupCode = str(groupCode); groupDescr = str(groupDescr);
   classCode = str(classCode); classDescr = str(classDescr);
+  status = str(status);
   const editing = str(editCode);
-  if (!code) throw new Error('كود الصنف مطلوب');
-  if (!descr) throw new Error('اسم الصنف مطلوب');
-  if (!uom) throw new Error('وحدة القياس مطلوبة');
+  const mv = MV.validateItem({ code, descr, uom, editCode: editing });
+  if (!mv.ok) throw new Error(mv.errors[0]);
   const grCat = await get(`SELECT descr d FROM items WHERE kind='group' AND code=$1`, [groupCode]);
   if (grCat) groupDescr = grCat.d;
   const clCat = await get(`SELECT descr d FROM items WHERE kind='class' AND code=$1`, [classCode]);
@@ -96,9 +97,9 @@ async function saveItem({ code, descr, uom, groupCode, groupDescr, classCode, cl
       if (dup) throw new Error('الكود الجديد مستخدم لصنف آخر');
     }
     const r = await run(`UPDATE items SET code=$1, descr=$2, uom=$3,
-        group_code=$4, group_desc=$5, class_code=$6, class_desc=$7, origin='mine', updated_at=now()
-      WHERE code=$8`,
-      [code, descr, uom, groupCode, groupDescr, classCode, classDescr, editing]);
+        group_code=$4, group_desc=$5, class_code=$6, class_desc=$7, status=$8, origin='mine', updated_at=now()
+      WHERE code=$9 AND kind='item'`,
+      [code, descr, uom, groupCode, groupDescr, classCode, classDescr, status || null, editing]);
     if (!r.changes) throw new Error('الصنف غير موجود — حُذف أو تغيّر كوده');
     await ensureCats({ groupCode, groupDescr, classCode, classDescr });
     return { code };
@@ -106,10 +107,10 @@ async function saveItem({ code, descr, uom, groupCode, groupDescr, classCode, cl
   if (!CODE9.test(code)) throw new Error('كود الصنف يجب أن يكون 9 خانات مكتملة');
   const dup = await get('SELECT 1 x FROM items WHERE code = $1', [code]);
   if (dup) throw new Error('كود الصنف موجود بالفعل');
-  await run(`INSERT INTO items(code, descr, uom, group_code, group_desc, class_code, class_desc,
+  await run(`INSERT INTO items(code, descr, uom, group_code, group_desc, class_code, class_desc, status,
                                origin, updated_at)
-             VALUES($1,$2,$3,$4,$5,$6,$7,'mine',now())`,
-    [code, descr, uom, groupCode, groupDescr, classCode, classDescr]);
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,'mine',now())`,
+    [code, descr, uom, groupCode, groupDescr, classCode, classDescr, status || null]);
   await ensureCats({ groupCode, groupDescr, classCode, classDescr });
   return { code };
 }
@@ -152,6 +153,9 @@ async function saveGroup({ code, descr, editCode }) {
   code = str(code); descr = str(descr); const editing = str(editCode);
   if (!code) throw new Error('كود المجموعة مطلوب');
   if (!descr) throw new Error('اسم المجموعة مطلوب');
+  /* تعديل الكود كان يُدرج صفاً جديداً ويترك القديم (تكرار في القائمة) —
+     الكود مفتاح ثابت مرتبط بالأصناف والحركات، فيُعدَّل الاسم فقط. */
+  if (editing && editing !== code) throw new Error('لا يمكن تغيير كود المجموعة بعد الإنشاء — عدّل الاسم فقط');
   const dup = await get('SELECT kind FROM items WHERE code=$1', [code]);
   if (dup) {
     if (dup.kind === 'item') throw new Error('هذا الكود مستخدم لصنف فعلي — اختر كوداً آخر');
@@ -168,6 +172,9 @@ async function saveClass({ code, descr, editCode }) {
   code = str(code); descr = str(descr); const editing = str(editCode);
   if (!code) throw new Error('كود التصنيف مطلوب');
   if (!descr) throw new Error('اسم التصنيف مطلوب');
+  /* تعديل الكود كان يُدرج صفاً جديداً ويترك القديم (تكرار في القائمة) —
+     الكود مفتاح ثابت مرتبط بالأصناف والحركات، فيُعدَّل الاسم فقط. */
+  if (editing && editing !== code) throw new Error('لا يمكن تغيير كود التصنيف بعد الإنشاء — عدّل الاسم فقط');
   const dup = await get('SELECT kind FROM items WHERE code=$1', [code]);
   if (dup) {
     if (dup.kind === 'item') throw new Error('هذا الكود مستخدم لصنف فعلي — اختر كوداً آخر');
@@ -227,8 +234,8 @@ async function listLocations() {
 async function saveCompany({ code, name, currency, editCode }) {
   code = str(code); name = str(name); currency = str(currency).toUpperCase();
   const editing = str(editCode);
-  if (!code) throw new Error('كود الشركة مطلوب');
-  if (!name) throw new Error('اسم الشركة مطلوب');
+  const mv = MV.validateCompany({ code, name, currency, editCode: editing });
+  if (!mv.ok) throw new Error(mv.errors[0]);
   if (editing && editing !== code) {
     const dup = await get('SELECT 1 x FROM companies WHERE company_code=$1', [code]);
     if (dup) throw new Error('كود الشركة مستخدم بالفعل');
@@ -251,9 +258,8 @@ async function saveCompany({ code, name, currency, editCode }) {
 async function saveUnit({ code, name, company, place, editCode }) {
   code = str(code); name = str(name); company = str(company); place = str(place);
   const editing = str(editCode);
-  if (!code) throw new Error('كود الوحدة مطلوب');
-  if (!name) throw new Error('اسم الوحدة مطلوب');
-  if (!company) throw new Error('اختر الشركة التابعة لها الوحدة');
+  const mv = MV.validateUnit({ code, name, company, place, editCode: editing });
+  if (!mv.ok) throw new Error(mv.errors[0]);
   const c = await get('SELECT company_name, currency FROM companies WHERE company_code=$1', [company]);
   if (!c) throw new Error('الشركة غير موجودة — أضفها أولاً');
   if (editing && editing !== code) {
@@ -277,8 +283,8 @@ async function saveWarehouse({ code, name, unit, company, place, locationName, c
   code = str(code); name = str(name); unit = str(unit); place = str(place);
   locationName = str(locationName); classification = str(classification); warehouseGroup = str(warehouseGroup);
   const editing = str(editCode);
-  if (!code) throw new Error('كود المخزن مطلوب');
-  if (!name) throw new Error('اسم المخزن مطلوب');
+  const mv = MV.validateWarehouse({ code, name, unit, company, editCode: editing });
+  if (!mv.ok) throw new Error(mv.errors[0]);
   company = str(company);
   if (unit) {
     const u = await get('SELECT company_code, place FROM locations WHERE unit_code=$1', [unit]);
@@ -345,8 +351,8 @@ async function listCategories() {
 async function saveCategory({ code, name, descr, editCode }) {
   code = str(code); name = str(name); descr = str(descr);
   const editing = str(editCode);
-  if (!code) throw new Error('كود التصنيف مطلوب');
-  if (!name) throw new Error('اسم التصنيف مطلوب');
+  const mv = MV.validateCategory({ code, name, editCode: editing });
+  if (!mv.ok) throw new Error(mv.errors[0]);
   const dup = await get(`SELECT 1 x FROM movement_types WHERE type_code=$1 AND kind='category'`, [code]);
   if (dup && (!editing || editing !== code)) throw new Error('كود التصنيف مستخدم بالفعل');
   await run(`INSERT INTO movement_types(type_code, direction, system_desc, category, kind, source_file)
@@ -369,7 +375,8 @@ async function saveMtype({ code, descr, systemDesc, category, editCode }) {
   code = str(code); descr = str(descr);
   systemDesc = str(systemDesc); category = str(category);
   const editing = str(editCode);
-  if (!code) throw new Error('نوع الحركة مطلوب');
+  const mv = MV.validateMtype({ code, descr, editCode: editing });
+  if (!mv.ok) throw new Error(mv.errors[0]);
   if (editing && editing !== code) {
     const dup = await get('SELECT 1 x FROM movement_types WHERE type_code=$1', [code]);
     if (dup) throw new Error('نوع الحركة مستخدم بالفعل');
@@ -476,17 +483,16 @@ async function listAllRefs() {
 async function nextRefCode(kind) {
   const d = refDef(kind);
   const rows = await all(`SELECT code FROM ${d.table} WHERE code ILIKE $1`, [d.prefix + '%']);
-  const rx = new RegExp('^' + d.prefix + '(\\d+)$', 'i');
-  let mx = 0;
-  for (const r of rows) { const m = rx.exec(str(r.code)); if (m) mx = Math.max(mx, parseInt(m[1], 10)); }
-  return d.prefix + String(mx + 1).padStart(d.pad, '0');
+  return MV.nextRefCodeFromRows(kind, rows);
 }
 
 async function saveRef({ kind, code, name, editCode } = {}) {
   const d = refDef(kind);
   name = str(name); code = str(code); const editing = str(editCode);
-  if (!name) throw new Error('الاسم مطلوب');
   if (!code) code = await nextRefCode(kind);
+  const mv = MV.validateRef({ kind, code, name, editCode: editing });
+  if (!mv.ok) throw new Error(mv.errors[0]);
+  code = mv.value.code;
   if (editing) {
     if (code !== editing) {
       const dup = await get(`SELECT 1 x FROM ${d.table} WHERE code=$1`, [code]);

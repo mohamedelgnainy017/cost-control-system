@@ -513,17 +513,6 @@ function tableBuild(host) {
   const info = document.createElement('span'); info.className = 'tbar-i';
   bar.appendChild(info);
   host.__bar = bar; host.__barInfo = info;
-  const clear = document.createElement('button');
-  clear.type = 'button'; clear.className = 'btn xs ghost'; clear.hidden = true;
-  clear.title = 'مسح كل فلاتر الأعمدة';
-  clear.textContent = '🗗 مسح الكل';
-  clear.addEventListener('click', () => {
-    host.__filters = {};
-    (host.__ths || []).forEach(th => { if (th.__sync) th.__sync(); });
-    tablePaint(host);
-  });
-  bar.appendChild(clear);
-  host.__barClear = clear;
 
   const tbl = document.createElement('table');
   const thead = document.createElement('thead');
@@ -710,8 +699,8 @@ function tablePaint(host) {
         }
         frag.appendChild(row);
       }
-      /* إجمالي كلي (بدون تجميع) */
-      const hasNum = cols.some(c => c.n);
+      /* إجمالي كلي (بدون تجميع) — يُلغى عند totals=false */
+      const hasNum = cols.some(c => c.n) && opts.totals !== false;
       if (hasNum && shown.length > 0) {
         const grandTotals = cols.map(c => c.n ? 0 : null);
         for (const r of shown) {
@@ -765,8 +754,8 @@ function tablePaint(host) {
 }
 
 /** جدول عام — ترتيب افتراضي على الصنف + ترتيب يدوي + فلتر ديناميكي في رأس كل عمود */
-function table(host, cols, rows, { limit = 500, empty = 'لا توجد بيانات', sort = true, filters = true } = {}) {
-  const sig = (cols || []).map(c => c.k || ('t:' + c.t)).join('|') + '#' + (sort ? 1 : 0) + (filters ? 1 : 0);
+function table(host, cols, rows, { limit = 500, empty = 'لا توجد بيانات', sort = true, filters = true, totals = true } = {}) {
+  const sig = (cols || []).map(c => c.k || ('t:' + c.t)).join('|') + '#' + (sort ? 1 : 0) + (filters ? 1 : 0) + (totals ? 1 : 0);
   /* هل هيكل الجدول الحالي صالح لنفس الأعمدة؟ نبقي الرأس (ورأس الفلاتر) بدل مسحه */
   const keep = host.__colSig === sig && host.__tbody && host.contains(host.__tbody);
   if (!rows || !rows.length) {
@@ -776,7 +765,7 @@ function table(host, cols, rows, { limit = 500, empty = 'لا توجد بيان�
       host.__rows = [];
       host.__cols = cols;
       host.__keys = (cols || []).map(c => c.k || ('t:' + c.t));
-      host.__opts = { limit, empty, sort, filters };
+      host.__opts = { limit, empty, sort, filters, totals };
       tablePaint(host);
       const tb = host.__tbody;
       if (tb) {
@@ -800,7 +789,7 @@ function table(host, cols, rows, { limit = 500, empty = 'لا توجد بيان�
   host.__rows = rows;
   host.__cols = cols;
   host.__keys = (cols || []).map(c => c.k || ('t:' + c.t));
-  host.__opts = { limit, empty, sort, filters };
+  host.__opts = { limit, empty, sort, filters, totals };
   /* نعيد البناء فقط عند تغيّر الاعمدة، او اذا مُسح هيكل الجدول من الخارج */
   if (!keep) {
     host.__colSig = sig;

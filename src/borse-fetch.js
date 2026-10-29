@@ -26,6 +26,7 @@
  */
 const DB = require('./db');
 const Contract = require('./contract');
+const { pad2 } = require('./pure');
 
 /** بصمة الصفوف القادمة من الجلب في borse.source_file */
 const SRC = 'borse-fetch';
@@ -61,7 +62,6 @@ const EARLIEST = '06:00';   // التعويض لا يبدأ قبل صباح ال
 const HTTP_TIMEOUT_MS = 30000;
 
 /* ---------------- تواريخ ---------------- */
-const pad2 = n => String(n).padStart(2, '0');
 const isoDate = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const iso = v => (v instanceof Date)
   ? isoDate(v)

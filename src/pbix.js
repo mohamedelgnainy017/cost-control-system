@@ -10,6 +10,7 @@
  */
 
 const { all, get } = require('./db');
+const { clsKey, ceil1000, pad2 } = require('./pure');
 
 /* ============================ أدوات عامة ============================ */
 
@@ -18,17 +19,7 @@ const n = v => (v === null || v === undefined || v === '' ? 0 : (Number.isFinite
 /** رقم أو BLANK (null) — يحافظ على سلوك DAX فى التمييز بين 0 والفراغ */
 const nOrNull = v => (v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
 const str = v => (v === null || v === undefined ? '' : String(v));
-/** تطبيع اسم التصنيف — مطابق تماماً لدالة clsKey فى analytics.js
- *  (يحذف التطويل/الفراغات ويوحّد الهمزات/ى/ة). نسخة محلية لتفادى الاعتماد
- *  الدائرى: analytics.js يستورد ./pbix، والدالة هناك غير مُصدَّرة. */
-function clsKey(v) {
-  return String(v || '')
-    .replace(/[\u0640\s]/g, '')
-    .replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه');
-}
 const r2 = v => (v === null || v === undefined ? null : Math.round(Number(v) * 100) / 100);
-const pad2 = x => String(x).padStart(2, '0');
-const ceil1000 = x => Math.ceil(x / 1000) * 1000;
 
 const AR_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
   'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];

@@ -9,12 +9,21 @@ async function api(path, opts = {}) {
   const j = await r.json().catch(() => ({ ok: false, error: 'استجابة غير صالحة' }));
   if (!j.ok) {
     if (r.status === 401) {
-      if (!opts.quiet401) { me = null; applyRoleUI(); enterLogin(j.message || 'انتهى الجلسة — سجّل الدخول'); }
-      throw new Error(j.message || j.error || 'انتهى الجلسة');
+      const isTestUser = !!(me && me.id === 0 && me.username === 'workflow-test');
+      if (!opts.quiet401 && !isTestUser) { me = null; applyRoleUI(); enterLogin(j.message || 'انتهى الجلسة — سجّل الدخول'); }
+      const err = new Error(j.message || j.error || 'انتهى الجلسة');
+      err.status = 401; err.data = j;
+      throw err;
     }
     if (r.status === 403 && !opts.quiet403) toast(j.message || 'لا تملك صلاحية تنفيذ هذه العملية');
+    /* 404 من الراوتر (المسار غير موجود أصلًا في النسخة المشغّلة) ⇒ رسالة قابلة للتنفيذ */
+    if (r.status === 404 && /^\s*not found\s*$/i.test(String(j.error || j.message || ''))) {
+      const err = new Error('المسار غير موجود في الخادم المشغّل — أعد تشغيل الخادم ليُحمّل الكود الجديد');
+      err.status = 404; err.data = j;
+      throw err;
+    }
     const err = new Error(j.message || j.error || 'خطأ');
-    err.status = r.status;
+    err.status = r.status; err.data = j;
     throw err;
   }
   return j.data;
@@ -48,9 +57,10 @@ const appendQ = (base, qs) => qs ? base + (base.includes('?') ? '&' : '?') + qs.
 let ITEMS_ALL = null;
 let ITEMS_HTML = '';
 const ITEMS_BY_CODE = new Map();
-async function loadItemsAll(force) {
-  if (ITEMS_ALL && !force) return ITEMS_ALL;
-  ITEMS_ALL = await api('/api/items/all?limit=20000');
+async function loadItemsAll(opts) {
+  const q = (opts && opts.quiet401) ? { quiet401: true } : {};
+  if (ITEMS_ALL && !force && !(opts && opts.force)) return ITEMS_ALL;
+  ITEMS_ALL = await api('/api/items/all?limit=20000', q);
   ITEMS_HTML = ITEMS_ALL.map(i =>
     `<option value="${escHtml(i.code)}">${escHtml(i.code)} — ${escHtml(i.descr)}${i.uom ? ' (' + escHtml(i.uom) + ')' : ''}</option>`
   ).join('');
@@ -64,8 +74,19 @@ async function loadItemsAll(force) {
 let REFS = null;   /* { supplier:[{code,name}], source:[…], arrival_port:[…], loading_port:[…] } */
 async function loadRefs(force) {
   if (REFS && !force) return REFS;
-  try { REFS = await api('/api/contracts/refs'); }
-  catch (_) { REFS = { supplier: [], source: [], arrival_port: [], loading_port: [] }; }
+  try {
+    const refs = await api('/api/contracts/refs');
+    /* تحميل العقود من جدول التسجيل كمرجع موحد للرقم الداخلى */
+    try {
+      const conData = await api('/api/report?name=contract-registrations-raw&page=1&pageSize=5000');
+      refs.contract_registrations = ((conData && conData.rows) || []).map(r => ({
+        code: String(r.internal_no || r.id || ''),
+        name: String(r.internal_no || '').trim() || String(r.id || ''),
+      })).filter(r => r.code && r.name);
+    } catch (_) { refs.contract_registrations = []; }
+    REFS = refs;
+  }
+  catch (_) { REFS = { supplier: [], source: [], arrival_port: [], loading_port: [], contract_registrations: [] }; }
   return REFS;
 }
 /* يملأ <select> مرجعي بالاسم (القيمة المخزَّنة) مع عرض «الكود — الاسم»،
@@ -80,6 +101,19 @@ function fillRefSelect(el, kind, value) {
     el.insertAdjacentHTML('beforeend', `<option value="${escHtml(cur)}">${escHtml(cur)}</option>`);
   el.value = cur;
 }
+/* تعبئة قائمة اختيار شركة من شاشة البيانات الأساسية (القيمة = اسم الشركة لتوافق البيانات القديمة) */
+function fillContractCompanySelect(el, value) {
+  if (!el) return;
+  const list = (mdLoc && Array.isArray(mdLoc.companies)) ? mdLoc.companies : [];
+  const cur = value != null && value !== '' ? String(value) : String(el.value || '');
+  el.innerHTML = '<option value=""></option>' + list.map(c =>
+    `<option value="${escHtml(c.code)}">${escHtml(c.code)} — ${escHtml(c.name)}</option>`).join('');
+  if (cur && !list.some(c => String(c.code) === cur))
+    el.insertAdjacentHTML('beforeend', `<option value="${escHtml(cur)}">${escHtml(cur)}</option>`);
+  el.value = cur;
+  el.dataset.pv = cur;
+}
+
 /* عرض الصنف: «كود • اسم» من الكاش — أو النص كما هو إن لم يوجد في الأساسية */
 const itemDisp = code => {
   const i = ITEMS_BY_CODE.get(String(code || ''));
@@ -119,7 +153,20 @@ const money = v => (v === null || v === undefined || isNaN(v)) ? '—' : n0(v);
 const pct = v => (v === null || v === undefined || isNaN(v)) ? '—' : n2(v) + '%';
 const dv = v => (Number(v) || 0) < 0 ? 'neg' : '';
 
+/* عنوان الشاشة: تجاوز طبقة التخطيط (مصمم الشاشات والقوائم) ثم الخريطة الافتراضية */
+const titleFor = name => {
+  const ov = (window.UiLayout && window.UiLayout.titleFor) ? window.UiLayout.titleFor(name) : '';
+  if (ov) return [ov, ''];
+  if (TITLES[name]) return TITLES[name];
+  /* شاشة مخصّصة: اسمها من سجل الشاشات المخصّصة */
+  if (window.AppScreens && typeof window.AppScreens.list === 'function') {
+    const hit = window.AppScreens.list().find(s => s.id === name);
+    if (hit) return [hit.name || name, 'شاشة مخصّصة'];
+  }
+  return [name, ''];
+};
 const TITLES = {
+  platform: ['منصة التحليل', 'ثلاثة أقسام: البيانات والتحليل · التقارير ولوحات المعلومات · تصميم الشاشات والتحكم'],
   dashboard: ['لوحة التحكم', 'إدارة المستخدمين وصلاحيات الشاشات'],
   md: ['البيانات الأساسية', 'الأصناف • المواقع والمصانع • أنواع الحركات'],
   daily: ['البيانات اليومية', 'حركات سيستم • مبيعات • أرصدة — ملفات باسم التاريخ'],
@@ -136,6 +183,11 @@ const TITLES = {
   costs: ['التكلفة اليومية', '3 أصناف بورصة بالمعادلة + قيمة الرصيد ÷ كمية الرصيد للباقي — تفصيلي وإجمالي'],
   contracts: ['عقود الاستيراد', 'التسجيل • تفصيلى • السداد • التحميل • الربط • الترويل • الافراج'],
   reports: ['التقارير', 'عرض التقارير داخل المتصفح وتصديرها CSV'],
+  workflow: ['البيانات والتحليل', 'المعادلات وبناء التحليل والنتائج المحفوظة (قسم داخل البيانات والتحليل)'],
+  analysis: ['البيانات والتحليل', 'المصادر والجداول · العلاقات · المعادلات · بناء التحليل · النتائج'],
+
+  'report-studio': ['التقارير ولوحات المعلومات', 'جميع التقارير · مصمّم التقارير · التقارير المحفوظة'],
+  'screen-studio': ['تصميم الشاشات والتحكم', 'شاشات مخصّصة · تحرير عناصر شاشات التطبيق والتحكّم في الواجهة'],
 };
 
 function kpi(host, { label, value, sub, tone, icon = '◈', g = 'g1', topTitle = false, pin = false }) {
@@ -175,12 +227,21 @@ let current = 'dashboard';
 const loaders = {};
 
 /* الأقسام: زر واحد في القايمة الجانبية «مثل البيانات الأساسية» وجواه عدة شاشات فرعية */
+/* هوية الأقسام الثلاثة لمنصة التحليل + خريطة الدمج (تبويبات قديمة دُمجت) */
+const PLATFORM_HOST = { 'workcenter': 'analysis', 'workflow': 'analysis', 'reports-manager': 'report-studio' };
+const PLATFORM_SCREENS = ['analysis', 'report-studio', 'screen-studio'];
+/* أي تبويب (قديم أو جديد) ⇒ الشاشة المضيفة في المنصة */
+const platformHost = t => PLATFORM_HOST[t] || t;
+/* «منصة التحليل» صفحة رئيسية تجميعية: تُتاح لمن يملك أي شاشة من شاشاتها الثلاث */
+const PLATFORM_HOME = 'platform';
+const isPlatformHome = t => t === PLATFORM_HOME;
+
 const MD_GROUPS = {
   md:     { title: 'البيانات الأساسية', crumb: 'الأصناف • المواقع والمصانع • أنواع الحركات • الموردين • المصادر • موانئ الوصول • موانئ التحميل',
             subs: ['md-items', 'md-locations', 'md-movetypes', 'md-contractrefs'] },
-  daily:  { title: 'البيانات اليومية',  crumb: 'حركات سيستم • مبيعات • أرصدة',
+  daily:  { title: 'تسجيل البيانات',  crumb: 'بيانات يومية • أسعار وتكلفة • عقود الاستيراد',
             subs: ['movements', 'sales', 'inventory'] },
-  pricegroup: { title: 'الأسعار اليومية',   crumb: 'متابعة البورصة • أسعار السوق • تكلفة يومية',
+  pricegroup: { title: 'الأسعار والتكلفة', crumb: 'بورصة يومية • أسعار يومية • تكلفة يومية',
             subs: ['borse', 'prices', 'costs'] },
   contracts: { title: 'عقود الاستيراد', crumb: 'التسجيل • تفصيلى • السداد • التحميل • الربط • الترويل • الافراج',
                subs: ['contracts'] },
@@ -190,26 +251,43 @@ const setHead = (t, c) => {
   const h = document.getElementById('page-title'); if (h) h.textContent = t || '';
   const m = document.getElementById('page-crumb'); if (m) m.textContent = c || '';
 };
+/* المدير يملك كل الشاشات (نفس قاعدة الخادم tabsOfUser) — فلا تُحجب عنه أي شاشة،
+   حتى لو كانت قائمة التبويبات المحمّلة أقدم من الكود (قبل إعادة تشغيل الخادم) */
+const isAdmin = () => !!(me && me.role === 'admin');
+const tabAllowed = t => t === PLATFORM_HOME
+  ? PLATFORM_SCREENS.some(x => tabAllowed(x))
+  : (isAdmin()
+    || !(me && Array.isArray(me.tabs) && me.tabs.length)
+    || me.tabs.includes(t)
+    || me.tabs.includes(platformHost(t)));
 const mdSubsAllowed = id => {
   const g = MD_GROUPS[id];
   if (!g) return [];
-  const mine = me && Array.isArray(me.tabs) && me.tabs.length ? me.tabs : g.subs;
-  return g.subs.filter(t => mine.includes(t));
+  return g.subs.filter(t => tabAllowed(t));
 };
 /* القوائم المنسدلة في الشريط العلوي: كل زر قسم يفتح بنوده مباشرة بلا صفحة وسيطة.
    daily تجمع شاشات daily + pricegroup (الأسعار مدمجة مع البيانات اليومية) */
 const DROP_SUBS = {
   md: [...MD_GROUPS.md.subs],
-  daily: [...MD_GROUPS.daily.subs, ...MD_GROUPS.pricegroup.subs],
+  /* «تسجيل البيانات» تحوي: بيانات يومية + أسعار وتكلفة + عقود الاستيراد */
+  daily: [...MD_GROUPS.daily.subs, ...MD_GROUPS.pricegroup.subs, ...MD_GROUPS.contracts.subs],
+  pricing: [...MD_GROUPS.pricegroup.subs],
   contracts: [...MD_GROUPS.contracts.subs],
-  reports: ['reports'],
+  info: ['analysis', 'report-studio', 'reports'],
+  /* «منصة التحليل»: مساحات العمل (مركز العمل · التحليل · المستكشف · التصميم · التقارير · مصمم الشاشات) */
+  platform: ['analysis', 'report-studio', 'screen-studio'],
+  /* «الشاشات المخصّصة»: تُملأ وقت التشغيل من الشاشات المحفوظة */
+  custom: [],
 };
 const dropAllowed = g => (g === 'daily'
-  ? [...mdSubsAllowed('daily'), ...mdSubsAllowed('pricegroup')]
-  : g === 'reports' ? (me && Array.isArray(me.tabs) && me.tabs.length ? me.tabs.includes('reports') : true)
+  ? [...mdSubsAllowed('daily'), ...mdSubsAllowed('pricegroup'), ...mdSubsAllowed('contracts')]
+  : g === 'pricing' ? mdSubsAllowed('pricegroup')
+  : g === 'info' ? ['analysis', 'report-studio', 'reports'].filter(t => tabAllowed(t))
+  : g === 'platform' ? PLATFORM_SCREENS.filter(t => tabAllowed(t))
+  : g === 'custom' ? (DROP_SUBS.custom || []).filter(t => tabAllowed(t))
   : mdSubsAllowed(g));
-const dropBtnSel = g => (g === 'md' ? '#nav-md-btn' : g === 'contracts' ? '#nav-con-btn' : g === 'reports' ? '#nav-rep-btn' : '#nav-daily-btn');
-const dropMenuEl = g => (g === 'md' ? $('#nav-md-menu') : g === 'contracts' ? $('#nav-con-menu') : g === 'reports' ? $('#nav-rep-menu') : $('#nav-daily-menu'));
+const dropBtnSel = g => (g === 'md' ? '#nav-md-btn' : g === 'contracts' ? '#nav-daily-btn' : g === 'pricing' ? '#nav-daily-btn' : g === 'info' ? '#nav-info-btn' : g === 'platform' ? '#nav-platform-btn' : '#nav-daily-btn');
+const dropMenuEl = g => (g === 'md' ? $('#nav-md-menu') : g === 'info' ? $('#nav-info-menu') : g === 'platform' ? $('#nav-platform-menu') : $('#nav-daily-menu'));
 function toggleNavMenu(g, force) {
   const m = dropMenuEl(g); if (!m) return;
   const show = force !== undefined ? !!force : m.hidden;
@@ -234,11 +312,12 @@ function syncDropOpen() {
 }
 function closeNavMenus(except) {
   $$('.nav-menu').forEach(m => { if (m !== except) m.hidden = true; });
-  $$('#nav-rep-menu [data-rep-grp]').forEach(x => { if (except && except.id === 'nav-rep-sub') return; x.classList.remove('on'); });
+  $$('nav [data-rep-grp]').forEach(x => { if (except && except.id === 'nav-rep-sub') return; x.classList.remove('on'); });
+  $$('nav [data-submenu]').forEach(x => { if (except && except.id === x.dataset.submenu) return; x.classList.remove('on'); });
   syncDropOpen();
 }
 /* انتقال مباشر لشاشة فرعية من القائمة المنسدلة — بلا صفحة وسيطة */
-function gotoGroupSub(g, name) {
+function gotoGroupSub(g, name, panel) {
   if (!(DROP_SUBS[g] || []).includes(name) || !dropAllowed(g).includes(name)) {
     toast('هذه الشاشة غير مسموحة لدورك'); return;
   }
@@ -246,11 +325,16 @@ function gotoGroupSub(g, name) {
   $$('nav button').forEach(x => x.classList.remove('active'));
   document.querySelector(dropBtnSel(g))?.classList.add('active');
   $$('section').forEach(s => s.classList.remove('active'));
-  $('#tab-' + name).classList.add('active');
-  const t = TITLES[name] || [name, ''];
+  const sec = $('#tab-' + name);
+  if (!sec) { toast('الشاشة غير مبنية بعد — أعد تحميل الصفحة'); return; }
+  sec.classList.add('active');
+  const t = titleFor(name);
   setHead(t[0], '');
   rememberScreen(name);
   loadTab(name).catch(e => toast('خطأ: ' + e.message));
+  if (panel && window.PlatformShell && typeof window.PlatformShell.show === 'function') {
+    try { window.PlatformShell.show(name, panel); } catch (_) {}
+  }
 }
 document.addEventListener('click', e => {
   if (e.target.closest('.nav-drop')) return;
@@ -270,7 +354,7 @@ function showMdLanding(id) {
   $$('section').forEach(s => s.classList.remove('active'));
   if (!document.getElementById('tab-' + id)) {
     /* صفحة البلاطات محذوفة (daily) → أول شاشة مسموحة من القائمة المنسدلة مباشرة */
-    const grp = id === 'pricegroup' ? 'daily' : id;
+    const grp = id === 'pricegroup' ? 'pricing' : id;
     const order = (typeof DROP_SUBS !== 'undefined' && DROP_SUBS[grp]) || g.subs;
     const all = grp === 'daily'
       ? [...mdSubsAllowed('daily'), ...mdSubsAllowed('pricegroup')]
@@ -479,12 +563,56 @@ let conRowsById = {};
 /* أعمدة الاستعراض: وسم المصدر + أعمدة الإدخال (بلا عمود الأزرار) + عمود أزرار لليدوي فقط */
 function conViewCols(cat) {
   const base = (DE_COLS[cat] || []).filter(c => !c.h);
-  return [
-    { t: 'المصدر', f: r => String(r.source_file || '') === 'manual'
-        ? '<span class="pill warning">يدوي</span>' : '<span class="pill">ملف</span>', h: true },
-    ...base,
-    { t: '', h: true, f: r => String(r.source_file || '') === 'manual' ? deActions(r.id) : '' },
-  ];
+  const cols = [...base];
+
+  if (cat === 'contract_registrations') {
+    cols.push({ t: 'التفاصيل', h: true, f: r => '<button class="btn sm" data-con-open-detail="' + escHtml(r.id) + '">فتح التفاصيل</button>' });
+  }
+  cols.push({ t: '', h: true, f: r => deActions(r.id) });
+  return cols;
+}
+
+let conSelectedNo = '';
+let conDetailRowsById = {};
+function openContractDetails(no) {
+  no = String(no || '').trim();
+  if (!no) { toast('لا يوجد رقم داخلي للعقد'); return; }
+  conSelectedNo = no;
+  const panel = document.getElementById('con-detail-panel');
+  if (panel) panel.hidden = false;
+  const t = document.getElementById('con-detail-no');
+  if (t) t.textContent = '— ' + no;
+  loadContractDetails().catch(e => toast(e.message));
+}
+async function loadContractDetails() {
+  const host = document.getElementById('tbl-con-detail');
+  if (!host) return;
+  host.innerHTML = '<div class="muted" style="padding:12px"></div>';
+  const c = document.getElementById('con-detail-count');
+  if (c) c.textContent = '';
+  try {
+    const d = await api('/api/report?name=contract-details-raw&page=1&pageSize=5000');
+    const rows = ((d && d.rows) || []).filter(r => String(r.internal_no) === String(conSelectedNo));
+    conDetailRowsById = {};
+    rows.forEach(r => { conDetailRowsById[String(r.id)] = r; });
+    table(host, DE_COLS.contract_details, rows, { limit: 0, empty: 'لا توجد تفاصيل لهذا العقد' });
+    $$('#tbl-con-detail [data-de-edit]').forEach(b => b.addEventListener('click', () => {
+      const row = conDetailRowsById[b.dataset.deEdit];
+      if (!row) return;
+      openManual('contract_details');
+      setTimeout(() => { deFill(row); }, 0);
+    }));
+    $$('#tbl-con-detail [data-de-del]').forEach(b =>
+      b.addEventListener('click', () => deDelete(b.dataset.deDel, 'contract_details')));
+    if (c) c.textContent = rows.length + ' تفصيلى';
+  } catch (e) {
+    host.innerHTML = '<div class="muted" style="padding:12px">' + escHtml(e.message) + '</div>';
+  }
+}
+function closeContractDetails() {
+  conSelectedNo = '';
+  const panel = document.getElementById('con-detail-panel');
+  if (panel) panel.hidden = true;
 }
 
 async function loadConView() {
@@ -507,6 +635,23 @@ async function loadConView() {
     const qStr = qs.toString() ? '&' + qs.toString() : '';
     const d = await api('/api/report?name=' + encodeURIComponent(v.report) + '&page=1&pageSize=5000' + qStr);
     const rows = (d && d.rows) || [];
+    /* ربط بيانات التفاصيل الناقصة من جدول contract_details للعرض الموحد */
+    try {
+      const det = await api('/api/report?name=contract-details-raw&page=1&pageSize=5000');
+      const detMap = {};
+      (det && det.rows || []).forEach(r => { if (r.internal_no) detMap[String(r.internal_no)] = r; });
+      rows.forEach(r => {
+        const dRow = detMap[String(r.internal_no || r.id)];
+        if (!dRow) return;
+        if (!r.expected_arrival && dRow.expected_arrival) r.expected_arrival = dRow.expected_arrival;
+        if (!r.operation_start && dRow.operation_start) r.operation_start = dRow.operation_start;
+        if (!r.vessel_status && dRow.vessel_status) r.vessel_status = dRow.vessel_status;
+        if (!r.vessel_name && dRow.vessel_name) r.vessel_name = dRow.vessel_name;
+        if (!r.arrival_port && dRow.arrival_port) r.arrival_port = dRow.arrival_port;
+        if (!r.detail_quantity && dRow.detail_quantity != null) r.detail_quantity = dRow.detail_quantity;
+        if (!r.internal_company && dRow.internal_company) r.internal_company = dRow.internal_company;
+      });
+    } catch (_) {}
     conRowsById = {};
     rows.forEach(r => { conRowsById[String(r.id)] = r; });
     table(host, conViewCols(conView), rows, { limit: 0, empty: 'لا توجد بيانات بعد — اضغط «＋ إضافة»' });
@@ -525,11 +670,15 @@ async function loadConView() {
       csv.style.display = '';
       csv.href = '/api/export?name=' + encodeURIComponent(v.report) + qStr;
     }
-    $$('#tbl-con-view [data-de-edit]').forEach(b => b.addEventListener('click', () => {
+    $$('#tbl-con-view [data-de-edit]').forEach(b => b.addEventListener('click', async () => {
       const row = conRowsById[b.dataset.deEdit];
       if (!row) return;
-      openManual(conView);
+      await openManual(conView);
       deFill(row);
+    }));
+    $$('#tbl-con-view [data-con-open-detail]').forEach(b => b.addEventListener('click', () => {
+      const row = conRowsById[b.dataset.conOpenDetail];
+      openContractDetails(row ? row.internal_no : '');
     }));
     $$('#tbl-con-view [data-de-del]').forEach(b =>
       b.addEventListener('click', () => deDelete(b.dataset.deDel, conView)));
@@ -543,16 +692,18 @@ function showConStep(cat) {
   if (!CON_VIEWS[cat]) cat = 'contract_registrations';
   conView = cat;
   try { localStorage.setItem('ccs-con-step', cat); } catch (_) {}
-  $$('#nav-con-menu [data-con-step]').forEach(b => b.classList.toggle('on', b.dataset.conStep === cat));
+  $$('nav [data-con-step]').forEach(b => b.classList.toggle('on', b.dataset.conStep === cat));
   const add = document.getElementById('con-add');
   if (add) add.textContent = '＋ ' + CON_VIEWS[cat].add;
   const t = document.getElementById('con-view-title');
   if (t) t.textContent = CON_VIEWS[cat].label;
+  const sub = document.getElementById('con-sub-label');
+  if (sub) sub.textContent = '— ' + (CON_VIEWS[cat].label || '');
   return loadConView();
 }
 
 /* فلاتر العقود: بحث + تاريخ + حالة العقد — فورية. الحالة الافتراضية دائماً «نشط» على كل الخطوات */
-const CON_STATUS_DEFAULT = 'ACTIVE';
+const CON_STATUS_DEFAULT = '';
 const CON_FILTER_IDS = ['con-q', 'con-from', 'con-to', 'con-status'];
 CON_FILTER_IDS.forEach(id => {
   document.getElementById(id)?.addEventListener('input', () => loadConView().catch(e => toast(e.message)));
@@ -685,6 +836,8 @@ function pollDailyJob(jobId) {
           await loadDailyFiles();
           const cfg = DAILY_CATS[dfCat];
           if (cfg && cfg.reload) cfg.reload().catch(() => {});
+          /* تحديث قائمة الأصناف الأساسية من قاعدة البيانات (مزامنة من الحركات) */
+          loadItemsAll({ force: true }).catch(() => {});
           resolve();
         }
       } catch (e) {
@@ -717,8 +870,14 @@ function openDailyImport(cat) {
 }
 
 $$('[data-daily-import]').forEach(b => b.addEventListener('click', () => openDailyImport(b.dataset.dailyImport)));
-$$('#nav-con-menu [data-con-step]').forEach(b => b.addEventListener('click', () => showConStepScreen(b.dataset.conStep)));
+$$('nav [data-con-step]').forEach(b => b.addEventListener('click', () => showConStepScreen(b.dataset.conStep)));
 $('#con-add')?.addEventListener('click', () => openManual(conView));
+$('#con-detail-back')?.addEventListener('click', () => closeContractDetails());
+$('#con-detail-add')?.addEventListener('click', async () => {
+  await openManual('contract_details');
+  const el = document.querySelector('#de-fields [data-k="internal_no"]');
+  if (el) { el.value = conSelectedNo; el.readOnly = true; }
+});
 $('#con-view-refresh')?.addEventListener('click', () => loadConView().catch(e => toast('خطأ: ' + e.message)));
 $('#dfl-add')?.addEventListener('click', () => { dfReplacing = null; $('#dfl-file').click(); });
 $('#dfl-refresh')?.addEventListener('click', () => loadDailyFiles().catch(e => toast('خطأ: ' + e.message)));
@@ -816,32 +975,45 @@ const DE_FIELDS = {
   ],
   /* ---- عقود الاستيراد: مسار الإدخال اليومي ---- */
   contract_registrations: [
-    { k: 'internal_no', t: 'الرقم داخلي (يُولَّد تلقائياً)', type: 'text', ph: 'يُترك فارغاً ليُولَّد تلقائياً' },
+    { k: 'internal_no', t: 'الرقم داخلي', type: 'text', ph: 'يُولَّد تلقائياً', readonly: true },
     { k: 'contract_date', t: 'تاريخ التعاقد', type: 'date', req: true },
-    { k: 'contract_category', t: 'تصنيف التعاقد', type: 'text' },
-    { k: 'contract_type', t: 'نوع التعاقد', type: 'text' },
-    { k: 'classification', t: 'التصنيف', type: 'text', req: true, list: 'de-cls-list' },
-    { k: 'supplier', t: 'المورد', type: 'ref', ref: 'supplier' },
-    { k: 'source_country', t: 'المصدر / بلد المنشأ', type: 'ref', ref: 'source' },
-    { k: 'contracting_company', t: 'شركة التعاقد', type: 'text' },
-    { k: 'contract_no', t: 'رقم العقد', type: 'text' },
-    { k: 'quantity', t: 'الكمية', type: 'num' },
-    { k: 'contract_premium', t: 'بريم التعاقد', type: 'text' },
-    { k: 'shipping_type', t: 'نوع الشحن', type: 'text' },
-    { k: 'shipping_value', t: 'قيمة الشحن', type: 'num' },
-    { k: 'initial_price', t: 'السعر المبدئي', type: 'num' },
-    { k: 'contract_exchange', t: 'بورصة التعاقد', type: 'text' },
-    { k: 'expected_payment_date', t: 'متوقع سداد', type: 'date' },
-    { k: 'contract_status', t: 'حالة العقد', type: 'text' },
-    { k: 'expected_cif_price', t: 'سعر CIF المتوقع', type: 'num' },
+    { k: 'contract_category', t: 'التصنيف', type: 'sel', req: true, opts: [{ v: 'خامات', l: 'خامات' }, { v: 'إضافات', l: 'إضافات' }] },
+    { k: 'classification', t: 'التصنيف التفصيلي', type: 'text', req: true, list: 'de-cls-list' },
+    { k: 'supplier', t: 'المورد', type: 'ref', req: true, ref: 'supplier' },
+    { k: 'source_country', t: 'بلد المنشأ', type: 'ref', req: true, ref: 'source' },
+    { k: 'contracting_company', t: 'شركة التعاقد', type: 'company', req: true },
+    { k: 'internal_company', t: 'الشركة الداخلية', type: 'company', req: true },
+    { k: 'contract_no', t: 'رقم العقد', type: 'text', req: true },
+    { k: 'quantity', t: 'الكمية الإجمالية', type: 'num', req: true },
+    { k: 'detail_quantity', t: 'الكمية التفصيلية', type: 'num', req: true },
+    { k: 'contract_premium', t: 'البريم', type: 'text', req: true },
+    { k: 'shipping_type', t: 'نظام الشحن', type: 'sel', req: true, opts: [{ v: 'CIF', l: 'CIF' }, { v: 'FOB', l: 'FOB' }] },
+    { k: 'shipping_value', t: 'قيمة الشحن', type: 'num', req: true },
+    { k: 'initial_price', t: 'السعر المبدئي', type: 'num', req: true },
+    { k: 'contract_exchange', t: 'بورصة التعاقد', type: 'text', req: true },
+    { k: 'expected_payment_date', t: 'متوقع السداد', type: 'date', req: true },
+    { k: 'contract_status', t: 'حالة العقد', type: 'sel', req: true, opts: [
+      { v: 'ACTIVE', l: 'نشط' }, { v: 'FINISH', l: 'منتهي' }, { v: 'UNDER', l: 'تحت التشغيل' }] },
+    { k: 'expected_cif_price', t: 'سعر CIF متوقع', type: 'num', req: true },
+    { k: 'vessel_name', t: 'الباخرة', type: 'text' },
+    { k: 'arrival_port', t: 'ميناء الوصول', type: 'ref', ref: 'arrival_port' },
+    { k: 'expected_arrival', t: 'وصول متوقع', type: 'date', req: true },
+    { k: 'operation_start', t: 'بداية تشغيل', type: 'date' },
+    { k: 'loading_duration', t: 'مدة التحميل', type: 'text' },
+    { k: 'operation_end', t: 'نهاية تشغيل', type: 'date' },
+    { k: 'vessel_status', t: 'موقف المركب', type: 'sel', req: true, opts: [
+      { v: 'منتظر الوصول', l: 'منتظر الوصول' },
+      { v: 'جارى التفريغ', l: 'جارى التفريغ' },
+      { v: 'منتظر التفريغ', l: 'منتظر التفريغ' },
+      { v: 'انتهاء التفريغ', l: 'انتهاء التفريغ' }] },
     { k: 'notes', t: 'ملاحظات', type: 'text' },
   ],
   contract_details: [
-    { k: 'internal_no', t: 'الرقم داخلي', type: 'text', req: true },
+    { k: 'internal_no', t: 'الرقم الداخلى', type: 'ref', req: true, ref: 'contract_registrations' },
     { k: 'classification', t: 'التصنيف', type: 'text' },
     { k: 'source_country', t: 'المصدر / بلد المنشأ', type: 'ref', ref: 'source' },
     { k: 'external_company', t: 'الشركة الخارجية', type: 'text' },
-    { k: 'internal_company', t: 'الشركة الداخلية', type: 'text' },
+    { k: 'internal_company', t: 'الشركة الداخلية', type: 'company' },
     { k: 'contract_no', t: 'رقم العقد', type: 'text' },
     { k: 'detail_quantity', t: 'كمية تفصيلى', type: 'num' },
     { k: 'vessel_name', t: 'الباخرة', type: 'text' },
@@ -850,18 +1022,19 @@ const DE_FIELDS = {
     { k: 'operation_start', t: 'بداية تشغيل', type: 'date' },
     { k: 'loading_duration', t: 'مدة التحميل', type: 'text' },
     { k: 'operation_end', t: 'نهاية تشغيل', type: 'date' },
-    { k: 'contract_status', t: 'موقف العقد', type: 'text' },
+    { k: 'contract_status', t: 'موقف العقد', type: 'sel', opts: [
+      { v: 'ACTIVE', l: 'نشط' }, { v: 'FINISH', l: 'منتهي' }, { v: 'UNDER', l: 'تحت التشغيل' }] },
     { k: 'vessel_status', t: 'موقف المركب', type: 'text' },
     { k: 'notes', t: 'ملاحظات', type: 'text' },
   ],
   contract_payments: [
-    { k: 'internal_no', t: 'الرقم داخلي', type: 'text', req: true },
+    { k: 'internal_no', t: 'الرقم الداخلى', type: 'ref', req: true, ref: 'contract_registrations' },
     { k: 'payment_date', t: 'تاريخ السداد', type: 'date', req: true },
     { k: 'payment_company', t: 'شركة السداد', type: 'text' },
-    { k: 'item', t: 'الصنف (بالقائمة)', type: 'items' },
+    { k: 'item', t: 'التصنيف من العقد', type: 'text' },
     { k: 'supplier', t: 'المورد', type: 'ref', ref: 'supplier' },
     { k: 'contract_no', t: 'رقم العقد', type: 'text' },
-    { k: 'internal_company', t: 'الشركة الداخلية', type: 'text' },
+    { k: 'internal_company', t: 'الشركة الداخلية', type: 'company' },
     { k: 'payment_type', t: 'نوع السداد', type: 'text' },
     { k: 'price_type', t: 'نوع السعر', type: 'text' },
     { k: 'payment_status', t: 'موقف السداد', type: 'text' },
@@ -872,21 +1045,21 @@ const DE_FIELDS = {
     { k: 'notes', t: 'ملاحظات السداد', type: 'text' },
   ],
   contract_loading: [
-    { k: 'internal_no', t: 'الرقم داخلي', type: 'text', req: true },
+    { k: 'internal_no', t: 'الرقم الداخلى', type: 'ref', req: true, ref: 'contract_registrations' },
     { k: 'loading_date', t: 'تاريخ التحميل', type: 'date', req: true },
     { k: 'contract_no', t: 'رقم العقد', type: 'text' },
-    { k: 'item', t: 'الصنف (بالقائمة)', type: 'items' },
+    { k: 'item', t: 'التصنيف من العقد', type: 'text' },
     { k: 'vessel_name', t: 'اسم المركب', type: 'text' },
     { k: 'loading_type', t: 'نوع التحميل', type: 'text' },
     { k: 'loading_quantity', t: 'كمية التحميل', type: 'num' },
     { k: 'notes', t: 'ملاحظات التحميل', type: 'text' },
   ],
   contract_hedge: [
-    { k: 'internal_no', t: 'الرقم داخلي', type: 'text', req: true },
+    { k: 'internal_no', t: 'الرقم الداخلى', type: 'ref', req: true, ref: 'contract_registrations' },
     { k: 'hedge_date', t: 'تاريخ الربط', type: 'date', req: true },
     { k: 'supplier', t: 'المورد', type: 'ref', ref: 'supplier' },
     { k: 'contract_no', t: 'رقم العقد', type: 'text' },
-    { k: 'item', t: 'الصنف (بالقائمة)', type: 'items' },
+    { k: 'item', t: 'التصنيف من العقد', type: 'text' },
     { k: 'contract_exchange', t: 'بورصة التعاقد', type: 'text' },
     { k: 'contract_count', t: 'عدد العقود', type: 'num' },
     { k: 'hedge_quantity', t: 'كمية الربط', type: 'num' },
@@ -898,11 +1071,11 @@ const DE_FIELDS = {
     { k: 'notes', t: 'ملاحظات الربط', type: 'text' },
   ],
   contract_roll: [
-    { k: 'internal_no', t: 'الرقم داخلي', type: 'text', req: true },
+    { k: 'internal_no', t: 'الرقم الداخلى', type: 'ref', req: true, ref: 'contract_registrations' },
     { k: 'roll_date', t: 'تاريخ الترويل', type: 'date', req: true },
     { k: 'contract_no', t: 'رقم العقد', type: 'text' },
     { k: 'supplier', t: 'المورد', type: 'ref', ref: 'supplier' },
-    { k: 'item', t: 'الصنف (بالقائمة)', type: 'items' },
+    { k: 'item', t: 'التصنيف من العقد', type: 'text' },
     { k: 'roll_quantity', t: 'كمية الترويل', type: 'num' },
     { k: 'contract_exchange', t: 'بورصة التعاقد', type: 'text' },
     { k: 'hedge_exchange', t: 'بورصة الربط', type: 'text' },
@@ -912,10 +1085,10 @@ const DE_FIELDS = {
     { k: 'notes', t: 'ملاحظات الرولينج', type: 'text' },
   ],
   contract_release: [
-    { k: 'internal_no', t: 'الرقم داخلي', type: 'text', req: true },
+    { k: 'internal_no', t: 'الرقم الداخلى', type: 'ref', req: true, ref: 'contract_registrations' },
     { k: 'release_date', t: 'تاريخ الافراج', type: 'date', req: true },
     { k: 'contract_no', t: 'رقم العقد', type: 'text' },
-    { k: 'item', t: 'الصنف (بالقائمة)', type: 'items' },
+    { k: 'item', t: 'التصنيف من العقد', type: 'text' },
     { k: 'vessel_name', t: 'اسم المركب', type: 'text' },
     { k: 'release_quantity', t: 'كمية الافراج', type: 'num' },
     { k: 'release_type', t: 'نوع الافراج', type: 'text' },
@@ -984,10 +1157,13 @@ const DE_COLS = {
     { t: 'التاريخ', k: 'contract_date' },
     { t: 'التصنيف', k: 'classification' },
     { t: 'المورد', k: 'supplier' },
+    { t: 'شركة التعاقد', k: 'contracting_company' },
+    { t: 'الشركة الداخلية', k: 'internal_company' },
     { t: 'رقم العقد', k: 'contract_no' },
-    { t: 'الكمية', k: 'quantity', n: 1, f: r => n2(r.quantity) },
-    { t: 'سعر CIF متوقع', k: 'expected_cif_price', n: 1, f: r => n2(r.expected_cif_price) },
-    { t: 'متوقع سداد', k: 'expected_payment_date' },
+    { t: 'الكمية الإجمالية', k: 'quantity', n: 1, f: r => n2(r.quantity) },
+    { t: 'كمية تفصيلى', k: 'detail_quantity', n: 1, f: r => n2(r.detail_quantity) },
+    { t: 'الباخرة', k: 'vessel_name' },
+    { t: 'ميناء الوصول', k: 'arrival_port' },
     { t: 'حالة العقد', k: 'contract_status' },
     { t: '', h: true, f: r => deActions(r.id) },
   ],
@@ -1073,18 +1249,21 @@ function deBuildFields() {
       return `<label><span>${escHtml(f.t)}${star(f)}</span>` +
         `<select class="input" data-k="${f.k}" data-type-ref="${escHtml(f.ref)}"></select></label>`;
     }
+    if (f.type === 'company') {                   // قائمة شركات البيانات الأساسية
+      return `<label><span>${escHtml(f.t)}${star(f)}</span>` +
+        `<select class="input" data-k="${f.k}" data-type-company></select></label>`;
+    }
     if (f.type === 'sel') {                       // قائمة خيارات ثابتة (أصناف البورصة)
       return `<label><span>${escHtml(f.t)}${star(f)}</span>` +
         `<select class="input" data-k="${f.k}">` +
         (f.opts || []).map(o => `<option value="${escHtml(o.v)}">${escHtml(o.l)}</option>`).join('') +
         `</select></label>`;
     }
-    if (f.type === 'date') {                       // تاريخ: تلميح dd/mm/yyyy بدل نص المتصفح
+    if (f.type === 'date') {                       // تاريخ: dd/mm/yyyy داخل الخانة
       return `<label><span>${escHtml(f.t)}${star(f)}</span>` +
-        `<span class="dwrap"><input class="input" data-k="${f.k}" type="date" lang="en-GB" required>` +
-        `<span class="dph">dd/mm/yyyy</span></span></label>`;
+        `<input class="input" data-k="${f.k}" type="date" lang="en-GB" placeholder="يوم/شهر/سنة" required></label>`;
     }
-    const attrs = f.type === 'num' ? 'inputmode="decimal"' : '';
+    const attrs = (f.type === 'num' ? 'inputmode="decimal"' : '') + (f.readonly ? ' readonly' : '');
     const ph = f.ph ? ` placeholder="${escHtml(f.ph)}"` : '';
     const list = f.list ? ` list="${escHtml(f.list)}"` : '';
     return `<label><span>${escHtml(f.t)}${star(f)}</span>` +
@@ -1097,6 +1276,25 @@ function deBuildFields() {
   });
   /* تعبئة القوائم المرجعية (مورد/مصدر/ميناء الوصول/ميناء التحميل) من شاشة «مراجع العقود» */
   $$('#de-fields [data-type-ref]').forEach(el => fillRefSelect(el, el.dataset.typeRef, el.dataset.pv));
+  $$('#de-fields [data-type-company]').forEach(el => fillContractCompanySelect(el, el.dataset.pv));
+  /* ملء تلقائي عند اختيار الرقم الداخلى من قائمة العقود */
+  const intNoEl = $('#de-fields [data-k="internal_no"]');
+  if (intNoEl) {
+    intNoEl.addEventListener('change', async () => {
+      const val = String(intNoEl.value || '').trim();
+      if (!val || intNoEl.dataset.typeRef !== 'contract_registrations') return;
+      try {
+        const d = await api('/api/report?name=contract-registrations-raw&page=1&pageSize=5000');
+        const row = (d && d.rows || []).find(r => String(r.internal_no) === val || String(r.contract_no || '') === val || String(r.id) === val);
+        if (!row) return;
+        const fields = {supplier:'supplier',contract_no:'contract_no',classification:'classification',contract_exchange:'contract_exchange',expected_payment_date:'expected_payment_date',expected_cif_price:'expected_cif_price',quantity:'quantity',detail_quantity:'detail_quantity',contract_premium:'contract_premium',shipping_type:'shipping_type',shipping_value:'shipping_value',initial_price:'initial_price',contract_status:'contract_status',contracting_company:'contracting_company',internal_company:'internal_company',source_country:'source_country',vessel_name:'vessel_name',arrival_port:'arrival_port',expected_arrival:'expected_arrival',operation_start:'operation_start',operation_end:'operation_end',vessel_status:'vessel_status',notes:'notes',item:'classification'};
+        Object.entries(fields).forEach(([formKey, dbKey]) => {
+          const target = document.querySelector(`#de-fields [data-k="${formKey}"]`);
+          if (target && row[dbKey] !== undefined && row[dbKey] !== null) target.value = String(row[dbKey]);
+        });
+      } catch (_) {}
+    });
+  }
 }
 
 /* حقول مشتقة تُملأ تلقائياً عند اختيار صنف من القائمة (حسب الشاشة) */
@@ -1131,6 +1329,8 @@ function deReset() {
   const b = $('#de-save-btn'); if (b) { b.textContent = 'حفظ'; b.disabled = false; }
   const r = $('#de-reset'); if (r) r.style.display = 'none';
   const e = $('#de-err'); if (e) { e.hidden = true; e.textContent = ''; }
+  const ino = $('#de-fields [data-k="internal_no"]');
+  if (ino) { ino.disabled = false; ino.readOnly = true; }
 }
 
 async function loadManualList() {
@@ -1157,10 +1357,13 @@ function deFill(row) {
     const v = row[el.dataset.k];
     el.value = (v === null || v === undefined) ? ''
       : el.type === 'date' ? String(v).slice(0, 10) : v;
-    /* لقوائم الأصناف: احفظ القيمة بحيث تُطبَّق إذا لم تُملأ الخيارات بعد */
-    if (el.hasAttribute('data-type-items')) el.dataset.pv = el.value;
-    /* للمراجع: أعد تعبئة القائمة وأبقِ القيمة المخزَّنة (حتى لو غير موجودة) */
+    /* قفل الرقم الداخلى نهائياً أثناء التعديل */
+    if (el.dataset.k === 'internal_no' && deEditId) { el.disabled = true; el.readOnly = true; }
+    /* لقوائم الأصناف: احفظ القيمة بحيث تُطبَّق */
+    if (el.hasAttribute('data-type-items')) { el.dataset.pv = el.value; }
+    /* للمراجع: أعد تعبئة القائمة */
     if (el.hasAttribute('data-type-ref')) { el.dataset.pv = el.value; fillRefSelect(el, el.dataset.typeRef, el.value); }
+    if (el.hasAttribute('data-type-company')) { el.dataset.pv = el.value; fillContractCompanySelect(el, el.value); }
   });
   const b = $('#de-save-btn'); if (b) b.textContent = 'حفظ التعديل';
   const rs = $('#de-reset'); if (rs) rs.style.display = '';
@@ -1179,6 +1382,7 @@ async function deDelete(id, cat) {
     if (deEditId === Number(id)) deReset();
     await loadManualList();
     loadConView().catch(() => {});
+    if (conSelectedNo) loadContractDetails().catch(() => {});
     const cfg = DAILY_CATS[cat];
     if (cfg && cfg.reload) cfg.reload().catch(() => {});
   } catch (e) { toast('خطأ: ' + e.message); }
@@ -1190,6 +1394,7 @@ async function openManual(cat) {
   deCat = cat;
   $('#de-cat').textContent = '— ' + (DAILY_CATS[cat] ? DAILY_CATS[cat].label : cat);
   await loadRefs();
+  mdLoc = await api('/api/md/locs');           // ← تحميل الشركات الجديدة
   deReset();
   deBuildFields();
   wireContractNoPreview();
@@ -1251,12 +1456,23 @@ $$('[data-manual]').forEach(b => b.addEventListener('click', () => openManual(b.
 $$('nav button').forEach(b => {
   if (b.closest('.nav-tools')) return;   // أزرار الأدوات لها معالجاتها الخاصة — ليست تنقلاً
   if (b.dataset.repGrp || b.dataset.repName) return;   // قوائم التقارير المتتالية لها معالجها الخاص
-  if (b.dataset.conStep) return;   // خطوات العقود في القائمة المنسدلة لها معالجها الخاص
+  if (b.dataset.conStep) return;
+  if (b.dataset.submenu) return;   // أزرار القوائم الجانبية لها معالجها الخاص   // خطوات العقود في القائمة المنسدلة لها معالجها الخاص
   if (b.dataset.goto) { b.addEventListener('click', () => {
     if (b.dataset.pane && typeof mdRefPane !== 'undefined') mdRefPane = b.dataset.pane;
-    gotoGroupSub(b.dataset.grp, b.dataset.goto);
+    gotoGroupSub(b.dataset.grp, b.dataset.goto, b.dataset.panel);
   }); return; }
-  b.addEventListener('click', () => {
+  b.addEventListener('click', (ev) => {
+    if (b.hasAttribute('data-platform-home')) {
+      ev.preventDefault();
+      closeNavMenus();
+      openPlatformHome();
+      return;
+    }
+    if (b.dataset.drop === 'platform' && !(ev.target && ev.target.closest && ev.target.closest('.caret'))) {
+      toggleNavMenu('platform');
+      return;
+    }
     if (b.dataset.drop) { toggleNavMenu(b.dataset.drop); return; }
     $$('nav button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
@@ -1265,16 +1481,28 @@ $$('nav button').forEach(b => {
     if (MD_GROUPS[current]) { showMdLanding(current); return; }
     $$('section').forEach(s => s.classList.remove('active'));
     $('#tab-' + current).classList.add('active');
-    const t = TITLES[current] || ['', ''];
+    const t = titleFor(current);
     setHead(t[0], t[1]);
     $('#sidebar').classList.remove('open');
-    loadTab(current).catch(e => toast('خطأ: ' + e.message));
+    loadTab(current).catch(e => toast('خطأ: ' + e.message))
+      .then(() => { if (window.UiLayout && window.UiLayout.apply) { try { window.UiLayout.apply(); } catch (e) { /* تجاهل */ } } });
   });
 });
 
 async function loadTab(name) {
   /* حماية الشاشات: الشاشة غير المسموحة لدورك لا تُحمَّل */
-  if (me && Array.isArray(me.tabs) && me.tabs.length && !me.tabs.includes(name)) {
+  if (isPlatformHome(name)) {
+    if (window.PlatformShell && typeof window.PlatformShell.renderHome === 'function') {
+      window.PlatformShell.renderHome();
+    }
+    if (window.PlatformShell && typeof window.PlatformShell.loadStatus === 'function') {
+      window.PlatformShell.loadStatus().catch(() => {});
+    }
+    return;
+  }
+  /* التبويبات القديمة المدموجة (workflow · workcenter · reports-manager) ⇒ القسم المضيف */
+  name = platformHost(name);
+  if (!isAdmin() && me && Array.isArray(me.tabs) && me.tabs.length && !tabAllowed(name)) {
     const alt = me.tabs[0];
     toast('شاشة «' + (TITLES[name] || ['', name])[0] + '» غير مسموحة لدورك');
     if (alt && alt !== name) return goTab(alt);
@@ -1295,7 +1523,26 @@ async function loadTab(name) {
   if (name === 'prices') return showPricesPane('view');
   if (name === 'costs') return loadCosts();
 
+  /* الشاشات الثلاث للمنصة: تفعيل اللوحة النشطة + شريط الحالة (قبل تحميل محتوى اللوحة) */
+  if (PLATFORM_SCREENS.indexOf(name) >= 0) {
+    if (window.PlatformShell) {
+      window.PlatformShell.activate(name);
+      window.PlatformShell.loadStatus().catch(() => {});
+    }
+  }
   if (name === 'reports') return loadReports();
+  if (name === 'report-studio') { if (typeof window.loadReportStudioTab === 'function') window.loadReportStudioTab(); return; }
+  if (name === 'analysis') {
+    if (typeof window.loadAnalysisTab === 'function') window.loadAnalysisTab();
+    if (typeof window.loadWorkflowTab === 'function') window.loadWorkflowTab();
+    return;
+  }
+  if (name === 'screen-studio') { if (typeof window.loadScreenStudioTab === 'function') window.loadScreenStudioTab(); return; }
+  /* الشاشات المخصّصة (cs_*) — تُعرض من قسمها المبني وقت التشغيل */
+  if (String(name || '').indexOf('cs_') === 0) {
+    if (typeof window.openCustomScreen === 'function') window.openCustomScreen(name);
+    return;
+  }
 }
 
 
@@ -1330,12 +1577,12 @@ async function fillRepSubMenu(grp) {
   ).join('');
 }
 
-$$('#nav-rep-menu [data-rep-grp]').forEach(b => {
+$$('nav [data-rep-grp]').forEach(b => {
   b.addEventListener('click', (e) => {
     e.stopPropagation();
     const grp = b.dataset.repGrp;
-    $$('#nav-rep-menu [data-rep-grp]').forEach(x => x.classList.toggle('on', x === b));
-    const menu = document.getElementById('nav-rep-menu');
+    $$('nav [data-rep-grp]').forEach(x => x.classList.toggle('on', x === b));
+    const menu = b.closest('.nav-menu');
     const r = menu ? menu.getBoundingClientRect() : { right: 0, left: 0, top: 0 };
     const sub = document.getElementById('nav-rep-sub');
     if (sub) {
@@ -1351,13 +1598,41 @@ $$('#nav-rep-menu [data-rep-grp]').forEach(b => {
   });
 });
 
+/* قائمة فرعية داخل قائمة منسدلة (مثل «بيانات يومية» داخل «تسجيل البيانات») */
+/* قائمة جانبية داخل قائمة منسدلة (بيانات يومية / الأسعار والتكلفة / عقود الاستيراد) */
+$$('nav [data-submenu]').forEach(b => {
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const sub = document.getElementById(b.dataset.submenu);
+    if (!sub) return;
+    const menu = b.closest('.nav-menu');
+    const r = menu ? menu.getBoundingClientRect() : { left: 0, top: 0 };
+    const willOpen = sub.hidden;
+    /* إغلاق أي قائمة جانبية أخرى مفتوحة */
+    $$('.nav-menu.nav-sub').forEach(m => { if (m !== sub) m.hidden = true; });
+    $$('nav [data-submenu]').forEach(x => { if (x !== b) x.classList.remove('on'); });
+    sub.hidden = !willOpen;
+    b.classList.toggle('on', willOpen);
+    if (!willOpen) { syncDropOpen(); return; }
+    /* الموضع: على يسار القائمة الأصلية (RTL) مع منع الخروج عن حدود الشاشة */
+    const w = sub.offsetWidth || 250, hgt = sub.offsetHeight || 200;
+    const left = Math.min(Math.max(8, r.left - w - 14), Math.max(8, window.innerWidth - w - 8));
+    const top = Math.min(Math.max(8, r.top), Math.max(8, window.innerHeight - hgt - 8));
+    sub.style.left = Math.round(left) + 'px';
+    sub.style.right = 'auto';
+    sub.style.top = Math.round(top) + 'px';
+    syncDropOpen();
+  });
+});
+
 /* فتح شاشة التقارير مباشرة (من الاستعادة أو اختيار تقرير) — بلا فتح القوائم المنسدلة */
 async function openReportsScreen(name) {
   closeNavMenus();
   fillItemSelect(document.getElementById('rf-item'), 'الكل');
   $$('nav .nav-drop').forEach(d => d.classList.remove('open'));
   $$('nav button').forEach(x => x.classList.remove('active'));
-  document.querySelector(dropBtnSel('reports'))?.classList.add('active');
+  /* مدخل التقارير الموحّد صار «منصة التحليل» (لا زر تقارير خارجي) */
+  document.querySelector(dropBtnSel('platform'))?.classList.add('active');
   current = 'reports';
   $$('section').forEach(s => s.classList.remove('active'));
   const tab = document.getElementById('tab-reports');
@@ -1370,7 +1645,7 @@ async function openReportsScreen(name) {
     return true;
   }
   if (!reportList.length) { try { await loadReports(); } catch (_) {} }
-  const t = TITLES[name] || [name, ''];
+  const t = titleFor(name);
   setHead(t[0], '');
   applyReportRange(reportGroupOf(name));
   await showReport(name);
@@ -1392,12 +1667,12 @@ document.addEventListener('click', (e) => {
 
 /* ---------------- لوحة التحكم — إدارة المستخدمين والصلاحيات فقط ---------------- */
 async function loadDashboard() {
-  const isAdmin = !!me && me.role === 'admin';
+  const isAdminUser = isAdmin();
   const canUsers = can('users');
-  const canSee = isAdmin || canUsers;
+  const canSee = isAdminUser || canUsers;
   vis($('#dash-hero'), canSee);
   vis($('#dash-stats'), canSee);
-  vis($('#card-tabperms'), isAdmin);
+  vis($('#card-tabperms'), isAdminUser);
   vis($('#card-users'), canUsers);
   vis($('#dash-hint'), !canSee);
 
@@ -1569,7 +1844,7 @@ async function renderMdItems() {
   const cls = ($('#md-items-class')?.value || '').trim();
   const clsTo = ($('#md-items-class-to')?.value || '').trim();
   const clsState = ($('#md-items-clsstate')?.value || '').trim();
-  const d = await api(`/api/md/items?origin=${mdItemsOrigin}&q=${encodeURIComponent(q)}&limit=1000`
+  const d = await api(`/api/md/items?origin=${mdItemsOrigin}&q=${encodeURIComponent(q)}&limit=20000`
     + (grp ? '&group_from=' + encodeURIComponent(grp) : '') + (grpTo ? '&group_to=' + encodeURIComponent(grpTo) : '')
     + (cls ? '&cls_from=' + encodeURIComponent(cls) : '') + (clsTo ? '&cls_to=' + encodeURIComponent(clsTo) : '')
     + (clsState ? '&clsstate=' + encodeURIComponent(clsState) : ''));
@@ -1587,8 +1862,10 @@ async function renderMdItems() {
     { t: 'التصنيف', h: true, f: r => [r.class_code, r.class_desc].filter(Boolean).map(escHtml).join(' — ') },
     { t: 'المصدر', h: true, f: r => r.origin === 'movement'
         ? '<span class="pill info">من الحركات</span>' : '<span class="pill">مسجّل</span>' },
+    { t: 'تاريخ الإضافة', h: true, f: r => r.movement_sheet_date || '—' },
+    { t: 'الحال', h: true, f: r => ({ SUB: 'صب', PACKED: 'معبأ', TANK: 'تنك', JUMBO: 'جامبو', BULK: 'سايب' }[r.status] || '—') },
     ...(canM ? [{ t: '', h: true, f: r => `<button class="btn sm ghost" data-item="${escHtml(r.code)}">✎ تعديل</button>` }] : []),
-  ], d, { empty: 'لا توجد أصناف — استورد ملف الحركات وسيُجلب الموجود منها تلقائياً' });
+  ], d, { limit: 0, empty: 'لا توجد أصناف — استورد ملف الحركات وسيُجلب الموجود منها تلقائياً' });
 }
 
 /* تفصيل البيانات: الكل / تم تسجيلها / مجلوبة من الحركات — فلترة فورية */
@@ -1626,7 +1903,8 @@ $('#mi-group')?.addEventListener('change', mdGroupToClass);
 
 function openMdItem(code) {
   const f = $('#md-item-form');
-  const r = code ? (mdItemsRows.find(x => x.code === code) || mdPickItems.find(x => x.code === code)) : null;
+  const pickRows = mdPick && mdPick.type === 'item' ? mdPickItems : [];
+  const r = code ? (mdItemsRows.find(x => x.code === code) || pickRows.find(x => x.code === code)) : null;
   f.dataset.edit = r ? r.code : '';
   $('#md-item-title').textContent = r ? 'تعديل صنف' : 'إضافة صنف';
   $('#mi-code').value = r ? r.code : '';
@@ -1634,6 +1912,7 @@ function openMdItem(code) {
   $('#mi-uom').value = r ? (r.uom || '') : '';
   $('#mi-group').value = r ? (r.group_code || '') : '';
   $('#mi-class').value = r ? (r.class_code || '') : '';
+  $('#mi-status').value = r ? (r.status || '') : '';
   mdErr('mi-err', null);
   updMiCount();
   mdOpen('md-item-modal');
@@ -1650,6 +1929,7 @@ $('#md-item-form')?.addEventListener('submit', async e => {
       uom: $('#mi-uom').value.trim(),
       groupCode: $('#mi-group').value.trim(),
       classCode: $('#mi-class').value.trim(),
+      status: $('#mi-status').value.trim(),
       editCode: editing,
     }) });
     $('#md-item-modal').hidden = true;
@@ -1662,10 +1942,13 @@ $('#md-item-form')?.addEventListener('submit', async e => {
 /* --- نافذة المجموعة: كود + اسم --- */
 function openMdGroup(code) {
   const f = $('#md-group-form');
-  const r = code ? mdGroupsList.find(x => x.code === code) : null;
+  const pickRows = mdPick && mdPick.type === 'group' ? mdPickItems : [];
+  const r = code ? (mdGroupsList.find(x => x.code === code) || pickRows.find(x => x.code === code)) : null;
   f.dataset.edit = r ? r.code : '';
   $('#md-group-title').textContent = r ? 'تعديل مجموعة' : 'إضافة مجموعة';
   $('#mg-code').value = r ? r.code : '';
+  /* الكود مفتاح ثابت مرتبط بالأصناف والحركات — يُقفل عند التعديل لمنع إنشاء نسخة مكررة */
+  $('#mg-code').readOnly = !!r;
   $('#mg-descr').value = r ? (r.descr || '') : '';
   mdErr('mg-err', null);
   mdOpen('md-group-modal');
@@ -1689,10 +1972,13 @@ $('#md-group-form')?.addEventListener('submit', async e => {
 /* --- نافذة التصنيف: كود + اسم --- */
 function openMdClass(code) {
   const f = $('#md-class-form');
-  const r = code ? mdClassesList.find(x => x.code === code) : null;
+  const pickRows = mdPick && mdPick.type === 'class' ? mdPickItems : [];
+  const r = code ? (mdClassesList.find(x => x.code === code) || pickRows.find(x => x.code === code)) : null;
   f.dataset.edit = r ? r.code : '';
   $('#md-class-title').textContent = r ? 'تعديل تصنيف' : 'إضافة تصنيف';
   $('#mc-code').value = r ? r.code : '';
+  /* الكود مفتاح ثابت مرتبط بالأصناف والحركات — يُقفل عند التعديل لمنع إنشاء نسخة مكررة */
+  $('#mc-code').readOnly = !!r;
   $('#mc-descr').value = r ? (r.descr || '') : '';
   mdErr('mc-err', null);
   mdOpen('md-class-modal');
@@ -1717,24 +2003,40 @@ $('#md-class-form')?.addEventListener('submit', async e => {
    تعديل/حذف يفتحان نافذة اختيار للسجل، والجلب من الحركات تلقائي مع كل استيراد */
 let mdPick = null;        /* إعداد النافذة الحالية */
 let mdPickItems = [];     /* سجلات النافذة الحالية */
+let mdPickSeq = 0;        /* يمنع نتيجة طلب قديم من الكتابة فوق نافذة أحدث (سباق تحميل) */
 
 /* نافذة اختيار عامة تُستخدمها كل شاشات «إضافة بيانات»:
-   cfg = { title, label, noun, load, nameOf, onEdit, onDelete } */
+   cfg = { title, label, noun, type, load, nameOf, onEdit, onDelete } */
 async function openPicker(cfg) {
+  const seq = ++mdPickSeq;                  /* أي فتح جديد يُلغي نتائج الطلبات السابقة */
   mdPick = cfg;
+  mdPickItems = [];
   const sel = $('#md-pick-sel'), info = $('#md-pick-info');
+  const editBtn = $('#md-pick-edit'), delBtn = $('#md-pick-del');
+  if (editBtn) editBtn.disabled = true;     /* لا تعديل/حذف قبل اكتمال تحميل النوع الصحيح */
+  if (delBtn) delBtn.disabled = true;
   $('#md-pick-title').textContent = cfg.title;
   const lbl = $('#md-pick-lbl'); if (lbl) lbl.firstChild.textContent = cfg.label + ' ';
   sel.innerHTML = '<option value="">جارٍ التحميل…</option>';
   if (info) info.textContent = '';
   $('#md-pick-modal').hidden = false;
-  try { mdPickItems = await cfg.load(); }
-  catch (err) { mdPickItems = []; if (info) info.textContent = 'تعذّر التحميل: ' + err.message; }
+  let rows = [], loadErr = '';
+  try { rows = await cfg.load(); }
+  catch (err) { loadErr = err.message; }
+  if (seq !== mdPickSeq) return;            /* نتيجة متأخرة لنافذة أخرى — تجاهلها تماماً */
+  mdPickItems = Array.isArray(rows) ? rows : [];
   const name = cfg.nameOf || (r => r.descr || r.name || '');
-  sel.innerHTML = mdPickItems.length
-    ? mdPickItems.map(r => `<option value="${escHtml(r.code)}">${escHtml(r.code)} — ${escHtml(name(r))}</option>`).join('')
-    : '<option value="">لا توجد بيانات</option>';
-  if (info) info.textContent = `${n0(mdPickItems.length)} ${cfg.noun} متاح — اختر ثم اضغط «تعديل» أو «حذف»`;
+  if (loadErr) {
+    sel.innerHTML = '<option value="">تعذّر التحميل</option>';
+    if (info) info.textContent = 'تعذّر التحميل: ' + loadErr;
+  } else {
+    sel.innerHTML = mdPickItems.length
+      ? mdPickItems.map(r => `<option value="${escHtml(r.code)}">${escHtml(r.code)} — ${escHtml(name(r))}</option>`).join('')
+      : '<option value="">لا توجد بيانات</option>';
+    if (info) info.textContent = `${n0(mdPickItems.length)} ${cfg.noun} متاح — اختر ثم اضغط «تعديل» أو «حذف»`;
+  }
+  if (editBtn) editBtn.disabled = false;
+  if (delBtn) delBtn.disabled = false;
 }
 
 $('#md-pick-edit')?.addEventListener('click', () => {
@@ -1754,8 +2056,29 @@ $('#md-pick-del')?.addEventListener('click', async () => {
   finally { if (btn) btn.disabled = false; }
 });
 
+/* بطاقة واحدة فقط لكل نوع داخل قوائم «إضافة بيانات».
+   حذف العقد المكررة من DOM (وليس إخفاؤها بـ CSS) يمنع التكرار مهما كان مصدره
+   — حتى لو أُعيد إلحاق عناصر أو بقيت نسخة قديمة في الصفحة. */
+function normalizeAddMenu(menuSel, key) {
+  const all = document.querySelectorAll(menuSel);
+  for (let i = 1; i < all.length; i++) all[i].remove();   /* قائمة مكرّرة بنفس المعرّف */
+  const menu = all[0]; if (!menu) return;
+  const seen = new Set();
+  [...menu.children].forEach(el => {
+    if (!el.classList || !el.classList.contains('cpp-item')) return;
+    const k = String((el.dataset || {})[key] || '');
+    if (!k) return;
+    if (seen.has(k)) { el.remove(); return; }
+    seen.add(k);
+  });
+}
+normalizeAddMenu('#md-add-menu', 'type');
+normalizeAddMenu('#md-loc-add-menu', 'locType');
+normalizeAddMenu('#md-mt-add-menu', 'mtType');
+
 $('#md-add-btn')?.addEventListener('click', e => {
   e.stopPropagation();
+  normalizeAddMenu('#md-add-menu', 'type');
   const m = $('#md-add-menu'); if (m) m.hidden = !m.hidden;
 });
 document.addEventListener('click', e => {
@@ -1812,8 +2135,9 @@ $('#md-add-menu')?.addEventListener('click', e => {
     title: 'إدارة ' + { item: 'الأصناف', group: 'المجموعات', class: 'التصنيفات' }[type],
     label: 'اختر ' + noun + ' المطلوب',
     noun: noun,
+    type,
     nameOf: r => r.descr || r.name || '',
-    load: () => type === 'item' ? api('/api/md/items?limit=3000')
+    load: () => type === 'item' ? api('/api/md/items?limit=20000')
       : type === 'group' ? api('/api/md/items/groups') : api('/api/md/items/classes'),
     onEdit: code => { if (type === 'item') openMdItem(code); else if (type === 'group') openMdGroup(code); else openMdClass(code); },
     onDelete: async code => {
@@ -1961,6 +2285,7 @@ function openMdLoc(type, code) {
 /* قائمة «إضافة بيانات» في المواقع: شركة / موقع / مخزن — كلٌّ بإضافة/تعديل/حذف */
 $('#md-loc-add-btn')?.addEventListener('click', e => {
   e.stopPropagation();
+  normalizeAddMenu('#md-loc-add-menu', 'locType');
   const m = $('#md-loc-add-menu'); if (m) m.hidden = !m.hidden;
 });
 $('#md-loc-add-menu')?.addEventListener('click', e => {
@@ -1977,6 +2302,7 @@ $('#md-loc-add-menu')?.addEventListener('click', e => {
     title: 'إدارة ' + { company: 'الشركات', unit: 'المواقع', wh: 'المخازن' }[type],
     label: 'اختر ' + noun + ' المطلوب',
     noun: noun,
+    type: 'loc:' + type,
     nameOf: r => r.name || '',
     load: () => api('/api/md/locs').then(d => d[listKey] || []),
     onEdit: code => openMdLoc(type, code),
@@ -2216,7 +2542,8 @@ async function fillMtCat(val) {
 }
 
 async function openMdMtype(code) {
-  const r = code ? (mdMtypes.find(x => x.code === code) || mdPickItems.find(x => x.code === code)) : null;
+  const pickRows = mdPick && mdPick.type === 'mtype' ? mdPickItems : [];
+  const r = code ? (mdMtypes.find(x => x.code === code) || pickRows.find(x => x.code === code)) : null;
   const f = $('#md-mtype-form');
   f.dataset.edit = r ? r.code : '';
   $('#md-mtype-title').textContent = r ? 'تعديل نوع حركة' : 'إضافة نوع حركة';
@@ -2245,6 +2572,7 @@ $('#md-mtype-form')?.addEventListener('submit', async e => {
 /* قائمة «إضافة بيانات» في أنواع الحركات: حركة / تصنيف — كلٌّ بإضافة/تعديل/حذف */
 $('#md-mt-add-btn')?.addEventListener('click', e => {
   e.stopPropagation();
+  normalizeAddMenu('#md-mt-add-menu', 'mtType');
   const m = $('#md-mt-add-menu'); if (m) m.hidden = !m.hidden;
 });
 $('#md-mt-add-menu')?.addEventListener('click', e => {
@@ -2257,7 +2585,7 @@ $('#md-mt-add-menu')?.addEventListener('click', e => {
   if (type === 'cat') {
     if (a === 'add') { openMdCat(null); return; }
     openPicker({
-      title: 'إدارة تصنيفات الحركات', label: 'اختر التصنيف المطلوب', noun: 'التصنيف',
+      title: 'إدارة تصنيفات الحركات', label: 'اختر التصنيف المطلوب', noun: 'التصنيف', type: 'mcat',
       nameOf: r => r.name || '',
       load: () => api('/api/md/mtypes/categories'),
       onEdit: code => openMdCat(code),
@@ -2271,7 +2599,7 @@ $('#md-mt-add-menu')?.addEventListener('click', e => {
   }
   if (a === 'add') { openMdMtype(null); return; }
   openPicker({
-    title: 'إدارة أنواع الحركات', label: 'اختر نوع الحركة المطلوب', noun: 'نوع الحركة',
+    title: 'إدارة أنواع الحركات', label: 'اختر نوع الحركة المطلوب', noun: 'نوع الحركة', type: 'mtype',
     nameOf: r => r.descr || '',
     load: () => api('/api/md/mtypes?q='),
     onEdit: code => openMdMtype(code),
@@ -2285,7 +2613,8 @@ $('#md-mt-add-menu')?.addEventListener('click', e => {
 
 /* ---- التصنيفات: صفوف داخل نفس جدول  movement_types  (kind='category') ---- */
 function openMdCat(code) {
-  const r = code ? (mdMtypeCats.find(x => x.code === code) || mdPickItems.find(x => x.code === code)) : null;
+  const pickRows = mdPick && mdPick.type === 'mcat' ? mdPickItems : [];
+  const r = code ? (mdMtypeCats.find(x => x.code === code) || pickRows.find(x => x.code === code)) : null;
   const f = $('#md-mcat-form');
   f.dataset.edit = r ? r.code : '';
   $('#md-mcat-title').textContent = r ? 'تعديل تصنيف' : 'إضافة تصنيف';
@@ -2348,6 +2677,7 @@ async function loadInventory() {
   const perCol = per ? [{ t: 'الفترة', k: 'per' }] : [];
   if (group === 'detail' && !per) {
     table($('#tbl-inv-detail'), [
+      { t: 'التاريخ', k: 'balance_date', f: r => (r.balance_date || '—') },
       { t: 'كود الصنف', k: 'item' },
       { t: 'الوصف', k: 'item_desc' },
       { t: 'وحدة القياس', k: 'uom' },
@@ -2428,6 +2758,7 @@ async function loadSales() {
   let cols, footerLbl;
   if (group === 'detail' && !per) {
     cols = [
+      { t: 'التاريخ', k: 'invoice_date', f: r => (r.invoice_date || '—') },
       { t: 'كود الصنف', k: 'item' },
       { t: 'اسم الصنف', k: 'item_desc' },
       { t: 'وحدة القياس', k: 'uom', f: r => (r.uom || '—') },
@@ -2485,10 +2816,16 @@ liveFilter(SALES_FILTER_IDS, () => loadSales().catch(e => toast(e.message)), 300
 /* ---------------- الحركات ---------------- */
 /* ---- الحركات: فلاتر (من/إلى/مكان/نوع حركة/توجيه/وحدة/صنف) ---- */
 const movementsQS = () => filterQS(
-  { from: 'mf-from', to: 'mf-to', item: 'mf-item' },
-  { place: ['mf-place', 'mf-place-to'], mtype: ['mf-mtype', 'mf-mtype-to'],
-    dir: ['mf-dir', 'mf-dir-to'], unit: ['mf-unit', 'mf-unit-to'],
-    storage: ['mf-storage', 'mf-storage-to'] });
+  { from: 'mf-from', to: 'mf-to', item: 'mf-item', grp: 'mf-grp', cls: 'mf-cls',
+    mtype: 'mf-mtype', dir: 'mf-dir', company: 'mf-company', place: 'mf-place', storage: 'mf-storage',
+    item_inner: 'mf-item-inner', mtype_cat: 'mf-mtype-cat', cust: 'mf-cust' },
+  { grp_range: ['mf-grp-from','mf-grp-to'], cls_range: ['mf-cls-from','mf-cls-to'],
+    item_range: ['mf-item-inner-from','mf-item-inner-to'], mtype_range: ['mf-mtype-from','mf-mtype-to'],
+    mtype_cat_range: ['mf-mtype-cat-from','mf-mtype-cat-to'], dir_range: ['mf-dir-from','mf-dir-to'],
+    company_range: ['mf-company-from','mf-company-to'], place_range: ['mf-place-from','mf-place-to'],
+    storage_range: ['mf-storage-from','mf-storage-to'], cust_range: ['mf-cust-from','mf-cust-to'],
+    place_old: ['mf-place', 'mf-place-to'], mtype_old: ['mf-mtype', 'mf-mtype-to'],
+    dir_old: ['mf-dir', 'mf-dir-to'], storage_old: ['mf-storage', 'mf-storage-to'] });
 let movementsDimsLoaded = false;
 async function loadMovements() {
   resetSort();
@@ -2503,23 +2840,66 @@ async function loadMovements() {
       fillDimPair('mf-dir', 'mf-dir-to', '/api/dims?dim=dir&src=movements'),
       fillDimPair('mf-unit', 'mf-unit-to', '/api/dims?dim=unit&src=movements'),
       fillDimPair('mf-storage', 'mf-storage-to', '/api/dims?dim=storage&src=movements'),
+      (async () => {
+        const grpVals = await api('/api/dims?dim=grp&src=movements').catch(() => []);
+        const grpOpts = grpVals.map(v => `<option value="${escHtml(String(v))}">${escHtml(String(v))}</option>`).join('');
+        const fill = (id, label) => { const el = document.getElementById(id); if (!el) return; const cur = el.value; el.innerHTML = `<option value="">${label}</option>` + grpOpts; if (cur && el.querySelector(`option[value="${escHtml(cur)}"]`)) el.value = cur; };
+        fill('mf-grp', 'كل المجموعات'); fill('mf-grp-from', 'من'); fill('mf-grp-to', 'إلى');
+      })(),
+      (async () => {
+        const clsVals = await api('/api/dims?dim=cls&src=sales').catch(() => []);
+        const clsOpts = clsVals.map(v => `<option value="${escHtml(String(v))}">${escHtml(String(v))}</option>`).join('');
+        const fill = (id, label) => { const el = document.getElementById(id); if (!el) return; const cur = el.value; el.innerHTML = `<option value="">${label}</option>` + clsOpts; if (cur && el.querySelector(`option[value="${escHtml(cur)}"]`)) el.value = cur; };
+        fill('mf-cls', 'كل التصنيفات'); fill('mf-cls-from', 'من'); fill('mf-cls-to', 'إلى');
+      })(),
+      (async () => {
+        const itemVals = await api('/api/items/all?limit=20000').catch(() => []);
+        const itemOpts = itemVals.map(i => `<option value="${escHtml(i.code)}">${escHtml(i.code)} — ${escHtml(i.descr || '')}</option>`).join('');
+        const fill = (id, label) => { const el = document.getElementById(id); if (!el) return; const cur = el.value; el.innerHTML = `<option value="">${label}</option>` + itemOpts; if (cur && el.querySelector(`option[value="${escHtml(cur)}"]`)) el.value = cur; };
+        fill('mf-item-inner', 'كل الأصناف'); fill('mf-item-inner-from', 'من'); fill('mf-item-inner-to', 'إلى');
+      })(),
+      (async () => {
+        const mtypeVals = await api('/api/dims?dim=mtype&src=movements').catch(() => []);
+        const mtypeOpts = mtypeVals.map(v => `<option value="${escHtml(String(v))}">${escHtml(String(v))}</option>`).join('');
+        const fill = (id, label) => { const el = document.getElementById(id); if (!el) return; const cur = el.value; el.innerHTML = `<option value="">${label}</option>` + mtypeOpts; if (cur && el.querySelector(`option[value="${escHtml(cur)}"]`)) el.value = cur; };
+        fill('mf-mtype', 'كل الحركات'); fill('mf-mtype-from', 'من'); fill('mf-mtype-to', 'إلى');
+        fill('mf-mtype-cat', 'كل التصنيفات'); fill('mf-mtype-cat-from', 'من'); fill('mf-mtype-cat-to', 'إلى');
+      })(),
+      (async () => {
+        const dirVals = await api('/api/dims?dim=dir&src=movements').catch(() => []);
+        const dirOpts = dirVals.map(v => `<option value="${escHtml(String(v))}">${escHtml(String(v))}</option>`).join('');
+        const fill = (id, label) => { const el = document.getElementById(id); if (!el) return; const cur = el.value; el.innerHTML = `<option value="">${label}</option>` + dirOpts; if (cur && el.querySelector(`option[value="${escHtml(cur)}"]`)) el.value = cur; };
+        fill('mf-dir', 'كل التوجيهات'); fill('mf-dir-from', 'من'); fill('mf-dir-to', 'إلى');
+      })(),
+      (async () => {
+        const compVals = await api('/api/dims?dim=company&src=sales').catch(() => []);
+        const compOpts = compVals.map(v => `<option value="${escHtml(String(v))}">${escHtml(String(v))}</option>`).join('');
+        const fill = (id, label) => { const el = document.getElementById(id); if (!el) return; const cur = el.value; el.innerHTML = `<option value="">${label}</option>` + compOpts; if (cur && el.querySelector(`option[value="${escHtml(cur)}"]`)) el.value = cur; };
+        fill('mf-company', 'كل الشركات'); fill('mf-company-from', 'من'); fill('mf-company-to', 'إلى');
+      })(),
+      (async () => {
+        const custVals = await api('/api/dims?dim=cust&src=sales').catch(() => []);
+        const custOpts = custVals.map(v => `<option value="${escHtml(String(v))}">${escHtml(String(v))}</option>`).join('');
+        const fill = (id, label) => { const el = document.getElementById(id); if (!el) return; const cur = el.value; el.innerHTML = `<option value="">${label}</option>` + custOpts; if (cur && el.querySelector(`option[value="${escHtml(cur)}"]`)) el.value = cur; };
+        fill('mf-cust', 'كل العملاء'); fill('mf-cust-from', 'من'); fill('mf-cust-to', 'إلى');
+      })(),
+      fillDimPair('mf-place', 'mf-place-to', '/api/dims?dim=place&src=movements'),
+      fillDimPair('mf-storage', 'mf-storage-to', '/api/dims?dim=storage&src=movements'),
     ]);
   }
-  const group = $('#mf-group')?.value || 'item';
-  const brk = group === 'detail' ? '' : ($('#mf-break')?.value === 'total' ? '' : ($('#mf-break')?.value || ''));
-  const per = group === 'detail' ? '' : ($('#mf-per')?.value || '');
-  const d = await api(appendQ('/api/movements/report?by=' + encodeURIComponent(group) + '&by2=' + encodeURIComponent(brk) + '&per=' + encodeURIComponent(per) + '&limit=20000', qs));
+  /* التجميع أُلغي نهائياً من هذه الشاشة — كل سطر = حركة أصلية واحدة */
+  const d = await api(appendQ('/api/movements/report?by=detail&limit=20000', qs));
 
-  /* أعمدة الأموال المشتركة: كمية + قيمة + قيمة الوحدة + عدد الحركات */
+  /* أعمدة الأموال: كمية + قيمة + قيمة الوحدة — كل سطر حركة أصلية، لا إجماليات في الجدول */
   const moneyCols = [
-    { t: 'عدد الحركات', k: 'lines', n: 1, f: r => n0(r.lines) },
     { t: 'الكمية', k: 'qty', n: 1, f: r => n2(r.qty), cls: r => dv(r.qty) },
     { t: 'القيمة', k: 'amount', n: 1, f: r => money(r.amount), cls: r => dv(r.amount) },
     { t: 'قيمة الوحدة', n: 1, f: r => { const q = Number(r.qty) || 0, v = Number(r.amount) || 0; return q ? money(Math.round((v / q) * 100) / 100) : '—'; } },
   ];
-  const perCol = per ? [{ t: 'الفترة', k: 'per' }] : [];
-  if (group === 'detail' && !per) {
+  if (true) {
     table($('#mv-report'), [
+      { t: 'رقم الحركة', k: 'id', n: 1, f: r => n0(r.id) },
+      { t: 'التاريخ', k: 'post_date', f: r => (r.post_date || '—') },
       { t: 'كود الصنف', k: 'item' },
       { t: 'اسم الصنف', k: 'item_desc' },
       { t: 'وحدة القياس', k: 'uom' },
@@ -2527,35 +2907,90 @@ async function loadMovements() {
       { t: 'المخزن', k: 'storage_loc' },
       { t: 'المكان', k: 'place' },
       ...moneyCols,
-    ], d.rows, { empty: 'لا توجد حركات مطابقة للفلاتر' });
-  } else {
-    /* تجميع ثنائي/ثلاثي: فترة × تجميع × تفصيل */
-    table($('#mv-report'), [
-      ...perCol,
-      { t: d.label || 'التجميع', k: 'g1' },
-      ...(brk ? [{ t: d.label2 || 'التفصيل', k: 'g2' }] : []),
-      ...(group === 'item' ? [{ t: 'الوصف', k: 'item_desc' }, { t: 'وحدة القياس', k: 'uom' }] : []),
-      ...moneyCols,
-    ], d.rows, { empty: 'لا توجد حركات مطابقة للفلاتر' });
+    ], d.rows, { empty: 'لا توجد حركات مطابقة للفلاتر', totals: true });
   }
   const tot = d.rows.reduce((s, r) => s + (r.lines || 0), 0);
   const netVal = d.rows.reduce((s, r) => s + (r.amount || 0), 0);
   $('#mv-report-count').textContent = n0(d.rows.length) + ' سطر • ' + n0(tot) + ' حركة حقيقية'
-    + ' • صافي القيمة ' + money(netVal) + ' — الأرقام بعد إسقاط حركات الإلغاء';
+    + ' • صافي القيمة ' + money(netVal);
 }
 
-liveFilter(['mf-item', 'mf-from', 'mf-to', 'mf-place', 'mf-place-to', 'mf-mtype', 'mf-mtype-to',
-  'mf-dir', 'mf-dir-to', 'mf-unit', 'mf-unit-to', 'mf-storage', 'mf-storage-to'],
-  () => loadMovements().catch(e => toast(e.message)), 300);
+liveFilter([
+  'mf-item', 'mf-from', 'mf-to',
+  'mf-grp', 'mf-grp-from', 'mf-grp-to', 'mf-cls', 'mf-cls-from', 'mf-cls-to',
+  'mf-item-inner', 'mf-item-inner-from', 'mf-item-inner-to',
+  'mf-mtype', 'mf-mtype-from', 'mf-mtype-to', 'mf-mtype-cat', 'mf-mtype-cat-from', 'mf-mtype-cat-to',
+  'mf-dir', 'mf-dir-from', 'mf-dir-to',
+  'mf-company', 'mf-company-from', 'mf-company-to',
+  'mf-place', 'mf-place-from', 'mf-place-to', 'mf-storage', 'mf-storage-from', 'mf-storage-to',
+  'mf-cust', 'mf-cust-from', 'mf-cust-to'
+], () => loadMovements().catch(e => toast(e.message)), 300);
 
-/* تغيير طريقة تجميع التقرير في شاشة الحركات اليومية */
-$('#mf-group')?.addEventListener('change', () => {
-  vis($('#mf-break'), $('#mf-group').value !== 'detail');
-  vis($('#mf-per'), $('#mf-group').value !== 'detail');
-  loadMovements().catch(e => toast(e.message));
+function toggleMenu(id, btn) {
+  const el = $('#' + id);
+  if (!el) return;
+  const open = el.hidden;
+  ['items-menu','types-menu','places-menu','other-menu'].forEach(m => { if (m !== id) { const e=$('#'+m); if(e&&!e.hidden) e.hidden=true; if(e&&e.parentElement!==document.body) document.body.appendChild(e); } });
+  if (el.parentElement !== document.body) document.body.appendChild(el);
+  el.hidden = !open;
+  if (!open && btn) btn.classList.remove('on'); else if (btn) btn.classList.add('on');
+  if (open) {
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      el.style.position = 'fixed';
+      el.style.top = (rect.bottom + 6) + 'px';
+      const menuW = 240;
+      if (rect.right + menuW > window.innerWidth) {
+        el.style.right = '4px';
+        el.style.left = 'auto';
+      } else {
+        el.style.left = rect.left + 'px';
+        el.style.right = 'auto';
+      }
+      el.style.zIndex = '20000';
+      el.style.width = menuW + 'px';
+      el.style.maxHeight = '70vh';
+      el.style.overflow = 'auto';
+      el.style.overflowX = 'hidden';
+    }
+  } else {
+    el.style.position = ''; el.style.top = ''; el.style.left = ''; el.style.zIndex = ''; el.style.width = '';
+  }
+}
+function closeAllMenus() {
+  ['items-menu','types-menu','places-menu','other-menu'].forEach(m => { const e=$('#'+m); if(e&&!e.hidden) e.hidden=true; if(e) { e.style.position=''; e.style.top=''; e.style.left=''; e.style.zIndex=''; e.style.width=''; } });
+  ['btn-items','btn-types','btn-places','btn-other'].forEach(b => { const b2=$('#'+b); if(b2) b2.classList.remove('on'); });
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.cpp') && !e.target.closest('.cpp-menu')) closeAllMenus();
 });
-$('#mf-break')?.addEventListener('change', () => loadMovements().catch(e => toast(e.message)));
-$('#mf-per')?.addEventListener('change', () => loadMovements().catch(e => toast(e.message)));
+function clearMenu(name) {
+  if (name === 'items') {
+    $('#mf-grp').value=''; $('#mf-grp-from').value=''; $('#mf-grp-to').value='';
+    $('#mf-cls').value=''; $('#mf-cls-from').value=''; $('#mf-cls-to').value='';
+    $('#mf-item-inner').value=''; $('#mf-item-inner-from').value=''; $('#mf-item-inner-to').value='';
+  }
+  if (name === 'types') {
+    $('#mf-mtype').value=''; $('#mf-mtype-from').value=''; $('#mf-mtype-to').value='';
+    $('#mf-mtype-cat').value=''; $('#mf-mtype-cat-from').value=''; $('#mf-mtype-cat-to').value='';
+    $('#mf-dir').value=''; $('#mf-dir-from').value=''; $('#mf-dir-to').value='';
+  }
+  if (name === 'places') {
+    $('#mf-company').value=''; $('#mf-company-from').value=''; $('#mf-company-to').value='';
+    $('#mf-place').value=''; $('#mf-place-from').value=''; $('#mf-place-to').value='';
+    $('#mf-storage').value=''; $('#mf-storage-from').value=''; $('#mf-storage-to').value='';
+  }
+  if (name === 'other') { $('#mf-cust').value=''; $('#mf-cust-from').value=''; $('#mf-cust-to').value=''; }
+}
+function applyMenu(name) {
+  loadMovements().catch(e => toast(e.message));
+}
+function clearGroup(name) {
+  clearMenu(name);
+  loadMovements().catch(e => toast(e.message));
+}
+
+/* طبقة التجميع أُلغيت نهائياً من شاشة الحركات اليومية — كل سطر = حركة أصلية */
 
 /* قائمة «فلاتر أخرى» تُدار مركزياً — لا حاجة لمعالج خاص بالسوق اليومية */
 
@@ -3033,7 +3468,7 @@ async function prLoadAllItems(force) {
   } catch (e) { /* fallback للبيانات الأساسية */ }
   /* لا أسعار مسجلة بعد → الأصناف من البيانات الأساسية بنفس صيغة باقي الشاشات */
   try {
-    const items = await api('/api/md/items?limit=3000');
+    const items = await api('/api/md/items?limit=20000');
     const seen = new Map();
     (Array.isArray(items) ? items : []).forEach(r => {
       const cc = r.code || r.item_code;
@@ -3423,7 +3858,7 @@ function movementsMeasureCols() {
 function repDetailCols(name) {
   if (name === 'movements-total') {
     return [
-      { t: 'التاريخ', k: 'post_date' },
+      { t: 'التاريخ', k: 'post_date', f: r => (r.post_date || '—') },
       { t: 'كود الصنف', k: 'item' },
       { t: 'اسم الصنف', k: 'item_desc' },
       { t: 'وحدة القياس', k: 'uom', f: r => (r.uom || '—') },
@@ -3438,7 +3873,7 @@ function repDetailCols(name) {
   }
   if (name === 'inventory-total') {
     return [
-      { t: 'التاريخ', k: 'balance_date' },
+      { t: 'التاريخ', k: 'balance_date', f: r => (r.balance_date || '—') },
       { t: 'كود الصنف', k: 'item' },
       { t: 'اسم الصنف', k: 'item_desc' },
       { t: 'وحدة القياس', k: 'uom', f: r => (r.uom || '—') },
@@ -3903,7 +4338,7 @@ function renderRepOpts(name) {
   if (!repGroups[name]) repGroups[name] = d.primary[0].v;
   if (repBreaks[name] === undefined || repBreaks[name] === '') repBreaks[name] = 'total';
   if (repPers[name] === undefined) repPers[name] = '';
-  if (repModes[name] === undefined) repModes[name] = '';
+  if (repModes[name] === undefined) repModes[name] = 'detail';
   const sel = $('#rep-group');
   if (sel) {
     sel.innerHTML = d.primary.map(l => `<option value="${l.v}">${escHtml(l.t)}</option>`).join('');
@@ -3973,11 +4408,16 @@ async function showReport(name, opts = {}) {
   rememberReport(name);
   
   $('#rep-title').textContent = meta.label;
+  const _rrb = $('#rep-recon-btn'); if (_rrb) _rrb.style.display = apiName === 'reconcile' ? '' : 'none';
   renderRepOpts(name);
   const host = $('#rep-table');
   const qs = reportQS();
-  $('#rep-csv').style.display = '';
-  $('#rep-csv').href = '/api/export?name=' + encodeURIComponent(apiName) + byQ + (qs ? '&' + qs.slice(1) : '');
+  /* زرّا التصدير (في رأس الشاشة وداخل العارض) — يُحدَّثان معًا */
+  for (const btn of [$('#rep-csv'), $('#rep-csv-view')]) {
+    if (!btn) continue;
+    btn.style.display = '';
+    btn.href = '/api/export?name=' + encodeURIComponent(apiName) + byQ + (qs ? '&' + qs.slice(1) : '');
+  }
   /* الصفحة الرئيسية لعقود الاستيراد (pbix-home) — صفحة بطاقات بلا فلاتر/تصدير */
   const landing = apiName === 'pbix-home';
   $('#rf-view-tools').style.display = landing ? 'none' : '';
@@ -3997,7 +4437,9 @@ async function showReport(name, opts = {}) {
     }
   }
   $('#rep-opts').style.display = (landing || apiName === 'pbix-hedge-position') ? 'none' : '';
-  if (landing || apiName === 'pbix-hedge-position') $('#rep-csv').style.display = 'none';
+  if (landing || apiName === 'pbix-hedge-position') {
+    for (const btn of [$('#rep-csv'), $('#rep-csv-view')]) if (btn) btn.style.display = 'none';
+  }
   /* تقرير جديد (أو تغيّر مستويَي التجميع) → فلاتر أعمدة نظيفة */
   if (host.__lastReport !== sig) { host.__filters = {}; host.__groupBy = ''; host.__lastReport = sig; }
   /* فلاتر رؤوس الأعمدة: للتقارير الخام تُرسل للخادم ليُفلتر كل الشيت لا الصفحة فقط */
@@ -4032,8 +4474,12 @@ async function showReport(name, opts = {}) {
   }
   host.dataset.report = isRaw ? '1' : '';
   try {
-    const d = await api('/api/report?name=' + encodeURIComponent(apiName)
-      + (isRaw ? '&page=1&pageSize=100000' : '&limit=100000')   /* عرض كل الصفوف بلا حد */
+    const _recon = (apiName === 'reconcile');
+   const _reconPage = _recon ? (repPage[apiName] || 1) : 1;
+   const _pageParam = _recon ? '&page=' + _reconPage + '&limit=500'
+     : (isRaw ? '&page=1&pageSize=100000' : '&limit=100000');
+   const d = await api('/api/report?name=' + encodeURIComponent(apiName)
+      + _pageParam   /* عرض كل الصفوف بلا حد */
       + byQ + (qs ? '&' + qs.slice(1) : '') + colf);
     const cfg = REP_VIEW[apiName] || REP_VIEW[name];
     if (landing) {
@@ -4073,7 +4519,7 @@ async function showReport(name, opts = {}) {
         host.__barClear.hidden = true;
       }
     }
-    renderRepPager(name, d, isRaw);
+    renderRepPager(name, d, isRaw || name === 'reconcile');
   } catch (e) {
     $('#rep-meta').textContent = '';
     host.innerHTML = `<div class="neg" style="padding:16px">${e.message}</div>`;
@@ -4137,7 +4583,8 @@ let repPage = {};
 function renderRepPager(name, d, isRaw) {
   const host = $('#rep-pager');
   if (!host) return;
-  if (!isRaw || !d || !d.pages || d.pages < 2) { host.innerHTML = ''; host.hidden = true; return; }
+  const _showPager = isRaw || name === 'reconcile';
+  if (!_showPager || !d || !d.pages || d.pages < 2) { host.innerHTML = ''; host.hidden = true; return; }
   const page = d.page, pages = d.pages;
   const btn = (label, p, off, title) =>
     `<button type="button" class="btn sm ghost" data-pg="${p}" ${off ? 'disabled' : ''} title="${title || ''}">${label}</button>`;
@@ -4154,6 +4601,38 @@ function renderRepPager(name, d, isRaw) {
      ${btn('التالية ›', page + 1, page === pages, 'الصفحة التالية')}
      ${btn('الأخيرة ›', pages, page === pages, 'الصفحة الأخيرة')}`;
 }
+$('#rep-recon-btn')?.addEventListener('click', async () => {
+  const btn = $('#rep-recon-btn'); if (btn) btn.disabled = true;
+  try {
+    const qs = reportQS();
+    const r = await api('/api/reconcile?limit=200' + (qs ? '&' + qs.slice(1) : ''));
+    const host = $('#rep-table'); if (!host) return;
+    host.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.className = 'hint';
+    summary.innerHTML = `المطابقة: ${n0(r.matched)} مطابق · <b class="neg">${n0(r.mismatches)}</b> غير مطابق · فرق إجمالي ${money(r.totalDiff)} · فجوات: ${n0(r.gaps.length)} · أزواج: ${n0(r.keys)}`;
+    host.appendChild(summary);
+    const cols = (REP_VIEW['reconcile'] && REP_VIEW['reconcile'].cols) || [];
+    const sampleHost = document.createElement('div');
+    host.appendChild(sampleHost);
+    table(sampleHost, cols, r.sample || [], { limit: 0, empty: 'لا توجد مطابقات خاطئة' });
+    if (r.gaps && r.gaps.length) {
+      const gtitle = document.createElement('div');
+      gtitle.className = 'hint warn';
+      gtitle.style.marginTop = '8px';
+      gtitle.innerHTML = '<b>فجوات تاريخ (غير متتالية — لم تُقارن):</b>';
+      host.appendChild(gtitle);
+      const gtable = document.createElement('div');
+      host.appendChild(gtable);
+      const gcols = [{ t: 'الصنف', k: 'item' }, { t: 'من', k: 'prev_date' }, { t: 'إلى', k: 'next_date' },
+        { t: 'ختامي', k: 'close_val', n: 1, f: x => money(x.close_val) },
+        { t: 'افتتاحي', k: 'open_val', n: 1, f: x => money(x.open_val) }];
+      table(gtable, gcols, r.gaps, { limit: 0, empty: '' });
+    }
+    const meta = $('#rep-meta'); if (meta) meta.textContent = `${n0(r.mismatches)} غير مطابق · ${n0(r.gaps.length)} فجوة · ${n0(r.keys)} زوج`;
+  } catch (e) { toast(e.message); }
+  btn.disabled = false;
+});
 $('#rep-pager')?.addEventListener('click', e => {
   const b = e.target.closest('button[data-pg]');
   if (!b || b.disabled) return;
@@ -4247,7 +4726,11 @@ const RF_FILTER_IDS = ['rf-date', 'rf-item',
   'rf-company', 'rf-company-to', 'rf-cls', 'rf-cls-to', 'rf-grp', 'rf-grp-to',
   'rf-cust', 'rf-cust-to', 'pbix-kind'];
 liveFilter(RF_FILTER_IDS,
-  () => { if (currentReport) showReport(currentReport).catch(e => toast(e.message)); }, 400);
+  () => {
+    if (!currentReport) return;
+    if (currentReport === 'reconcile') repPage[currentReport] = 1;   /* تغيير فلتر → إعادة إلى الصفحة الأولى */
+    showReport(currentReport).catch(e => toast(e.message));
+  }, 400);
 
 /* ---------------- المصادقة والمستخدمون ---------------- */
 let me = null;
@@ -4268,7 +4751,43 @@ function enterLogin(msg) {
   const u = $('#login-user'); if (u && document.activeElement !== u) u.focus();
 }
 
+/* الصفحة الرئيسية للمنصة: تجميع الشاشات الثلاث + حالة حقيقية من الواجهة */
+function openPlatformHome() {
+  closeNavMenus();
+  $$('nav button').forEach(x => x.classList.remove('active'));
+  document.querySelector(dropBtnSel('platform'))?.classList.add('active');
+  current = PLATFORM_HOME;
+  rememberScreen(PLATFORM_HOME);
+  $$('section').forEach(s => s.classList.remove('active'));
+  const sec = $('#tab-' + PLATFORM_HOME);
+  if (!sec) { toast('صفحة المنصة غير موجودة في الواجهة'); return; }
+  sec.classList.add('active');
+  const t = TITLES[PLATFORM_HOME] || ['منصة التحليل والتقارير', ''];
+  setHead(t[0], t[1]);
+  $('#sidebar')?.classList.remove('open');
+  if (window.PlatformShell && typeof window.PlatformShell.renderHome === 'function') {
+    window.PlatformShell.renderHome();
+  }
+  if (window.PlatformShell && typeof window.PlatformShell.loadStatus === 'function') {
+    window.PlatformShell.loadStatus().catch(() => {});
+  }
+  if (window.UiLayout && window.UiLayout.apply) { try { window.UiLayout.apply(); } catch (_) {} }
+}
+
 function goTab(name) {
+  /* التبويبان المدموجان ⇒ شاشتهما المضيفة */
+  name = platformHost(name);
+  /* الصفحة الرئيسية للمنصة */
+  if (isPlatformHome(name)) { openPlatformHome(); return; }
+  /* شاشة التقارير لم تعد لها زر مستقل في الشريط — تُفتح عبر «لوحة المعلومات» */
+  if (name === 'reports') { openReportsScreen().catch(() => {}); return; }
+  /* الشاشات المخصّصة: أزرارها في قائمة «الشاشات المخصّصة» (data-goto) */
+  if (String(name || '').indexOf('cs_') === 0) {
+    const cb = document.querySelector(`nav button[data-goto="${name}"]`);
+    if (cb) { cb.click(); return; }
+    if (typeof window.openCustomScreen === 'function') window.openCustomScreen(name);
+    return;
+  }
   /* زر «رجوع» يفتح صفحة القسم (بلاطات) — الزر الرئيسي في الشريط يفتح القائمة فقط.
      pricegroup بلا زر مستقل: تُضاء لها قائمة البيانات اليومية */
   const grp = name === 'pricegroup' ? 'daily' : name;
@@ -4280,7 +4799,8 @@ function goTab(name) {
     showMdLanding(name);
     return;
   }
-  const b = document.querySelector(`nav button[data-tab="${name}"]`);
+  const b = document.querySelector(`nav button[data-tab="${name}"]`)
+    || document.querySelector(`nav button[data-goto="${name}"]`);
   if (b) b.click();
 }
 
@@ -4290,11 +4810,11 @@ function applyRoleUI() {
   $$('nav button').forEach(b => {
     if (b.closest('.nav-tools')) return;   // أدوات الشريط (رجوع/تحديث/...) — لا تُعامل كتنقل ولا تُخفى بالصلاحيات
     if (b.closest('.nav-menu')) return;   // عناصر القوائم المنسدلة — تُدار بفتح/غلق القائمة لا بالصلاحيات
-    if (b.dataset.goto) { vis(b, !tabs || tabs.includes(b.dataset.goto)); return; }
-    if (b.dataset.drop) { vis(b.closest('.nav-drop') || b, !tabs || (DROP_SUBS[b.dataset.drop] || []).some(t => tabs.includes(t))); return; }
+    if (b.dataset.goto) { vis(b, tabAllowed(b.dataset.goto)); return; }
+    if (b.dataset.drop) { vis(b.closest('.nav-drop') || b, (DROP_SUBS[b.dataset.drop] || []).some(t => tabAllowed(t))); return; }
     const g = MD_GROUPS[b.dataset.tab];
-    if (g) vis(b, !tabs || g.subs.some(t => tabs.includes(t)));
-    else vis(b, !tabs || tabs.includes(b.dataset.tab));
+    if (g) vis(b, g.subs.some(t => tabAllowed(t)));
+    else vis(b, tabAllowed(b.dataset.tab));
   });
   vis($('#btn-borse-fetch'), can('sync'));
   vis($('#btn-be-fetch'), can('sync'));
@@ -4307,16 +4827,117 @@ function applyRoleUI() {
     $('#me-avatar').textContent = (name || '?').trim().charAt(0) || '؟';
   }
   /* إن كانت الشاشة الحالية ممنوعة → الذهاب لأول شاشة مسموحة */
-  if (me && tabs && tabs.length && !tabs.includes(current)) goTab(tabs[0]);
+  /* التخطيط يُطبَّق بعد الصلاحيات ⇒ إخفاء التخطيط لا يلغي إخفاء الصلاحية */
+  if (window.UiLayout && window.UiLayout.isLoaded && window.UiLayout.isLoaded()) {
+    try { window.UiLayout.apply(); } catch (e) { /* تجاهل */ }
+  }
+  if (me && tabs && tabs.length && !tabAllowed(current)) goTab(tabs[0]);
+}
+
+/* ---------- الإجراءات المسجَّلة (يستعملها مصمم الشاشات للأزرار) ----------
+   كل إجراء مرتبط بزر قائم في التطبيق ⇒ نفس مسار التنفيذ ونفس الصلاحيات.
+   لا يُقبل اسم دالة عشوائي ولا كود حرّ. */
+const UI_ACTIONS = {
+  refresh: { label: 'تحديث البيانات', perm: null, host: '#btn-refresh' },
+  /* أفعال التطبيق الحقيقية (أزرار قائمة بمعرّفاتها الثابتة) */
+  fetchBorseDaily: { label: 'سحب البورصة اليومية', perm: 'sync', host: '#btn-borse-fetch' },
+  fetchBePrices: { label: 'سحب الأسعار (be)', perm: 'sync', host: '#btn-be-fetch' },
+  reportExportCsv: { label: 'تصدير التقرير CSV', perm: null, host: '#rep-csv' },
+  reportExportCsvView: { label: 'تصدير التقرير CSV (من العارض)', perm: null, host: '#rep-csv-view' },
+  reportReconcile: { label: 'شاشة المطابقة', perm: null, host: '#rep-recon-btn' },
+  wfRun: { label: 'تشغيل التدفق', perm: null, host: '#wf-run' },
+  wfPreview: { label: 'معاينة التدفق', perm: null, host: '#wf-preview' },
+  wfSave: { label: 'حفظ التدفق', perm: null, host: '#wf-save' },
+  wfNew: { label: 'تدفق جديد', perm: null, host: '#wf-new' },
+  rsSave: { label: 'حفظ التقرير', perm: null, host: '#rs-save' },
+  rsSaveAs: { label: 'حفظ التقرير باسم', perm: null, host: '#rs-save-as' },
+  rsValidate: { label: 'تحقق من التقرير', perm: null, host: '#rs-validate' },
+  rsExport: { label: 'تصدير التقرير HTML', perm: null, host: '#rs-export' },
+  rsExportXlsx: { label: 'تصدير التقرير Excel', perm: null, host: '#rs-export-xlsx' },
+  rsDelete: { label: 'حذف التقرير', perm: null, host: '#rs-delete' },
+  fetchBorse: { label: 'جلب البورصة', perm: 'sync', host: '#btn-borse-fetch' },
+  fetchBe: { label: 'جلب الأسعار (be)', perm: 'sync', host: '#btn-be-fetch' },
+  newReport: { label: 'تقرير جديد', perm: null, host: '#rs-new' },
+  loadReport: { label: 'فتح تقرير محفوظ', perm: null, host: '#rs-load' },
+  saveReport: { label: 'حفظ التقرير', perm: null, host: '#rs-save' },
+  validateReport: { label: 'تحقق من التقرير', perm: null, host: '#rs-validate' },
+  previewReport: { label: 'معاينة التقرير', perm: null, host: '#rs-preview' },
+  exportReport: { label: 'تصدير التقرير (HTML)', perm: null, host: '#rs-export' },
+  quickReport: { label: 'تقرير سريع', perm: null, host: '#rs-quick' },
+  importLegacy: { label: 'استيراد تقرير من التطبيق', perm: null, host: '#rs-legacy-import' },
+  addFilter: { label: 'إضافة فلتر للبيانات', perm: null, host: '#rs-add-filter' },
+  uiPreview: { label: 'معاينة تخطيط الواجهة', perm: null, host: '#ss-ui-preview' },
+};
+window.UiActions = {
+  list: () => Object.entries(UI_ACTIONS).map(([id, a]) => ({ id, label: a.label, perm: a.perm })),
+  /* تعديل الإعدادات العامة (شاشات/قوائم/أزرار) يتطلّب صلاحية 'master' (نظام الصلاحيات الحالي).
+     إن لم يُحسم المستخدم بعد (تحميل الجلسة) ⇒ نترك القرار للخادم (الحَكَم الحقيقي). */
+  canEditSettings: () => {
+    const u = (typeof me !== 'undefined' && me) ? me : null;
+    if (!u) return true;
+    if (u.role === 'admin') return true;
+    return !!(Array.isArray(u.perms) && u.perms.indexOf('master') >= 0);
+  },
+  can: id => {
+    const a = UI_ACTIONS[id];
+    if (!a) return false;
+    return !a.perm || can(a.perm);
+  },
+  run: id => {
+    const a = UI_ACTIONS[id];
+    if (!a) { toast('إجراء غير مسجَّل'); return false; }
+    if (a.perm && !can(a.perm)) { toast('لا تملك صلاحية: ' + a.label); return false; }
+    const host = a.host ? $(a.host) : null;
+    if (!host) { toast('الإجراء غير متاح في هذه الشاشة'); return false; }
+    try { host.click(); } catch (e) { toast('تعذّر تنفيذ الإجراء: ' + e.message); return false; }
+    return true;
+  },
+};
+/* اعتراض الأزرار التي لها إجراء مُتجاوز (أو مُنشأة) — بالتقاط قبل تنفيذ المعالج الأصلي */
+document.addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest('button[data-ui-action], button[data-ui-id]') : null;
+  if (!btn) return;
+  const act = btn.getAttribute('data-ui-action');
+  if (act) {
+    e.preventDefault(); e.stopPropagation();
+    window.UiActions.run(act);
+    return;
+  }
+  const id = btn.getAttribute('data-ui-id');
+  const it = (window.UiLayout && window.UiLayout.itemFor) ? window.UiLayout.itemFor(id) : null;
+  if (!it || !it.action) return;   /* لا تجاوز ⇒ السلوك الأصلي كما هو */
+  e.preventDefault(); e.stopPropagation();
+  window.UiActions.run(it.action);
+}, true);
+
+/* ---------- طبقة تخطيط الواجهة المحفوظة (مصمم الشاشات والقوائم) ---------- */
+let uiLayoutLoaded = false;
+async function loadUiLayout() {
+  if (uiLayoutLoaded || !window.UiLayout) return;
+  uiLayoutLoaded = true;
+  try {
+    const r = await api('/api/reports/get?id=ui-layout', { quiet401: true });
+    if (r && r.ui) {
+      window.UiLayout.setModel(r.ui);
+      window.UiLayout.apply();
+    }
+  } catch (e) { /* لا تخطيط محفوظ ⇒ الواجهة الافتراضية */ }
 }
 
 function enterApp(user) {
   me = user;
   vis($('#login-screen'), false);
   $('#login-err').hidden = true;
-  loadItemsAll().catch(() => {});   // تسخين قائمة الأصناف الأساسية الموحدة early
+  loadItemsAll({ quiet401: true, force: true }).catch(() => {});   // تسخين قائمة الأصناف الأساسية الموحدة early
+  /* تعبئة قوائم الأصناف في فلاتر التقارير (movements, sales, inventory) */
+  fillItemSelect(document.getElementById('mf-item'), 'كل الأصناف');
+  fillItemSelect(document.getElementById('sf-item'), 'كل الأصناف');
+  fillItemSelect(document.getElementById('if-item'), 'كل الأصناف');
   const p = $('#login-pass'); if (p) p.value = '';
   applyRoleUI();
+  loadUiLayout();
+  /* الشاشات المخصّصة: تُبنى أقسامها وزرّها في الشريط حسب صلاحية المستخدم */
+  if (typeof window.mountCustomScreens === 'function') window.mountCustomScreens().catch(() => {});
   const saved = (() => { try { return localStorage.getItem('ccs-screen'); } catch (_) { return null; } })();
   const okSaved = saved && (!me.tabs || !me.tabs.length || me.tabs.includes(saved)
     || (MD_GROUPS[saved] && mdSubsAllowed(saved).length));
@@ -4529,6 +5150,7 @@ function rememberScreen(name) {
 }
 function showScreenByName(name) {
   if (!name) return false;
+  if (isPlatformHome(name)) { openPlatformHome(); return true; }
   if (name === 'reports') {
     /* فتح شاشة التقرير المحفوظ مباشرة — لا الضغط على زر القائمة المنسدلة */
     openReportsScreen(savedReport()).catch(() => {});
@@ -4536,15 +5158,19 @@ function showScreenByName(name) {
   }
   if (MD_GROUPS[name]) { goTab(name); return true; }
   const el = document.querySelector(`nav button[data-tab="${name}"]`)
-    || document.querySelector(`[data-sub="${name}"]`);
+    || document.querySelector(`[data-sub="${name}"]`)
+    || document.querySelector(`nav button[data-goto="${name}"]`);
   if (el) { el.click(); return true; }
   return false;
 }
+let refreshBusy = false;
 $('#btn-refresh')?.addEventListener('click', async () => {
   const name = activeScreen();
+  if (refreshBusy) return;
   if (MD_GROUPS[name]) { showMdLanding(name); toast('تم التحديث'); return; }
   /* الشاشات متعددة اللوحات: حدّث بيانات اللوحة المفتوحة نفسها — لا ترجع للوحة الأولى */
   const paneOf = seg => document.querySelector(seg + ' .seg.on')?.dataset.pane;
+  refreshBusy = true;
   try {
     if (name === 'borse') {
       const p = paneOf('#borse-segs') || 'view';
@@ -4565,6 +5191,7 @@ $('#btn-refresh')?.addEventListener('click', async () => {
     } else await loadTab(name);
     toast('تم التحديث');
   } catch (e) { toast(e.message); }
+  finally { refreshBusy = false; }
 });
 window.addEventListener('resize', () => {
   if (!me) return;
@@ -4596,3 +5223,1055 @@ window.addEventListener('resize', () => {
     $('#login-btn').textContent = 'دخول';
   }
 })();
+/* ===== Workflow Studio (MVP) — visual builder ===== */
+(function () {
+  const apiCall = (typeof api === 'function') ? api : (async (u, o) => {
+    const r = await fetch(u, o); const j = await r.json(); if (!r.ok || !j.ok) throw new Error((j && (j.message || j.error)) || r.statusText); return (j && j.data) ? j.data : j;
+  });
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  const STEP_TYPES = ['select','filter','compute','groupBy','pivot','unpivot','join','union','compare','dedupe','nulls','window','sort','python'];
+  const TYPE_LABEL = {
+    select:'select — اختيار وإعادة تسمية', filter:'filter — تصفية صفوف', compute:'compute — حساب عمود',
+    groupBy:'groupBy — تجميع', pivot:'pivot — جدول محوري (Cross-tab)', unpivot:'unpivot — إلغاء المحورية',
+    join:'join — ربط بمصدر مسجَّل', union:'union — اتحاد جداول',
+    compare:'compare — مقارنة جدولين', dedupe:'dedupe — إزالة التكرار', nulls:'nulls — معالجة القيم الفارغة',
+    window:'window — ترقيم/تراكم', sort:'sort — ترتيب',
+    python:'python — تحويل Python مقيّد',
+  };
+  const FILTER_OPS = ['eq','ne','gt','gte','lt','lte','contains','startsWith','in','isNull','isNotNull'];
+  const AGG_FNS = ['SUM','COUNT','COUNT_DISTINCT','AVG','MIN','MAX','MEDIAN','STDEV'];
+
+  let steps = [];
+  let sourceColumns = [];
+  let editingIndex = null;
+  let fns = [];
+  let lastRunId = null;
+
+  /* ---------- column propagation (mirror of workflow.js) ---------- */
+  function wfColumns(list, src) {
+    let cols = (src || []).slice();
+    for (const s of (list || [])) {
+      switch (s.type) {
+        case 'select': {
+          if (Array.isArray(s.columns) && s.columns.length) {
+            const map = {};
+            for (const r of (Array.isArray(s.renames) ? s.renames : [])) if (r && r.from && r.to) map[r.from] = r.to;
+            cols = s.columns.map(c => map[c] || c);
+          }
+          break;
+        }
+        case 'filter': break;
+        case 'compute': if (s.newColumn) cols = cols.concat([s.newColumn]); break;
+        case 'groupBy': cols = (s.keys || []).slice().concat((s.aggs || []).map(a => a.out)); break;
+        case 'pivot': cols = (s.rowKeys || []).slice(); break; // أعمدة Pivot الديناميكية تُعرف عند التنفيذ
+        case 'unpivot': {
+          const ids = (Array.isArray(s.idColumns) && s.idColumns.length)
+            ? s.idColumns.slice()
+            : cols.filter(c => !(s.valueColumns || []).includes(c));
+          cols = ids.concat([s.keyName || 'variable', s.valueName || 'value']);
+          break;
+        }
+        case 'join': {
+          const rr = Array.isArray(s.rightRows) ? s.rightRows : [];
+          const rc = rr.length ? Object.keys(rr[0]) : [];
+          const prefix = s.rightPrefix || '';
+          const out = cols.slice();
+          for (const c of rc) { const n = prefix ? prefix + c : c; if (!out.includes(n)) out.push(n); }
+          cols = out; break;
+        }
+        case 'union': break;
+        case 'compare': cols = ['__status', '__key', '__left', '__right']; break;
+        case 'dedupe': case 'nulls': break;
+        case 'window': if (s.out && !cols.includes(s.out)) cols = cols.concat([s.out]); break;
+        case 'python': {
+          for (const op of (Array.isArray(s.operations) ? s.operations : [])) {
+            if (op && op.out && !cols.includes(op.out)) cols = cols.concat([op.out]);
+          }
+          break;
+        }
+      }
+    }
+    return cols;
+  }
+
+  /* ---------- source fields ---------- */
+  /* ---------- المعادلات المحفوظة (سجل مركزي مشترك بين الاستوديوين) ---------- */
+  let wfFormulas = [];
+  async function loadSavedFormulas() {
+    try {
+      const d = await apiCall('/api/formulas/saved');
+      wfFormulas = (d && d.items) || [];
+    } catch (e) { wfFormulas = []; }
+  }
+  function formulaOptions(selected) {
+    const opts = ['<option value="">— لا شيء (اكتب التعبير) —</option>'];
+    for (const f of wfFormulas) {
+      opts.push('<option value="' + esc(f.id) + '"' + (selected === f.id ? ' selected' : '') + '>'
+        + esc(f.name) + ' (نسخة ' + esc(String(f.version)) + ')</option>');
+    }
+    return opts.join('');
+  }
+
+  /* ---------- مصادر الفهرس (تُملأ من /api/datasets) ---------- */
+  let wfSources = [];
+  function renderWorkbookStatus(s) {
+    const host = $('wf-workbook-status');
+    if (!host) return;
+    if (!s) { host.hidden = true; host.textContent = ''; return; }
+    let text = '';
+    let cls = 'wf-workbook-note';
+    if (s.status === 'ready') {
+      text = 'مصادر Excel جاهزة للقراءة فقط: ' + (s.sheetCount || (s.items || []).length) + ' ورقة من ' + (s.fileCount || 0) + ' ملف.';
+      if (s.reason) { text += ' ' + s.reason; cls += ' is-warn'; }
+    } else if (s.status === 'denied') {
+      text = s.reason || 'ليس لديك صلاحية قراءة ملفات Excel — صلاحية الاستيراد (import) مطلوبة.';
+      cls += ' is-err';
+    } else if (s.status === 'unset') {
+      text = s.reason || 'مصدر Excel غير مهيأ — اضبط WORKFLOW_WORKBOOK_DIR على مجلد قراءة مخصص.';
+      cls += ' is-warn';
+    } else {
+      text = s.reason || 'مصدر Excel غير متاح.';
+      cls += ' is-warn';
+    }
+    host.hidden = !text;
+    host.className = cls;
+    host.textContent = text;
+  }
+  async function loadSourceList() {
+    try {
+      const [ds, outs, files, workbooks] = await Promise.allSettled([
+        apiCall('/api/datasets'),
+        apiCall('/api/workflows/outputs'),
+        apiCall('/api/datasets/files'),
+        apiCall('/api/datasets/workbooks'),
+      ]);
+      const base = ds.status === 'fulfilled' ? ((ds.value && ds.value.items) || []) : [];
+      const outputs = outs.status === 'fulfilled'
+        ? (((outs.value && outs.value.items) || []).map(o => ({
+            name: 'output:' + o.runId,
+            label: 'نتيجة سابقة — ' + o.runId + (o.workflowName ? ' · ' + o.workflowName : '') + ' (' + (o.rowCount || 0) + ' صف)',
+            domain: 'نتائج سابقة', canonical: false, isOutput: true,
+          })))
+        : [];
+      renderWorkbookStatus(workbooks.status === 'fulfilled' ? workbooks.value : null);
+      const localFiles = files.status === 'fulfilled'
+        ? (((files.value && files.value.items) || []).map(f => Object.assign({}, f, { domain: 'ملفات محلية (اختبار)' })))
+        : [];
+      const workbookSources = workbooks.status === 'fulfilled'
+        ? (((workbooks.value && workbooks.value.items) || []).map(f => Object.assign({}, f, { domain: 'ملفات Excel (قراءة فقط)' })))
+        : [];
+      wfSources = base.concat(outputs, localFiles, workbookSources);
+      const sel = $('wf-source'); if (!sel) return;
+      const cur = sel.value;
+      const groups = {};
+      for (const s of wfSources) {
+        if (s.name === 'synthetic') continue;
+        const dm = s.domain || 'أخرى';
+        (groups[dm] = groups[dm] || []).push(s);
+      }
+      sel.innerHTML = '';
+      const mem = document.createElement('option');
+      mem.value = 'synthetic'; mem.textContent = 'بيانات تجريبية (synthetic)';
+      sel.appendChild(mem);
+      for (const dm of Object.keys(groups)) {
+        const og = document.createElement('optgroup'); og.label = dm;
+        for (const s of groups[dm]) {
+          const o = document.createElement('option');
+          o.value = s.isOutput ? 'output/' + s.name.slice(7)
+            : (String(s.name).indexOf('file:') === 0 ? 'file/' + s.name.slice(5)
+              : (String(s.name).indexOf('workbook:') === 0 ? 'workbook/' + s.name.slice(9) : 'dataset/' + s.name));
+          /* تحذير واضح للمصدر غير المعتمد (يبقى متاحًا — لا استبعاد تلقائي) */
+          const warn = s.canonicalNote ? ' — ⚠ غير المرجع المعتمد' : '';
+          o.textContent = s.label + (s.canonical ? ' ★' : '') + warn;
+          if (s.canonicalNote) o.title = s.canonicalNote;
+          og.appendChild(o);
+        }
+        sel.appendChild(og);
+      }
+      if (cur) sel.value = cur;
+      if (!sel.value) sel.value = 'synthetic';
+    } catch (e) { /* القائمة قد لا تكون متاحة */ }
+  }
+  /* خيارات مصدر الربط (مصدر مسجَّل أو بيانات حرفية) */
+  function sourceOptions(selected) {
+    const opts = ['<option value="">— بيانات حرفية (JSON) —</option>'];
+    for (const s of wfSources) {
+      if (s.name === 'synthetic') continue;
+      opts.push('<option value="' + esc(s.name) + '"' + (selected === s.name ? ' selected' : '') + '>'
+        + esc(s.label) + (s.canonical ? ' ★' : '') + '</option>');
+    }
+    return opts.join('');
+  }
+  async function loadSourceFields() {
+    const src = ($('wf-source') && $('wf-source').value) || 'synthetic';
+    const name = src.startsWith('dataset/') ? src.slice(8)
+      : (src.startsWith('output/') ? 'output:' + src.slice(7)
+        : (src.startsWith('file/') ? 'file:' + src.slice(5)
+          : (src.startsWith('workbook/') ? 'workbook:' + src.slice(9) : 'synthetic')));
+    try {
+      const d = await apiCall('/api/datasets/fields?name=' + encodeURIComponent(name));
+      sourceColumns = (d && d.columns) || [];
+      const fields = (d && d.fields) || sourceColumns.map(c => ({ name: c, type: 'any', description: '' }));
+      const sample = (d && d.sample) || [];
+      const host = $('wf-source-fields');
+      const renderFields = (q) => {
+        if (!host) return;
+        const ql = (q || '').trim().toLowerCase();
+        const filtered = ql ? fields.filter(f => (f.name + ' ' + (f.description || '')).toLowerCase().includes(ql)) : fields;
+        host.innerHTML = filtered.map(f =>
+          '<span class="wf-chip" title="' + esc(f.description || '') + '">' + esc(f.name) +
+          '<span class="muted xs" style="margin-inline-start:4px">(' + esc(f.type || 'any') + ')</span></span>'
+        ).join('') || '<span class="muted xs">لا حقول مطابقة</span>';
+      };
+      if (host) { host._fields = fields; host._render = renderFields; renderFields(''); }
+      const search = $('wf-field-search');
+      if (search) { search.value = ''; search.oninput = () => renderFields(search.value); }
+      const row = $('wf-fields-row'); if (row) row.hidden = false;
+      // sample panel
+      const sampleHost = $('wf-source-sample');
+      const sampleRow = $('wf-sample-row');
+      if (sampleHost && sample.length) {
+        const cols = Object.keys(sample[0]);
+        let html = '<div class="hint">عينة (أول ' + sample.length + ' صفوف) — ليست بالضرورة كل البيانات</div>';
+        html += '<table><thead><tr>' + cols.map(c => '<th>' + esc(c) + '</th>').join('') + '</tr></thead><tbody>';
+        sample.forEach(r => { html += '<tr>' + cols.map(c => '<td>' + esc(r[c]) + '</td>').join('') + '</tr>'; });
+        html += '</tbody></table>';
+        sampleHost.innerHTML = html;
+        if (sampleRow) sampleRow.hidden = false;
+      } else {
+        if (sampleHost) sampleHost.innerHTML = '<div class="hint">لا توجد عينة متاحة</div>';
+        if (sampleRow) sampleRow.hidden = false;
+      }
+    } catch (e) {
+      sourceColumns = [];
+      const host = $('wf-source-fields'); if (host) host.innerHTML = '<span class="neg xs">' + esc(e.message) + '</span>';
+      const row = $('wf-fields-row'); if (row) row.hidden = false;
+    }
+  }
+  function wfSource() {
+    const v = ($('wf-source') && $('wf-source').value) || 'synthetic';
+    if (v.indexOf('dataset/') === 0) return { type: 'dataset', name: v.slice(8), settings: { days: 120 } };
+    if (v.indexOf('output/') === 0) return { type: 'output', name: v.slice(7) };
+    if (v.indexOf('file/') === 0) return { type: 'file', name: v.slice(5) };
+    return { type: 'memory', name: v };
+  }
+  /** الرسم المرئي الحالي (إن وُجد) — يُرسل مع تعريف التحليل ليترجمه الخادم إلى خطوات */
+  function wfGraph() {
+    try {
+      if (window.WorkflowCanvas && typeof window.WorkflowCanvas.getGraph === 'function') {
+        const g = window.WorkflowCanvas.getGraph();
+        if (g && Array.isArray(g.nodes) && g.nodes.length) return g;
+      }
+    } catch (_) { /* المحرّر المرئي قد لا يكون محمّلًا */ }
+    return null;
+  }
+  /** يضمّ الرسم إلى تعريف التحليل عند وجوده فقط (توافق كامل مع المسارات القديمة) */
+  function wfWithGraph(wf) {
+    const g = wfGraph();
+    if (g) wf.graph = g;
+    return wf;
+  }
+  /** مزامنة المحرّر المرئي مع الخطوات بعد تعديلها من القائمة المتقدمة */
+  function wfSyncCanvasFromSteps(markDirty) {
+    const c = window.WorkflowCanvas;
+    if (!c || typeof c.loadWorkflow !== 'function') return;
+    try {
+      const src = wfSource();
+      c.loadWorkflow({
+        name: ($('wf-name') && $('wf-name').value) || 'untitled',
+        source: src,
+        steps: steps.slice(),
+      }, { dirty: !!markDirty });
+      if (markDirty && typeof c.markDirty === 'function') c.markDirty();
+    } catch (_) { /* لا تعطّل التحرير المتقدم */ }
+  }
+
+  /* ---------- steps list ---------- */
+  function stepSummary(s) {
+    switch (s.type) {
+      case 'select': return 'أعمدة: ' + (s.columns || []).join(', ');
+      case 'filter': return (s.column || '?') + ' ' + (s.op || '?') + ' ' + JSON.stringify(s.value);
+      case 'compute': return (s.newColumn || '?') + ' = ' + (s.formula || '');
+      case 'groupBy': return 'مفاتيح: ' + (s.keys || []).join(',') + ' | تجميعات: ' + (s.aggs || []).map(a => a.fn + '(' + (a.column || '*') + ')→' + a.out).join(', ');
+      case 'join': return (s.leftKey || '?') + ' ⋈ ' + (s.rightKey || '?') + ' (' + (s.joinType || 'inner') + ')' + (s.rightSource ? ' — ' + s.rightSource : '');
+      case 'union': return 'اتحاد ' + (s.mode === 'strict' ? 'صارم' : 'متوافق') + (s.rightSource ? ' — ' + s.rightSource : '');
+      case 'compare': return 'مفاتيح: ' + ((s.leftKeys || []).join(',')) + ' ↔ ' + ((s.rightKeys || []).join(',')) + (s.rightSource ? ' — ' + s.rightSource : '');
+      case 'dedupe': return 'تكرار حسب: ' + (((s.keys || []).length ? s.keys.join(',') : 'كل الأعمدة')) + ' — ' + (s.keep === 'last' ? 'آخر' : 'أول');
+      case 'nulls': return (s.action === 'fill' ? 'ملء' : 'حذف') + ' — أعمدة: ' + (((s.columns || []).length ? s.columns.join(',') : 'الكل'));
+      case 'window': return (s.op || 'rowNumber') + ' → ' + (s.out || '?');
+      case 'python': return 'Python مقيّد · ' + ((s.operations || []).length) + ' عملية — عمليات بيضاء فقط';
+      case 'sort': return 'ترتيب: ' + ((s.by || []).join(', ')) + ' (' + (s.order || 'asc') + ')';
+      default: return JSON.stringify(s);
+    }
+  }
+  function renderSteps() {
+    const host = $('wf-steps-list'); if (!host) return;
+    if (!steps.length) { host.innerHTML = '<div class="hint">لا توجد خطوات. اضغط «＋ إضافة خطوة».</div>'; syncJson(); updateCount(); return; }
+    host.innerHTML = steps.map((s, i) => {
+      return '<div class="wf-step">' +
+        '<div class="wf-step-rail"><span class="wf-step-num">' + (i + 1) + '</span><span class="wf-step-type pill">' + esc(s.type) + '</span></div>' +
+        '<div class="wf-step-body"><div class="wf-step-id">' + esc(s.id || s.type) + '</div><div class="muted xs">' + esc(stepSummary(s)) + '</div></div>' +
+        '<div class="wf-step-actions">' +
+          '<button class="btn xs ghost" data-act="up" data-i="' + i + '" ' + (i === 0 ? 'disabled' : '') + ' title="أعلى">↑</button>' +
+          '<button class="btn xs ghost" data-act="down" data-i="' + i + '" ' + (i === steps.length - 1 ? 'disabled' : '') + ' title="أسفل">↓</button>' +
+          '<button class="btn xs" data-act="preview" data-i="' + i + '">معاينة</button>' +
+          '<button class="btn xs" data-act="edit" data-i="' + i + '">تعديل</button>' +
+          '<button class="btn xs danger" data-act="del" data-i="' + i + '">حذف</button>' +
+        '</div></div>';
+    }).join('');
+    host.querySelectorAll('[data-act]').forEach(b => {
+      b.addEventListener('click', () => {
+        const i = Number(b.getAttribute('data-i'));
+        const act = b.getAttribute('data-act');
+        if (act === 'up' && i > 0) { const t = steps[i-1]; steps[i-1] = steps[i]; steps[i] = t; renderSteps(); }
+        else if (act === 'down' && i < steps.length - 1) { const t = steps[i+1]; steps[i+1] = steps[i]; steps[i] = t; renderSteps(); }
+        else if (act === 'del') { steps.splice(i, 1); if (editingIndex === i) closeEditor(); else if (editingIndex !== null && editingIndex > i) editingIndex--; renderSteps(); }
+        else if (act === 'preview') wfPreviewStep(i);
+        else if (act === 'edit') openEditor(i);
+      });
+    });
+    syncJson(); updateCount();
+  }
+  function updateCount() { const el = $('wf-steps-count'); if (el) el.textContent = steps.length ? (steps.length + ' خطوة') : ''; }
+
+  /* ---------- editor ---------- */
+  let beforeCols = [];
+  function openEditor(idx) {
+    editingIndex = idx;
+    const isNew = idx === null;
+    const step = isNew ? { id: 's' + (steps.length + 1), type: 'select' } : JSON.parse(JSON.stringify(steps[idx]));
+    const title = $('wf-editor-title'); if (title) title.textContent = (isNew ? 'إضافة خطوة' : 'تعديل الخطوة ' + (idx + 1));
+    beforeCols = isNew ? wfColumns(steps, sourceColumns) : wfColumns(steps.slice(0, idx), sourceColumns);
+    const body = $('wf-editor-body'); if (!body) return;
+    body.innerHTML = editorForm(step);
+    window.__wfStep = step;
+    const editor = $('wf-editor'); if (editor) editor.hidden = false;
+    wireEditor(step);
+  }
+  function closeEditor() { editingIndex = null; const e = $('wf-editor'); if (e) e.hidden = true; const b = $('wf-editor-body'); if (b) b.innerHTML = ''; showEditorErr(''); }
+
+  /* ---------- حفظ معادلة في السجل المشترك (من داخل التطبيق) ---------- */
+  const FN_WORDS = ['ADD','SUB','MUL','DIV','ABS','ROUND','CEIL','FLOOR','MIN2','MAX2','COALESCE','IFNULL','IF','UPPER','LOWER','TRIM','CONCAT','LEN','NUMF','R2F','YEAR','MONTH','DAY','MONTH_NAME','TODAY','DATEDIFF'];
+  async function saveStepFormula() {
+    const ta = $('ed-formula');
+    const expr = ta ? String(ta.value || '').trim() : '';
+    if (!expr) { toast('اكتب التعبير أولًا'); return; }
+    const suggested = (($('ed-newcol') && $('ed-newcol').value) || '').trim() || ('معادلة ' + (steps.length + 1));
+    const name = window.prompt('اسم المعادلة المحفوظة:', suggested);
+    if (!name) return;
+    /* الحقول: المعرّفات الواردة في التعبير + أنواعها من أعمدة المصدر المختار */
+    const known = (($('wf-source-fields') && $('wf-source-fields')._fields) || []);
+    const ids = Array.from(new Set((expr.match(/[A-Za-z_][A-Za-z0-9_]*/g) || [])
+      .filter(x => FN_WORDS.indexOf(x.toUpperCase()) < 0)));
+    const fields = ids.map(id => {
+      const f = known.find(k => k && k.name === id);
+      return { name: id, type: (f && f.type) || 'any', description: (f && f.description) || '' };
+    });
+    try {
+      const r = await apiCall('/api/formulas/save', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ formula: { name: String(name).trim(), expr, fields, origin: 'visual' } }),
+      });
+      await loadSavedFormulas();
+      /* إعادة رسم المحرّر ⇒ تظهر المعادلة الجديدة في قائمة «معادلة محفوظة» فورًا */
+      const stepNow = window.__wfStep;
+      if (stepNow) renderFields(stepNow.type || 'compute', stepNow);
+      const sel = $('ed-formulaid');
+      if (sel && r && r.id) sel.value = r.id;
+      toast('تم حفظ المعادلة «' + name + '» — صارت متاحة في الاستوديو وفي المصمم');
+    } catch (e) {
+      toast('تعذّر الحفظ: ' + e.message);
+    }
+  }
+  function editorForm(step) {
+    const typeOpts = STEP_TYPES.map(t => '<option value="' + t + '"' + (step.type === t ? ' selected' : '') + '>' + esc(TYPE_LABEL[t]) + '</option>').join('');
+    let html = '<div class="wf-row"><label>المعرّف (id):</label><input class="input sm" id="ed-id" value="' + esc(step.id || '') + '" /></div>';
+    html += '<div class="wf-row"><label>النوع:</label><select class="wf-select" id="ed-type">' + typeOpts + '</select></div>';
+    html += '<div id="ed-fields"></div>';
+    return html;
+  }
+  function renderFields(type, step) {
+    const body = $('ed-fields'); if (!body) return;
+    const cols = beforeCols;
+    let html = '';
+    if (type === 'select') {
+      html += '<div class="wf-row"><label>الأعمدة (Ctrl/Cmd لاختيار متعدد):</label><select class="wf-select" id="ed-cols" multiple size="6">' +
+        cols.map(c => '<option value="' + esc(c) + '"' + ((step.columns || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>إعادة التسمية (JSON):</label><textarea class="wf-textarea" id="ed-renames" rows="2" placeholder=\'[{"from":"qty","to":"quantity"}]\'>' +
+        esc(JSON.stringify(step.renames || [], null, 2)) + '</textarea></div>';
+    } else if (type === 'filter') {
+      html += '<div class="wf-row"><label>العمود:</label><select class="wf-select" id="ed-col">' + cols.map(c => '<option value="' + esc(c) + '"' + (step.column === c ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>العملية:</label><select class="wf-select" id="ed-op">' + FILTER_OPS.map(o => '<option value="' + o + '"' + (step.op === o ? ' selected' : '') + '>' + o + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>القيمة:</label><input class="input sm" id="ed-val" value="' + esc(step.value === undefined ? '' : (Array.isArray(step.value) ? step.value.join(',') : step.value)) + '" placeholder="للـ in: a,b,c" /></div>';
+    } else if (type === 'compute') {
+      html += '<div class="wf-row"><label>اسم العمود الجديد:</label><input class="input sm" id="ed-newcol" value="' + esc(step.newColumn || '') + '" /></div>';
+      html += '<div class="wf-row"><label>معادلة محفوظة:</label><select class="wf-select" id="ed-formulaid">' + formulaOptions(step.formulaId) + '</select><span class="muted xs">تُملأ التعبير من السجل المشترك وتُحفظ مرجعها (معرّف + نسخة) — نفس المحرك في الاستوديوين.</span></div>';
+      html += '<div class="wf-row"><label>المعادلة:</label><textarea class="wf-textarea" id="ed-formula" rows="3">' + esc(step.formula || '') + '</textarea></div>';
+      html += '<div class="wf-row"><label>إدراج دالة:</label><div class="wf-fn-insert">' + fns.map(f => '<button type="button" class="btn xs ghost" data-fn="' + esc(f.name) + '">' + esc(f.name) + '</button>').join('') + '</div></div>';
+      html += '<div class="wf-row"><button type="button" class="btn xs" id="ed-save-formula">احفظ كمعادلة</button><span class="muted xs">تُحفظ في السجل المشترك (باسم + حقول + نسخة) فتصبح متاحة في هذا الاستوديو وفي مصمم التقارير.</span></div>';
+    } else if (type === 'groupBy') {
+      html += '<div class="wf-row"><label>المفاتيح (متعدد):</label><select class="wf-select" id="ed-keys" multiple size="6">' + cols.map(c => '<option value="' + esc(c) + '"' + ((step.keys || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>التجميعات:</label><div id="ed-aggs"></div><button type="button" class="btn xs" id="ed-add-agg">＋ تجميع</button></div>';
+    } else if (type === 'pivot') {
+      html += '<div class="wf-row"><label>مفاتيح صفوف الجدول:</label><select class="wf-select" id="ed-prowkeys" multiple size="5">' +
+        cols.map(c => '<option value="' + esc(c) + '"' + ((step.rowKeys || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>أعمدة المحورية (Cross-tab):</label><select class="wf-select" id="ed-pcolkeys" multiple size="5">' +
+        cols.map(c => '<option value="' + esc(c) + '"' + ((step.columnKeys || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>القيم التجميعية (JSON):</label><textarea class="wf-textarea" id="ed-pvalues" rows="4" placeholder=\'[{"fn":"SUM","column":"qty","out":"qty"}]\'>' +
+        esc(JSON.stringify(step.values || [], null, 2)) + '</textarea><span class="muted xs">كل قيمة: fn (SUM/COUNT/...)، column، out. أعمدة الناتج ديناميكية.</span></div>';
+      html += '<div class="wf-row"><label>بادئة أعمدة الناتج:</label><input class="input sm" id="ed-pprefix" value="' + esc(step.prefix === undefined ? 'pivot_' : step.prefix) + '" /></div>';
+      html += '<div class="wf-row"><label>قيمة الخلايا الفارغة (اختياري):</label><input class="input sm" id="ed-pfill" value="' + esc(step.fill === undefined ? '' : step.fill) + '" placeholder="فارغة = null" /></div>';
+    } else if (type === 'unpivot') {
+      html += '<div class="wf-row"><label>الأعمدة التي تتحول إلى صفوف:</label><select class="wf-select" id="ed-uvalues" multiple size="5">' +
+        cols.map(c => '<option value="' + esc(c) + '"' + ((step.valueColumns || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>أعمدة الهوية (فارغة = كل ما عدا القيم):</label><select class="wf-select" id="ed-uids" multiple size="5">' +
+        cols.map(c => '<option value="' + esc(c) + '"' + ((step.idColumns || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>اسم عمود المفتاح:</label><input class="input sm" id="ed-ukey" value="' + esc(step.keyName || 'variable') + '" /></div>';
+      html += '<div class="wf-row"><label>اسم عمود القيمة:</label><input class="input sm" id="ed-uvalue" value="' + esc(step.valueName || 'value') + '" /></div>';
+      html += '<div class="wf-row"><label><input type="checkbox" id="ed-udropnulls"' + (step.dropNulls ? ' checked' : '') + ' /> حذف الصفوف التي قيمتها null</label></div>';
+    } else if (type === 'join') {
+      html += '<div class="wf-row"><label>مفتاح اليسار:</label><select class="wf-select" id="ed-leftkey">'
+        + cols.map(c => '<option value="' + esc(c) + '"' + (step.leftKey === c ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>مصدر الربط (من فهرس البيانات):</label><select class="wf-select" id="ed-rightsource">'
+        + sourceOptions(step.rightSource) + '</select><span class="muted xs">مصدر مسجَّل — تُجلب صفوفه عند التنفيذ بصلاحياتك وحدود الصفوف، ويُسجَّل مستوى تفصيله.</span></div>';
+      html += '<div class="wf-row"><label>مفتاح اليمين (عمود المصدر):</label><input class="input sm" id="ed-rightkey" value="' + esc(step.rightKey || '') + '" /></div>';
+      html += '<div class="wf-row"><label>نوع الربط:</label><select class="wf-select" id="ed-jointype">'
+        + ['inner','left'].map(j => '<option value="' + j + '"' + ((step.joinType || 'inner') === j ? ' selected' : '') + '>' + j + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>بادئة أعمدة اليمين (اختياري):</label><input class="input sm" id="ed-prefix" value="' + esc(step.rightPrefix || '') + '" /></div>';
+      html += '<div class="wf-row"><label>بيانات الطرف الأيمن حرفية (JSON — للقديم فقط):</label><textarea class="wf-textarea" id="ed-rightrows" rows="3">'
+        + esc(JSON.stringify(step.rightRows || [], null, 2)) + '</textarea></div>';
+    } else if (type === 'union') {
+      html += '<div class="wf-row"><label>الوضع:</label><select class="wf-select" id="ed-unionmode">'
+        + ['align','strict'].map(m => '<option value="' + m + '"' + ((step.mode || 'align') === m ? ' selected' : '') + '>' + (m === 'strict' ? 'صارم' : 'متوافق') + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>المصدر الثاني:</label><select class="wf-select" id="ed-rightsource">' + sourceOptions(step.rightSource) + '</select></div>';
+      html += '<div class="wf-row"><label>أو صفوف الطرف الثاني (JSON):</label><textarea class="wf-textarea" id="ed-rightrows" rows="3">'
+        + esc(JSON.stringify(step.rightRows || [], null, 2)) + '</textarea></div>';
+    } else if (type === 'compare') {
+      html += '<div class="wf-row"><label>مفاتيح اليسار (متعدد):</label><select class="wf-select" id="ed-leftkeys" multiple size="4">'
+        + cols.map(c => '<option value="' + esc(c) + '"' + ((step.leftKeys || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>المصدر الثاني:</label><select class="wf-select" id="ed-rightsource">' + sourceOptions(step.rightSource) + '</select></div>';
+      html += '<div class="wf-row"><label>مفاتيح اليمين (مفصولة بفاصلة):</label><input class="input sm" id="ed-rightkeys" value="' + esc((step.rightKeys || []).join(',')) + '" /></div>';
+      html += '<div class="wf-row"><label>أعمدة المقارنة (متعدد — فارغ = الكل):</label><select class="wf-select" id="ed-cmpcols" multiple size="4">'
+        + cols.map(c => '<option value="' + esc(c) + '"' + ((step.compareColumns || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label><input type="checkbox" id="ed-includematched"' + (step.includeMatched ? ' checked' : '') + ' /> إظهار المطابق</label></div>';
+      html += '<div class="wf-row"><label>أو صفوف الطرف الثاني (JSON):</label><textarea class="wf-textarea" id="ed-rightrows" rows="3">'
+        + esc(JSON.stringify(step.rightRows || [], null, 2)) + '</textarea></div>';
+    } else if (type === 'dedupe') {
+      html += '<div class="wf-row"><label>مفاتيح التكرار (متعدد — فارغ = الكل):</label><select class="wf-select" id="ed-keys" multiple size="6">'
+        + cols.map(c => '<option value="' + esc(c) + '"' + ((step.keys || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>الاحتفاظ:</label><select class="wf-select" id="ed-keep">'
+        + ['first','last'].map(k => '<option value="' + k + '"' + ((step.keep || 'first') === k ? ' selected' : '') + '>' + (k === 'last' ? 'آخر صف' : 'أول صف') + '</option>').join('') + '</select></div>';
+    } else if (type === 'nulls') {
+      html += '<div class="wf-row"><label>الإجراء:</label><select class="wf-select" id="ed-nullaction">'
+        + ['drop','fill'].map(a => '<option value="' + a + '"' + ((step.action || 'drop') === a ? ' selected' : '') + '>' + (a === 'fill' ? 'ملء' : 'حذف') + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>الأعمدة (متعدد — فارغ = الكل للحذف):</label><select class="wf-select" id="ed-cols" multiple size="6">'
+        + cols.map(c => '<option value="' + esc(c) + '"' + ((step.columns || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>قيمة الملء:</label><input class="input sm" id="ed-nullvalue" value="' + esc(step.value === undefined ? '' : step.value) + '" /></div>';
+      html += '<div class="wf-row"><label><input type="checkbox" id="ed-treatempty"' + (step.treatEmpty ? ' checked' : '') + ' /> النص الفارغ فارغ</label></div>';
+    } else if (type === 'window') {
+      html += '<div class="wf-row"><label>العملية:</label><select class="wf-select" id="ed-winop">'
+        + ['rowNumber','rank','runningTotal'].map(o => '<option value="' + o + '"' + ((step.op || 'rowNumber') === o ? ' selected' : '') + '>' + o + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>اسم العمود الناتج:</label><input class="input sm" id="ed-winout" value="' + esc(step.out || '') + '" /></div>';
+      html += '<div class="wf-row"><label>تقسيم المجموعات (متعدد):</label><select class="wf-select" id="ed-winpart" multiple size="4">'
+        + cols.map(c => '<option value="' + esc(c) + '"' + ((step.partitionBy || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>الترتيب (متعدد):</label><select class="wf-select" id="ed-winorder" multiple size="4">'
+        + cols.map(c => '<option value="' + esc(c) + '"' + ((step.orderBy || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>الاتجاه:</label><select class="wf-select" id="ed-winordir">'
+        + ['asc','desc'].map(o => '<option value="' + o + '"' + ((step.order || 'asc') === o ? ' selected' : '') + '>' + o + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>عمود المجموع التراكمي:</label><select class="wf-select" id="ed-wincol">'
+        + cols.map(c => '<option value="' + esc(c) + '"' + (step.column === c ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+    } else if (type === 'sort') {
+      html += '<div class="wf-row"><label>الترتيب حسب (متعدد):</label><select class="wf-select" id="ed-sortby" multiple size="6">'
+        + cols.map(c => '<option value="' + esc(c) + '"' + ((step.by || []).includes(c) ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+      html += '<div class="wf-row"><label>الاتجاه:</label><select class="wf-select" id="ed-sortorder">'
+        + ['asc','desc'].map(o => '<option value="' + o + '"' + ((step.order || 'asc') === o ? ' selected' : '') + '>' + (o === 'asc' ? 'تصاعدي' : 'تنازلي') + '</option>').join('') + '</select></div>';
+    } else if (type === 'python') {
+      html += '<div class="wf-row"><label>عمليات Python المقيّدة (JSON):</label><textarea class="wf-textarea" id="ed-pyops" rows="8" placeholder=\'[{"op":"trim","column":"name","out":"name_clean"}]\'>'
+        + esc(JSON.stringify(step.operations || [], null, 2)) + '</textarea></div>';
+      html += '<div class="muted xs">وضع مقيّد فقط: trim/lower/upper/replace/round/math/concat/length/coalesce/to_number/to_text. لا كود ولا استيراد ولا ملفات أو شبكة.</div>';
+    }
+    body.innerHTML = html;
+    /* اختيار معادلة محفوظة ⇒ يملأ التعبير (ويُبقي المرجع) */
+    $('ed-save-formula')?.addEventListener('click', saveStepFormula);
+    const fsel = $('ed-formulaid');
+    if (fsel) {
+      fsel.addEventListener('change', () => {
+        const f = wfFormulas.find(x => x.id === fsel.value);
+        const ta = $('ed-formula');
+        if (f && ta) ta.value = f.expr;
+      });
+    }
+    // wire insert-function buttons
+    body.querySelectorAll('[data-fn]').forEach(b => {
+      b.addEventListener('click', () => {
+        const ta = $('ed-formula'); if (!ta) return;
+        const name = b.getAttribute('data-fn');
+        const pos = ta.selectionStart;
+        ta.value = ta.value.slice(0, pos) + name + '(' + ta.value.slice(ta.selectionEnd);
+        ta.focus();
+      });
+    });
+    // groupBy aggs
+    if (type === 'groupBy') {
+      const aggsHost = $('ed-aggs');
+      const initAggs = (window.__wfStep && window.__wfStep.type === 'groupBy' && Array.isArray(window.__wfStep.aggs)) ? window.__wfStep.aggs : [];
+      renderAggs(initAggs);
+      const addBtn = $('ed-add-agg');
+      if (addBtn) addBtn.addEventListener('click', () => {
+        const aggs = collectAggs().concat([{ fn: 'SUM', column: cols[0] || '', out: 'agg_' + (collectAggs().length + 1) }]);
+        renderAggs(aggs);
+      });
+    }
+  }
+  function renderAggs(aggs) {
+    const host = $('ed-aggs'); if (!host) return;
+    const cols = beforeCols;
+    host.innerHTML = (aggs || []).map((a, i) => {
+      return '<div class="wf-row" data-agg="' + i + '" style="border:1px solid var(--line);padding:8px;border-radius:8px">' +
+        '<div class="row">' +
+        '<select class="wf-select" data-a="fn">' + AGG_FNS.map(f => '<option value="' + f + '"' + (a.fn === f ? ' selected' : '') + '>' + f + '</option>').join('') + '</select>' +
+        '<select class="wf-select" data-a="col">' + cols.map(c => '<option value="' + esc(c) + '"' + (a.column === c ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select>' +
+        '<input class="input sm" data-a="out" value="' + esc(a.out || '') + '" placeholder="اسم الناتج" />' +
+        '<button type="button" class="btn xs danger" data-a="del">✕</button>' +
+        '</div></div>';
+    }).join('');
+    host.querySelectorAll('[data-a="del"]').forEach(b => {
+      b.addEventListener('click', () => { const row = b.closest('[data-agg]'); if (row) row.remove(); });
+    });
+  }
+  function collectAggs() {
+    const host = $('ed-aggs'); if (!host) return [];
+    const out = [];
+    host.querySelectorAll('[data-agg]').forEach(row => {
+      out.push({ fn: row.querySelector('[data-a="fn"]').value, column: row.querySelector('[data-a="col"]').value, out: row.querySelector('[data-a="out"]').value });
+    });
+    return out;
+  }
+  function wireEditor(step) {
+    const typeSel = $('ed-type');
+    if (!typeSel) return;
+    const render = () => { const s = window.__wfStep || step; s.type = typeSel.value; renderFields(typeSel.value, s); };
+    typeSel.addEventListener('change', render);
+    render();
+  }
+  function collectStep() {
+    const type = $('ed-type').value;
+    const id = ($('ed-id') && $('ed-id').value.trim()) || ('s' + (steps.length + 1));
+    const step = { id, type };
+    if (type === 'select') {
+      const sel = $('ed-cols'); step.columns = Array.from(sel.selectedOptions).map(o => o.value);
+      const raw = ($('ed-renames') && $('ed-renames').value.trim()) || '[]';
+      try { step.renames = JSON.parse(raw); }
+      catch (e) { throw new Error('إعادات التسمية JSON غير صالح: ' + e.message); }
+      if (!Array.isArray(step.renames)) throw new Error('إعادات التسمية يجب أن تكون مصفوفة');
+    } else if (type === 'filter') {
+      step.column = $('ed-col').value; step.op = $('ed-op').value;
+      const raw = $('ed-val').value.trim();
+      if (step.op === 'in') step.value = raw ? raw.split(',').map(x => x.trim()).filter(x => x !== '') : [];
+      else if (raw === '') step.value = '';
+      else if (!isNaN(Number(raw)) && raw !== '') step.value = Number(raw);
+      else step.value = raw;
+    } else if (type === 'compute') {
+      step.newColumn = $('ed-newcol').value.trim();
+      step.formula = $('ed-formula').value.trim();
+      const fid = $('ed-formulaid') ? $('ed-formulaid').value : '';
+      if (fid) {
+        const f = wfFormulas.find(x => x.id === fid);
+        step.formulaId = fid;
+        step.formulaVersion = f ? f.version : null;
+        step.formulaName = f ? f.name : '';
+      } else {
+        delete step.formulaId; delete step.formulaVersion; delete step.formulaName;
+      }
+    } else if (type === 'groupBy') {
+      const ks = $('ed-keys');
+      step.keys = Array.from(ks.selectedOptions).map(o => o.value);
+      step.aggs = collectAggs();
+    } else if (type === 'pivot') {
+      const rk = $('ed-prowkeys'); step.rowKeys = rk ? Array.from(rk.selectedOptions).map(o => o.value) : [];
+      const ck = $('ed-pcolkeys'); step.columnKeys = ck ? Array.from(ck.selectedOptions).map(o => o.value) : [];
+      try { step.values = JSON.parse(($('ed-pvalues') && $('ed-pvalues').value) || '[]'); }
+      catch (e) { throw new Error('قيم الجدول المحوري JSON غير صالحة: ' + e.message); }
+      if (!Array.isArray(step.values)) throw new Error('قيم الجدول المحوري يجب أن تكون مصفوفة');
+      step.prefix = ($('ed-pprefix') && $('ed-pprefix').value.trim()) || 'pivot_';
+      const pf = ($('ed-pfill') && $('ed-pfill').value.trim()) || '';
+      if (pf === '') delete step.fill;
+      else step.fill = (!isNaN(Number(pf)) ? Number(pf) : pf);
+    } else if (type === 'unpivot') {
+      const uv = $('ed-uvalues'); step.valueColumns = uv ? Array.from(uv.selectedOptions).map(o => o.value) : [];
+      const ui = $('ed-uids'); step.idColumns = ui ? Array.from(ui.selectedOptions).map(o => o.value) : [];
+      step.keyName = ($('ed-ukey') && $('ed-ukey').value.trim()) || 'variable';
+      step.valueName = ($('ed-uvalue') && $('ed-uvalue').value.trim()) || 'value';
+      step.dropNulls = !!($('ed-udropnulls') && $('ed-udropnulls').checked);
+    } else if (type === 'join') {
+      step.leftKey = $('ed-leftkey').value;
+      step.rightKey = $('ed-rightkey').value.trim();
+      step.joinType = $('ed-jointype').value;
+      const pref = $('ed-prefix').value.trim(); if (pref) step.rightPrefix = pref;
+      const rsrc = $('ed-rightsource') ? $('ed-rightsource').value : '';
+      if (rsrc) {
+        step.rightSource = rsrc;
+        delete step.rightRows;
+      } else {
+        try { step.rightRows = JSON.parse($('ed-rightrows').value || '[]'); }
+        catch (e) { throw new Error('rightRows JSON غير صالح: ' + e.message); }
+        if (!Array.isArray(step.rightRows)) throw new Error('rightRows يجب أن تكون مصفوفة');
+      }
+    } else if (type === 'union') {
+      step.mode = $('ed-unionmode').value;
+      const rsrc = $('ed-rightsource') ? $('ed-rightsource').value : '';
+      if (rsrc) { step.rightSource = rsrc; delete step.rightRows; }
+      else {
+        try { step.rightRows = JSON.parse(($('ed-rightrows') && $('ed-rightrows').value) || '[]'); }
+        catch (e) { throw new Error('rightRows JSON غير صالح: ' + e.message); }
+        if (!Array.isArray(step.rightRows)) throw new Error('rightRows يجب أن تكون مصفوفة');
+      }
+    } else if (type === 'compare') {
+      const lk = $('ed-leftkeys'); step.leftKeys = lk ? Array.from(lk.selectedOptions).map(o => o.value) : [];
+      const rk = ($('ed-rightkeys') && $('ed-rightkeys').value.trim()) || '';
+      step.rightKeys = rk ? rk.split(',').map(x => x.trim()).filter(Boolean) : [];
+      const cc = $('ed-cmpcols'); step.compareColumns = cc ? Array.from(cc.selectedOptions).map(o => o.value) : [];
+      step.includeMatched = !!($('ed-includematched') && $('ed-includematched').checked);
+      const rsrc = $('ed-rightsource') ? $('ed-rightsource').value : '';
+      if (rsrc) { step.rightSource = rsrc; delete step.rightRows; }
+      else {
+        try { step.rightRows = JSON.parse(($('ed-rightrows') && $('ed-rightrows').value) || '[]'); }
+        catch (e) { throw new Error('rightRows JSON غير صالح: ' + e.message); }
+        if (!Array.isArray(step.rightRows)) throw new Error('rightRows يجب أن تكون مصفوفة');
+      }
+    } else if (type === 'dedupe') {
+      const ks = $('ed-keys'); step.keys = ks ? Array.from(ks.selectedOptions).map(o => o.value) : [];
+      step.keep = $('ed-keep').value;
+    } else if (type === 'nulls') {
+      step.action = $('ed-nullaction').value;
+      const cs = $('ed-cols'); step.columns = cs ? Array.from(cs.selectedOptions).map(o => o.value) : [];
+      step.value = ($('ed-nullvalue') && $('ed-nullvalue').value) || '';
+      step.treatEmpty = !!($('ed-treatempty') && $('ed-treatempty').checked);
+    } else if (type === 'window') {
+      step.op = $('ed-winop').value;
+      step.out = ($('ed-winout') && $('ed-winout').value.trim()) || '';
+      const pt = $('ed-winpart'); step.partitionBy = pt ? Array.from(pt.selectedOptions).map(o => o.value) : [];
+      const ob = $('ed-winorder'); step.orderBy = ob ? Array.from(ob.selectedOptions).map(o => o.value) : [];
+      step.order = $('ed-winordir').value;
+      step.column = $('ed-wincol') ? $('ed-wincol').value : '';
+    } else if (type === 'sort') {
+      const sb = $('ed-sortby');
+      step.by = sb ? Array.from(sb.selectedOptions).map(o => o.value) : [];
+      step.order = $('ed-sortorder').value;
+    } else if (type === 'python') {
+      step.mode = 'restricted';
+      try { step.operations = JSON.parse(($('ed-pyops') && $('ed-pyops').value) || '[]'); }
+      catch (e) { throw new Error('عمليات Python JSON غير صالحة: ' + e.message); }
+      if (!Array.isArray(step.operations)) throw new Error('عمليات Python يجب أن تكون مصفوفة');
+    }
+    if (step.rightPrefix === undefined) delete step.rightPrefix;
+    return step;
+  }
+  function showEditorErr(msg) {
+    const el = $('wf-editor-err'); if (!el) return;
+    if (msg) { el.hidden = false; el.textContent = msg; } else { el.hidden = true; el.textContent = ''; }
+  }
+  function applyEditor() {
+    showEditorErr('');
+    let step;
+    try { step = collectStep(); } catch (e) { showEditorErr(e.message); return; }
+    if (!step.id) { showEditorErr('المعرّف مطلوب'); return; }
+    if (step.type === 'select' && (!step.columns || !step.columns.length)) { showEditorErr('اختر عمودًا واحدًا على الأقل'); return; }
+    if (step.type === 'filter' && !step.column) { showEditorErr('اختر عمودًا للتصفية'); return; }
+    if (step.type === 'compute' && (!step.newColumn || !step.formula)) { showEditorErr('اسم العمود والمعادلة مطلوبان'); return; }
+    if (step.type === 'groupBy' && (!step.keys || !step.keys.length || !step.aggs || !step.aggs.length)) { showEditorErr('مفاتيح وتجميعات مطلوبة'); return; }
+    if (step.type === 'pivot' && (!step.rowKeys.length || !step.columnKeys.length || !step.values.length)) { showEditorErr('الجدول المحوري يحتاج مفاتيح صفوف وأعمدة وقيمة تجميعية واحدة على الأقل'); return; }
+    if (step.type === 'unpivot' && !step.valueColumns.length) { showEditorErr('اختر عمود قيمة واحدًا على الأقل لإلغاء المحورية'); return; }
+    if (step.type === 'unpivot' && step.keyName === step.valueName) { showEditorErr('اسم المفتاح واسم القيمة يجب أن يختلفا'); return; }
+    if (step.type === 'join' && (!step.leftKey || !step.rightKey || (!step.rightSource && !Array.isArray(step.rightRows)))) { showEditorErr('مفتاحان مطلوبان + مصدر ربط مسجَّل أو بيانات طرف أيمن'); return; }
+    if (step.type === 'union' && (!step.rightSource && !Array.isArray(step.rightRows))) { showEditorErr('اختر مصدرًا ثانيًا أو صفوفًا حرفية للاتحاد'); return; }
+    if (step.type === 'compare' && (!step.leftKeys.length || !step.rightKeys.length || step.leftKeys.length !== step.rightKeys.length)) { showEditorErr('مفاتيح المقارنة مطلوبة ومتساوية العدد'); return; }
+    if (step.type === 'compare' && (!step.rightSource && !Array.isArray(step.rightRows))) { showEditorErr('اختر مصدرًا ثانيًا أو صفوفًا حرفية للمقارنة'); return; }
+    if (step.type === 'nulls' && step.action === 'fill' && !step.columns.length) { showEditorErr('اختر عمودًا واحدًا على الأقل للملء'); return; }
+    if (step.type === 'window' && !step.out) { showEditorErr('اسم عمود النافذة مطلوب'); return; }
+    if (step.type === 'window' && step.op === 'runningTotal' && !step.column) { showEditorErr('اختر عمود المجموع التراكمي'); return; }
+    if (step.type === 'sort' && (!step.by || !step.by.length)) { showEditorErr('اختر عمودًا واحدًا على الأقل للترتيب'); return; }
+    if (step.type === 'python' && (!step.operations || !step.operations.length)) { showEditorErr('أضف عملية Python مقيّدة واحدة على الأقل'); return; }
+    if (editingIndex === null) steps.push(step); else steps[editingIndex] = step;
+    closeEditor(); renderSteps(); wfSyncCanvasFromSteps(true);
+  }
+
+  /* ---------- sync ---------- */
+  function syncJson() {
+    const ta = $('wf-steps'); if (ta) ta.value = JSON.stringify(steps, null, 2);
+  }
+  function applyJson() {
+    const ta = $('wf-steps'); if (!ta) return;
+    let parsed;
+    try { parsed = JSON.parse(ta.value || '[]'); } catch (e) { toast('JSON غير صالح: ' + e.message); return; }
+    if (!Array.isArray(parsed)) { toast('يجب أن تكون الخطوات مصفوفة'); return; }
+    steps = parsed; renderSteps(); wfSyncCanvasFromSteps(true); toast('تم تطبيق JSON');
+  }
+
+  /* ---------- save/load ---------- */
+  async function wfLoadList() {
+    try {
+      const d = await apiCall('/api/workflows');
+      const sel = $('wf-list'); if (!sel) return;
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">— اختر مسارًا —</option>';
+      (d.items || []).forEach(it => {
+        const o = document.createElement('option'); o.value = it.id; o.textContent = (it.name || it.id) + ' (' + it.id + ')'; sel.appendChild(o);
+      });
+      if (cur) sel.value = cur;
+    } catch (e) { toast(e.message); }
+  }
+  async function wfLoadSelected() {
+    const id = $('wf-list').value; if (!id) { toast('اختر مسارًا'); return; }
+    await wfLoadById(id);
+  }
+  /** تحميل تحليل محفوظ بمعرّفه (من المستكشف أو من رابط السياق) */
+  async function wfLoadById(id) {
+    if (!id) return false;
+    try {
+      const wf = await apiCall('/api/workflows/get?id=' + encodeURIComponent(id));
+      $('wf-name').value = wf.name || '';
+      const idEl = $('wf-id'); if (idEl) idEl.value = wf.id || id;
+      steps = Array.isArray(wf.steps) ? wf.steps : [];
+      const sv = wf.source && wf.source.type === 'dataset' ? ('dataset/' + wf.source.name)
+        : (wf.source && wf.source.type === 'output' ? ('output/' + wf.source.name)
+          : (wf.source && wf.source.type === 'file' ? ('file/' + wf.source.name)
+            : (wf.source && wf.source.type === 'workbook' ? ('workbook/' + wf.source.name)
+              : (wf.source ? (wf.source.name || 'synthetic') : 'synthetic'))));
+      if (window.WorkflowHost && typeof window.WorkflowHost.setSourceValue === 'function') window.WorkflowHost.setSourceValue(sv);
+      else if ($('wf-source')) $('wf-source').value = sv;
+      await loadSourceFields();
+      renderSteps();
+      if (window.WorkflowCanvas && typeof window.WorkflowCanvas.loadWorkflow === 'function') {
+        window.WorkflowCanvas.loadWorkflow(wf);
+      }
+      if (window.Workspace) window.Workspace.setContext({ workflowId: wf.id || id, workflowName: wf.name || '' });
+      toast('تم التحميل: ' + (wf.name || id));
+      return true;
+    } catch (e) { toast(e.message); return false; }
+  }
+  async function wfSave(asNew) {
+    const name = ($('wf-name').value || 'untitled').trim();
+    const idEl = $('wf-id');
+    const id = asNew ? undefined : (idEl && idEl.value.trim()) || undefined;
+    const wf = wfWithGraph({ name, source: wfSource(), steps: steps.slice() });
+    if (id) wf.id = id;
+    try {
+      const r = await apiCall('/api/workflows/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workflow: wf }) });
+      toast(asNew ? ('تم الحفظ باسم: ' + r.id) : ('تم الحفظ: ' + r.id));
+      if (idEl) idEl.value = r.id;
+      if (window.WorkflowCanvas && typeof window.WorkflowCanvas.markSaved === 'function') window.WorkflowCanvas.markSaved();
+      await wfLoadList();
+      const sel = $('wf-list'); if (sel) sel.value = r.id;
+    } catch (e) { toast(e.message); }
+  }
+  async function wfValidate() {
+    const wf = wfWithGraph({ name: $('wf-name').value || 'untitled', source: wfSource(), steps: steps.slice() });
+    try {
+      const r = await apiCall('/api/workflows/validate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workflow: wf }) });
+      $('wf-status').textContent = r.ok ? '✅ التحقق ناجح' : '❌ ' + (r.errors || []).map(e => (e.step || '') + ': ' + (e.errors || []).join(', ')).join(' | ');
+    } catch (e) { $('wf-status').textContent = '❌ ' + e.message; }
+  }
+  async function wfPreviewStep(i) {
+    const step = steps[i]; if (!step) return;
+    const wf = wfWithGraph({ name: $('wf-name').value || 'untitled', source: wfSource(), steps: steps.slice() });
+    try {
+      const r = await apiCall('/api/workflows/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workflow: wf, limit: 20, until: step.id || step.type }) });
+      const host = $('wf-result'); if (host) {
+        const label = '<div class="hint">معاينة حتى الخطوة: ' + esc(step.id || step.type) + ' (' + esc(step.type) + ')</div>';
+        host.innerHTML = label + renderResultHtml(r);
+      }
+    } catch (e) { renderResult({ ok: false, error: e.message }); }
+  }
+  function renderResultHtml(d) {
+    if (!d || !d.ok) return '<div class="neg">' + esc(d && d.error ? d.error : 'فشل') + '</div>';
+    let html = '<div class="hint">صفوف: ' + (d.rowCount || (d.rows ? d.rows.length : 0)) + (d.preview ? ' (معاينة)' : '') + '</div>';
+    if (d.runId) html += '<div class="hint">معرّف التشغيل: <b>' + esc(d.runId) + '</b> <button class="btn xs" id="wf-send-to-report">استخدمه في استوديو التقارير</button></div>';
+    if (d.sourceNotes && d.sourceNotes.length) html += '<div class="hint">⚠ ' + d.sourceNotes.map(esc).join(' · ') + '</div>';
+    if (d.formulaColumns && Object.keys(d.formulaColumns).length) {
+      const items = Object.keys(d.formulaColumns).map(fid => {
+        const v = d.formulaColumns[fid];
+        const name = (v && typeof v === 'object') ? (v.column || v.name || '') : String(v || '');
+        return esc(fid) + (name ? ' → ' + esc(name) : '');
+      });
+      html += '<div class="hint">المعادلات المطبَّقة في هذا التشغيل: ' + items.join(' · ') + '</div>';
+    }
+    if (d.rows && d.rows.length) {
+      const cols = d.columns || Object.keys(d.rows[0]);
+      html += '<table><thead><tr>' + cols.map(c => '<th>' + esc(c) + '</th>').join('') + '</tr></thead><tbody>';
+      d.rows.forEach(r => { html += '<tr>' + cols.map(c => '<td>' + esc(r[c]) + '</td>').join('') + '</tr>'; });
+      html += '</tbody></table>';
+    }
+    if (d.steps && d.steps.length) {
+      html += '<h4>سجل الخطوات</h4><table><thead><tr><th>الخطوة</th><th>النوع</th><th>الحالة</th><th>صفوف</th><th>الاكتمال</th><th>رسالة</th></tr></thead><tbody>';
+      d.steps.forEach(s => {
+        const comp = s.completeness || '';
+        const compTag = !comp ? '—' : (comp === 'complete' ? 'مكتمل' : (comp === 'possibly-truncated' ? 'تحذير احتمال الاقتطاع' : 'غير مكتمل — لا يُعتمد على مجاميعه'));
+        html += '<tr><td>' + esc(s.id) + '</td><td>' + esc(s.type) + '</td><td>' + esc(s.status) + '</td><td>' + esc(s.rowCount)
+          + '</td><td>' + esc(compTag) + '</td><td>' + esc(s.message) + (s.warnings && s.warnings.length ? ' · ' + esc(s.warnings.join(', ')) : '') + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    return html;
+  }
+  async function wfExportCsv() {
+    if (lastRunId) { window.open('/api/workflows/output/csv?id=' + encodeURIComponent(lastRunId), '_blank'); return; }
+    toast('يجب أن تحتوي على components مصفوفة');
+  }
+  async function wfRetrieve() {
+    const id = ($('wf-runid') && $('wf-runid').value.trim()) || '';
+    if (!id) { toast('أدخل معرّف تشغيل'); return; }
+    try {
+      const d = await apiCall('/api/workflows/output?id=' + encodeURIComponent(id));
+      const host = $('wf-result'); if (host) {
+        let html = '<div class="hint">تشغيل: ' + esc(d.runId || id) + ' — صفوف: ' + (d.rowCount || (d.rows ? d.rows.length : 0)) + ' — حفظ: ' + esc(d.savedAt || '') + '</div>';
+        if (d.rows && d.rows.length) {
+          const cols = d.columns || Object.keys(d.rows[0]);
+          html += '<table><thead><tr>' + cols.map(c => '<th>' + esc(c) + '</th>').join('') + '</tr></thead><tbody>';
+          d.rows.forEach(r => { html += '<tr>' + cols.map(c => '<td>' + esc(r[c]) + '</td>').join('') + '</tr>'; });
+          html += '</tbody></table>';
+        } else { html += '<div class="hint">لا نتائج</div>'; }
+        host.innerHTML = html;
+      }
+      lastRunId = d.runId || id;
+    } catch (e) { toast(e.message); }
+  }
+  function renderResult(d) {
+    const host = $('wf-result'); if (!host) return;
+    if (!d || !d.ok) { host.innerHTML = '<div class="neg">' + esc(d && d.error ? d.error : 'فشل') + '</div>'; return; }
+    let html = renderResultHtml(d);
+    /* المصدر الذي أنتج النتيجة + روابط السياق (تحليل · تقرير · شاشة) */
+    const srcInfo = d.source || {};
+    if (srcInfo.label || srcInfo.name) {
+      html += '<div class="hint">مصدر النتيجة: ' + esc(srcInfo.label || srcInfo.name)
+        + (srcInfo.grain ? ' · مستوى: ' + esc(srcInfo.grain) : '')
+        + ' <button type="button" class="btn xs ghost" id="wf-src-explorer">فتح في المستكشف</button></div>';
+    }
+    if (d.formulaColumns && Object.keys(d.formulaColumns).length) {
+      const items = Object.keys(d.formulaColumns).map(fid => {
+        const v = d.formulaColumns[fid];
+        const name = (v && typeof v === 'object') ? (v.column || v.name || '') : String(v || '');
+        return esc(fid) + (name ? ' → ' + esc(name) : '');
+      });
+      html += '<div class="hint">المعادلات المطبَّقة: ' + items.join(' · ') + '</div>';
+    }
+    if (d.runId) {
+      html += '<div class="wf-toolbar"><button type="button" class="btn xs ghost" id="wf-to-screen">＋ إدراج النتيجة في شاشة</button></div>';
+    }
+    host.innerHTML = html;
+    const srcBtn = $('wf-src-explorer');
+    if (srcBtn) srcBtn.addEventListener('click', () => {
+      const sid = (d.source && (d.source.name || d.source.id)) || '';
+      if (window.Workspace) window.Workspace.go('analysis', { sourceId: sid, sourceName: (d.source && d.source.label) || sid, runId: d.runId || '' });
+    });
+    const scrBtn = $('wf-to-screen');
+    if (scrBtn) scrBtn.addEventListener('click', async () => {
+      if (window.Workspace) window.Workspace.go('screen-studio', { runId: d.runId || '', runLabel: d.workflowName || d.runId || '' });
+      if (typeof window.insertRunIntoScreen === 'function') await window.insertRunIntoScreen(d.runId);
+    });
+    const sendBtn = $('wf-send-to-report');
+    if (sendBtn) sendBtn.addEventListener('click', async () => {
+      const target = $('rs-runid');
+      if (target) target.value = d.runId;
+      goTab('report-studio');
+      /* جلب أعمدة التشغيل تلقائيًا — بلا إعادة إدخال يدوي (مثل «تقرير سريع») */
+      try {
+        const loaded = (typeof window.loadReportColumnsForRun === 'function')
+          ? await window.loadReportColumnsForRun(d.runId) : false;
+        if (!loaded) toast('تعذّر جلب أعمدة التشغيل ' + d.runId + ' — اضغط «جلب الأعمدة» في المصمم');
+      } catch (e) {
+        toast('تعذّر جلب الأعمدة: ' + e.message);
+      }
+    });
+  }
+  async function wfPreview() {
+    const wf = wfWithGraph({ name: $('wf-name').value || 'untitled', source: wfSource(), steps: steps.slice() });
+    try { const r = await apiCall('/api/workflows/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workflow: wf, limit: 20 }) }); renderResult(r); }
+    catch (e) { renderResult({ ok: false, error: e.message }); }
+  }
+  async function wfRun() {
+    const wf = wfWithGraph({ name: $('wf-name').value || 'untitled', source: wfSource(), steps: steps.slice() });
+    try { const r = await apiCall('/api/workflows/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workflow: wf }) }); lastRunId = r.runId || null; renderResult(r); wfLoadRuns(); }
+    catch (e) { renderResult({ ok: false, error: e.message }); }
+  }
+  async function wfLoadFns() {
+    const host = $('wf-fns'); if (!host) return;
+    try {
+      const d = await apiCall('/api/formulas');
+      const items = (d && d.items) ? d.items : [];
+      if (!items.length) { host.innerHTML = '<div class="hint">لا توجد وظائف.</div>'; return; }
+      fns = items;
+      host.innerHTML = items.map(f => {
+        const params = (f.params || []).map(p => p.name + ':' + p.type).join(', ');
+        return '<div class="wf-fn"><b>' + esc(f.name) + '</b> (' + esc(f.id) + ') — ' + esc(f.description) +
+          '<br><span class="muted xs">params: ' + esc(params) + ' → ' + esc(f.returnType) + ' | null: ' + esc(f.nullBehavior) + '</span>' +
+          (f.examples && f.examples.length ? '<br><span class="muted xs">مثال: ' + esc(f.examples[0]) + '</span>' : '') + '</div>';
+      }).join('');
+    } catch (e) { host.innerHTML = '<div class="neg">تعذّر تحميل الوظائف: ' + esc(e.message) + '</div>'; }
+  }
+
+  /* ---------- المخرجات المحفوظة (نتائج التشغيل) ---------- */
+  async function wfLoadRuns() {
+    const sel = $('wf-runs-list'); if (!sel) return;
+    const msg = $('wf-runs-msg');
+    try {
+      const d = await apiCall('/api/workflows/outputs');
+      const items = (d && d.items) ? d.items : [];
+      if (!items.length) {
+        sel.innerHTML = '<option value="">— لا مخرجات محفوظة —</option>';
+        if (msg) msg.textContent = 'نفّذ تحليلًا أولًا لتظهر نتيجته هنا.';
+        return;
+      }
+      sel.innerHTML = items.map(r => '<option value="' + esc(r.runId) + '">'
+        + esc((r.source && (r.source.label || r.source.name)) || r.workflowName || r.runId)
+        + ' · ' + esc(r.runId) + ' (' + (r.rowCount || 0) + ' صف · ' + (r.columns || []).length + ' عمود)'
+        + (r.traced ? '' : ' · بلا تتبّع') + '</option>').join('');
+      if (msg) msg.textContent = items.length + ' مخرج محفوظ';
+      await wfShowRunInfo(sel.value);
+    } catch (e) {
+      if (msg) msg.textContent = 'تعذّر تحميل المخرجات: ' + e.message;
+    }
+  }
+  async function wfShowRunInfo(runId) {
+    const host = $('wf-runs-info'); if (!host || !runId) return;
+    try {
+      const d = await apiCall('/api/workflows/output?id=' + encodeURIComponent(runId));
+      const cols = (d && d.columns) || [];
+      const fc = (d && d.formulaColumns) || {};
+      let html = '<div class="hint">المخرج: <b>' + esc(d.runId || runId) + '</b> — ' + (d.rowCount || 0) + ' صف · '
+        + cols.length + ' عمود · حفظ: ' + esc(d.savedAt || '—')
+        + (d.workflowName ? ' · التحليل: ' + esc(d.workflowName) : '') + '</div>';
+      if (Object.keys(fc).length) {
+        const items = Object.keys(fc).map(fid => {
+          const v = fc[fid];
+          const nm = (v && typeof v === 'object') ? (v.column || v.name || '') : String(v || '');
+          return esc(fid) + (nm ? ' → ' + esc(nm) : '');
+        });
+        html += '<div class="hint">المعادلات المطبَّقة: ' + items.join(' · ') + '</div>';
+      }
+      if (d.warnings && d.warnings.length) html += '<div class="hint">⚠ ' + d.warnings.map(esc).join(' · ') + '</div>';
+      if (cols.length) {
+        html += '<div class="muted xs">الأعمدة: ' + cols.map(esc).join(' · ') + '</div>';
+      }
+      host.innerHTML = html;
+    } catch (e) {
+      host.innerHTML = '<div class="neg">' + esc(e.message) + '</div>';
+    }
+  }
+  async function wfOpenRun() {
+    const sel = $('wf-runs-list');
+    const id = (sel && sel.value) || '';
+    if (!id) { toast('اختر مخرجًا محفوظًا'); return; }
+    const runid = $('wf-runid'); if (runid) runid.value = id;
+    await wfRetrieve();
+    if (window.Workspace) window.Workspace.setContext({ runId: id, runLabel: id });
+  }
+  async function wfRunToReport() {
+    const sel = $('wf-runs-list');
+    const id = (sel && sel.value) || '';
+    if (!id) { toast('اختر مخرجًا محفوظًا'); return; }
+    const target = $('rs-runid'); if (target) target.value = id;
+    goTab('report-studio');
+    try {
+      const loaded = (typeof window.loadReportColumnsForRun === 'function') ? await window.loadReportColumnsForRun(id) : false;
+      if (!loaded) toast('تعذّر جلب أعمدة التشغيل ' + id);
+    } catch (e) { toast('تعذّر جلب الأعمدة: ' + e.message); }
+  }
+
+  /* ---------- جسر المحرّر المرئي (Workflow Canvas) ---------- */
+  window.WorkflowHost = {
+    getSource: wfSource,
+    setSourceValue(value) {
+      const sel = $('wf-source'); if (!sel) return;
+      const v = String(value || 'synthetic');
+      let opt = Array.from(sel.options).find(o => o.value === v);
+      if (!opt) {
+        opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v === 'synthetic' ? 'بيانات تجريبية (synthetic)'
+          : (v.indexOf('output/') === 0 ? 'نتيجة سابقة — ' + v.slice(7)
+            : (v.indexOf('file/') === 0 ? 'ملف — ' + v.slice(5)
+              : (v.indexOf('workbook/') === 0 ? 'Excel — ' + v.slice(9) : v.replace(/^dataset\//, ''))));
+        sel.appendChild(opt);
+      }
+      if (sel.value === v) return;
+      sel.value = v;
+      loadSourceFields();
+    },
+    getSteps: () => steps.slice(),
+    setSteps(next) {
+      steps = Array.isArray(next) ? next.slice() : [];
+      renderSteps();
+    },
+    getMeta() {
+      return {
+        id: ($('wf-id') && $('wf-id').value.trim()) || '',
+        name: ($('wf-name') && $('wf-name').value.trim()) || 'تحليل مرئي',
+      };
+    },
+    refreshRuns: () => wfLoadRuns(),
+  };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const btnNew = $('wf-new');
+    if (btnNew) btnNew.addEventListener('click', () => {
+      $('wf-name').value = 'workflow_' + Date.now();
+      const idEl = $('wf-id'); if (idEl) idEl.value = '';
+      steps = []; renderSteps();
+      if (window.WorkflowCanvas && typeof window.WorkflowCanvas.reset === 'function') window.WorkflowCanvas.reset();
+      $('wf-result').innerHTML = ''; $('wf-status').textContent = '';
+    });
+    $('wf-load')?.addEventListener('click', wfLoadSelected);
+    $('wf-save')?.addEventListener('click', () => wfSave(false));
+    $('wf-save-as')?.addEventListener('click', () => wfSave(true));
+    $('wf-add-step')?.addEventListener('click', () => openEditor(null));
+    $('wf-apply-step')?.addEventListener('click', applyEditor);
+    $('wf-cancel-step')?.addEventListener('click', closeEditor);
+    $('wf-validate')?.addEventListener('click', wfValidate);
+    $('wf-preview')?.addEventListener('click', wfPreview);
+    $('wf-run')?.addEventListener('click', wfRun);
+    $('wf-export')?.addEventListener('click', wfExportCsv);
+    $('wf-retrieve')?.addEventListener('click', wfRetrieve);
+    $('wf-apply-json')?.addEventListener('click', applyJson);
+    $('wf-runs-list')?.addEventListener('change', (e) => wfShowRunInfo(e.target.value));
+    $('wf-run-open')?.addEventListener('click', wfOpenRun);
+    $('wf-run-report')?.addEventListener('click', wfRunToReport);
+    const srcSel = $('wf-source');
+    if (srcSel) srcSel.addEventListener('change', () => {
+      loadSourceFields(); renderSteps();
+      if (window.WorkflowCanvas && typeof window.WorkflowCanvas.setSource === 'function') {
+        window.WorkflowCanvas.setSource(srcSel.value);
+      }
+    });
+    wfLoadList(); wfLoadFns(); loadSavedFormulas(); loadSourceList(); loadSourceFields(); renderSteps(); wfLoadRuns();
+  });
+  window.loadWorkflowTab = function () { wfLoadList(); wfLoadFns(); loadSavedFormulas(); loadSourceList(); loadSourceFields(); renderSteps(); wfLoadRuns(); };
+  /* فتح مصدر محدَّد في استوديو التحليل (من المستكشف) — بلا شاشة جديدة */
+  window.openWorkflowForSource = async function (sourceId) {    if (!sourceId) return false;
+    const sel = $('wf-source');
+    if (!sel) return false;
+    const wanted = ['dataset/' + sourceId, sourceId];
+    const opt = Array.from(sel.options).find(o => wanted.indexOf(o.value) >= 0);
+    if (!opt) { toast('المصدر «' + sourceId + '» غير متاح للقراءة بصلاحياتك'); return false; }
+    sel.value = opt.value;
+    goTab('workflow');
+    await loadSourceFields();
+    renderSteps();
+    toast('المصدر «' + sourceId + '» جاهز في استوديو التحليل — اختر الخطوة ثم «تشغيل»');
+    return true;
+  };
+  /* فتح تحليل محفوظ بمعرّفه (من المستكشف أو رابط السياق) */
+  window.openWorkflowById = async function (id) {
+    if (!id) return false;
+    goTab('workflow');
+    const okLoad = await wfLoadById(id);
+    if (okLoad) toast('تم فتح التحليل المحفوظ: ' + id);
+    return okLoad;
+  };
+})();
+
+/* ===== Report Studio (Python engine) — نُقل إلى public/report-designer.js (مصمم مرئي) ===== */
+/* loadWorkflowTab exposed by the Workflow IIFE below (see window.loadWorkflowTab) */
+

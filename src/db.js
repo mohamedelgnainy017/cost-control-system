@@ -475,6 +475,13 @@ ALTER TABLE movement_types ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT '
 -- يملأ قائمتي الاختيار في نموذج الصنف ويديرهما زرا «＋ مجموعة» و«＋ تصنيف».
 ALTER TABLE items ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'item';
 
+-- تاريخ شيت الحركات الذي جُلب منه بيانات الصنف (للأصناف origin='movement')
+ALTER TABLE items ADD COLUMN IF NOT EXISTS movement_sheet_date TEXT;
+-- اسم شيت الحركات (اسم الورقة داخل ملف Excel) الذي جُلب منه بيانات الصنف — بديل/مكمل للتاريخ
+ALTER TABLE items ADD COLUMN IF NOT EXISTS movement_sheet_name TEXT;
+-- حال الصنف: SUB=صب, PACKED=معبأ, TANK=تنك, JUMBO=جامبو, BULK=سايب (اختياري)
+ALTER TABLE items ADD COLUMN IF NOT EXISTS status TEXT;
+
 /* صلاحيات الشاشات لكل مستخدم (JSON array من معرّفات الشاشات، أو NULL = افتراضي الدور) */
 ALTER TABLE users ADD COLUMN IF NOT EXISTS tabs TEXT;
 /* ترقية: منح شاشة «مراجع العقود» الجديدة لمن كانت له شاشات البيانات الأساسية
@@ -634,8 +641,17 @@ CREATE TABLE IF NOT EXISTS contract_registrations(
   supplier TEXT,
   source_country TEXT,
   contracting_company TEXT,
+  internal_company TEXT,
   contract_no TEXT,
   quantity NUMERIC,
+  detail_quantity NUMERIC,
+  vessel_name TEXT,
+  arrival_port TEXT,
+  expected_arrival TEXT,
+  operation_start TEXT,
+  loading_duration TEXT,
+  operation_end TEXT,
+  vessel_status TEXT,
   contract_premium TEXT,
   shipping_type TEXT,
   shipping_value NUMERIC,
@@ -798,6 +814,69 @@ CREATE TABLE IF NOT EXISTS contract_balances(
   import_id BIGINT,
   source_file TEXT
 );
+
+/* ============ دمج مصدر الشركات الموحّد (تسوية نهائية) ============
+   الهدف: جدول companies هو المصدر الوحيد للشركات — كل الشركات الداخلية
+   للعقود تنتقل إليه، وأي تعديل فيها يصلك من مكان واحد فقط. */
+-- 1) نقل الشركات الداخلية للعقود إلى جدول الشركات الموحّد companies
+--    (المطابقة بالكود، والاسم يُحدّث من مرجع الشركات الداخلية إن وُجد)
+INSERT INTO companies(company_code, company_name, updated_at)
+  SELECT ci.code, ci.name, now()
+  FROM contract_companies_internal ci
+  WHERE COALESCE(ci.code,'') <> ''
+  ON CONFLICT (company_code) DO UPDATE
+    SET company_name = EXCLUDED.company_name, updated_at = now();
+
+-- 2) توحيد قيم حالة العقد في جداول العقود إلى ACTIVE / FINISH / UNDER
+--    (ACTIVE = نشط، FINISH = منتهي، UNDER = تحت التشغيل)
+--    تُنفَّذ في كل إقلاع، فتلتقط أي قيم قديمة أو مترجمة تصل من ملفات الاستيراد.
+UPDATE contract_registrations SET contract_status = 'ACTIVE'
+  WHERE COALESCE(contract_status,'') IN ('نشط','فعال','جاري','ACTIVE','A','أكتيف','جارى');
+UPDATE contract_registrations SET contract_status = 'FINISH'
+  WHERE COALESCE(contract_status,'') IN ('منتهي','منتهية','مغلق','انتهى','CLOSED','FINISHED','FINISH','F','منتهى');
+UPDATE contract_registrations SET contract_status = 'UNDER'
+  WHERE COALESCE(contract_status,'') IN ('تحت التشغيل','تحت التجهيز','جاري التنفيذ','UNDER','U','تحت التشغيل');
+
+-- 3) ملء البيانات الناقصة في سجل العقد من جدول التفاصيل (دمج موحد)
+-- إضافة أعمدة جديدة (idempotent) إذا لم تكن موجودة
+ALTER TABLE contract_registrations ADD COLUMN IF NOT EXISTS internal_company TEXT;
+ALTER TABLE contract_registrations ADD COLUMN IF NOT EXISTS detail_quantity NUMERIC;
+ALTER TABLE contract_registrations ADD COLUMN IF NOT EXISTS vessel_name TEXT;
+ALTER TABLE contract_registrations ADD COLUMN IF NOT EXISTS arrival_port TEXT;
+ALTER TABLE contract_registrations ADD COLUMN IF NOT EXISTS expected_arrival TEXT;
+ALTER TABLE contract_registrations ADD COLUMN IF NOT EXISTS operation_start TEXT;
+ALTER TABLE contract_registrations ADD COLUMN IF NOT EXISTS loading_duration TEXT;
+ALTER TABLE contract_registrations ADD COLUMN IF NOT EXISTS operation_end TEXT;
+ALTER TABLE contract_registrations ADD COLUMN IF NOT EXISTS vessel_status TEXT;
+
+UPDATE contract_registrations cr
+SET internal_company = det.internal_company,
+    detail_quantity = det.detail_quantity,
+    vessel_name = det.vessel_name,
+    arrival_port = det.arrival_port,
+    expected_arrival = det.expected_arrival,
+    operation_start = det.operation_start,
+    loading_duration = det.loading_duration,
+    operation_end = det.operation_end,
+    vessel_status = det.vessel_status
+FROM contract_details det
+WHERE cr.internal_no = det.internal_no
+  AND (cr.internal_company IS NULL OR cr.internal_company = '')
+  AND det.internal_company IS NOT NULL;
+UPDATE contract_details SET contract_status = 'ACTIVE'
+  WHERE COALESCE(contract_status,'') IN ('نشط','فعال','جاري','ACTIVE','A','أكتيف','جارى');
+UPDATE contract_details SET contract_status = 'FINISH'
+  WHERE COALESCE(contract_status,'') IN ('منتهي','منتهية','مغلق','انتهى','CLOSED','FINISHED','FINISH','F','منتهى');
+UPDATE contract_details SET contract_status = 'UNDER'
+  WHERE COALESCE(contract_status,'') IN ('تحت التشغيل','تحت التجهيز','جاري التنفيذ','UNDER','U','تحت التشغيل');
+
+-- 3) تسوية اسم الشركة الداخلية في التفاصيل لتطابق الاسم الرسمي في companies
+--    (الربط بالاسم كما في البيانات القديمة، لكن المصدر الموحّد للقيمة هو companies)
+UPDATE contract_details cd
+SET internal_company = c.company_name
+FROM companies c
+WHERE COALESCE(cd.internal_company,'') <> ''
+  AND c.company_name = cd.internal_company;
 
 CREATE INDEX IF NOT EXISTS idx_contract_registrations_no ON contract_registrations(internal_no);
 CREATE INDEX IF NOT EXISTS idx_contract_registrations_cno ON contract_registrations(contract_no);

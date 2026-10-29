@@ -6,11 +6,13 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const crypto = require('node:crypto');
 const { URL } = require('node:url');
 const { spawn } = require('node:child_process');
 
 const DB = require('./db');
+const { normAr, pad2 } = require('./pure');
 const { analyzePreviewDeep } = require('./importer');
 const DE = require('./daily-entry');
 const A = require('./analytics');
@@ -20,6 +22,76 @@ const BF = require('./borse-fetch');
 const PE = require('./prices-edit');
 const CE = require('./cost-engine');
 const M = require('./master');
+const W = require('./workflow');
+const WG = require('./workflow-graph');
+const PY = require('./python-transform');
+const F = require('./formulas');
+const FV = require('./formula-verifier');
+const D = require('./datasets');
+const CAT = require('./data-catalog');
+const ME = require('./model-explorer');
+const SR = require('./screen-registry');
+const R = require('./report-bridge');
+const RS = require('./report-store');
+const RP = require('./report-print');
+const Schema = require('./report-schema');
+const Policy = require('./route-policy');
+const WC = require('./workcenter');
+const LR = require('./legacy-report');
+const FS = require('./formula-store');
+const FRes = require('./formula-resolver');
+const FormulaEngine = require('./formulas');
+const AppScreen = require('./app-screen');
+const ScreenStore = require('./screen-store');
+const PLATFORM = require('./platform-screens');
+function injectFixtureRights(wf, fix) {
+  // clone workflow, inject rightRows/rightKey into join steps lacking them
+  const clone = JSON.parse(JSON.stringify(wf));
+  for (const s of (clone.steps || [])) {
+    if (s.type === 'join' && (!s.rightRows || !s.rightRows.length)) {
+      s.rightRows = fix.rightRows;
+      if (!s.rightKey) s.rightKey = 'id';
+    }
+  }
+  return clone;
+}
+
+/* ---------- الرسم البياني المرئي ----------
+ * التعريف قد يحمل graph بدل steps (أو معها). هنا يُتحقق من الرسم ويُترجم إلى
+ * نفس خطوات المحرك الخطي — لا محرك ثانٍ. التعريفات القديمة بلا graph تمر كما هي.
+ */
+function resolveGraphWorkflow(wf) {
+  if (!wf || typeof wf !== 'object' || !wf.graph) return { ok: true, workflow: wf };
+  const gv = WG.validateGraph(wf.graph);
+  if (!gv.ok) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'رسم التحليل غير صالح: ' + gv.errors.join(' · '),
+      graphErrors: gv.errors,
+      nodeErrors: gv.nodeErrors,
+    };
+  }
+  const compiled = WG.compileGraph(wf.graph);
+  if (!compiled.ok) {
+    return {
+      ok: false, status: 400,
+      error: 'تعذّرت ترجمة الرسم: ' + compiled.errors.join(' · '),
+      graphErrors: compiled.errors,
+      nodeErrors: compiled.nodeErrors,
+    };
+  }
+  return {
+    ok: true,
+    workflow: Object.assign({}, wf, {
+      source: compiled.source,
+      steps: compiled.steps,
+      graph: WG.normalizeGraph(wf.graph),
+      graphSchemaVersion: WG.GRAPH_SCHEMA_VERSION,
+    }),
+    graphInfo: { order: compiled.order, outputName: compiled.outputName },
+  };
+}
 
 /* ---------- لا تدع خطأ غير معالج يُوقف الخادم (يُسجَّل في ملف بدلاً من الانهيار) ----------
    السبب (السابق): أي استثناء غير معالج كان يُخرج Node (exit 1) فتتوقف الخدمة وتظهر
@@ -51,6 +123,11 @@ const MIME = {
    الملف يُحفظ باسمه (عادةً تاريخ اليوم مثل 01-10-2026.xlsx) في
    data/uploads/<الفئة> — ورفع نفس الاسم مرة أخرى يستبدل الملف والبيانات. */
 const UPLOADS_ROOT = path.join(__dirname, '..', 'data', 'uploads');
+const WF_ROOT = path.join(__dirname, '..', 'data', 'workflows');
+const REPORTS_ROOT = path.join(__dirname, '..', 'data', 'reports');
+const FORMULA_ROOT = path.join(__dirname, '..', 'data', 'formulas');
+/* الشاشات المخصّصة (مصمم الشاشات): ملف JSON لكل شاشة — نمط مخزن التقارير */
+const SCREENS_ROOT = path.join(__dirname, '..', 'data', 'screens');
 /* مجلد المرحلة المؤقتة: يُحفظ فيه الملف المرفوع للمعاينة قبل التأكيد،
    ويُنقل إلى مجلده النهائي عند commit — فلا يُستورد شيء لم يُعايَن. */
 const STAGING_DIR = path.join(UPLOADS_ROOT, '.staging');
@@ -92,9 +169,6 @@ function dateFromName(name) {
    - مدى رقمي: 100-500
    - خلاف ذلك: احتواء نصي بعد تطبيع عربي (الهمزات/الياء/التاء + إسقاط الفراغات والفواصل). */
 /* تطبيع نصي عربي موحّد: توحيد الهمزات/الياء/التاء المربوطة + إسقاط التشكيل والفراغات والفواصل */
-const normAr = s => String(s === null || s === undefined ? '' : s).toLowerCase()
-  .replace(/[أإآٱ]/g, 'ا').replace(/[ىي]/g, 'ي').replace(/[ةه]/g, 'ه')
-  .replace(/[\u064B-\u065F\u0670]/g, '').replace(/[\s,،_()\-]/g, '');
 
 function applyColFilters(rows, param) {
   let flt = null;
@@ -241,18 +315,7 @@ const check = fn => async (q, res, body, req, me) => {
 const sessionCookie = (token) =>
   `${Auth.COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Auth.SESSION_DAYS * 86400}`;
 
-function toCsv(rows) {
-  if (!rows.length) return '\uFEFF';
-  const cols = Object.keys(rows[0]);
-  const esc = v => {
-    if (v === null || v === undefined) return '';
-    const s = String(v);
-    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  };
-  const lines = [cols.join(',')];
-  for (const r of rows) lines.push(cols.map(c => esc(r[c])).join(','));
-  return '\uFEFF' + lines.join('\r\n');
-}
+const Csv = require('./csv');
 
 /* ---------- وظائف الاستيراد (عملية منفصلة حتى لا يتجمّد الخادم) ---------- */
 const jobs = {};
@@ -315,7 +378,6 @@ function startImportJob(filePath, opts = {}) {
 }
 
 /* ---------- البورصة: جلب ذاتي داخل النظام (بلا أي ارتباط بملف Excel) ---------- */
-const pad2 = n => String(n).padStart(2, '0');
 const localStr = d => (d instanceof Date && !isNaN(d))
   ? `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
   : (d || null);
@@ -407,9 +469,9 @@ const REPORTS = {
     label: 'موانئ العقود (خام)', desc: 'ورقة «البيانات» — جدول الموانئ', raw: true, hidden: true,
     fn: () => DB.all(`SELECT * FROM contract_ports`),
   },
-  'contract-companies-raw': {
-    label: 'شركات العقود الداخلية (خام)', desc: 'ورقة «البيانات» — جدول الشركات الداخلية', raw: true, hidden: true,
-    fn: () => DB.all(`SELECT * FROM contract_companies_internal`),
+  'companies-raw': {
+    label: 'الشركات (المصدر الموحد - خام)', desc: 'ورقة «البيانات» — جدول الشركات الموحّد', raw: true, hidden: true,
+    fn: () => DB.all(`SELECT * FROM companies`),
   },
   /* ---------- صفحات Power BI لعقود الاستيراد (إعادة بناء داخل التطبيق) ---------- */
   'pbix-home': {
@@ -458,6 +520,18 @@ const REPORTS = {
     fn: F => A.contractUnified(F),
   },
 };
+/* تقرير اصطناعي لاختبار مسار الاستيراد — في وضع الاختبار فقط (بلا قاعدة بيانات).
+   لا يظهر ولا يعمل في التشغيل الفعلي. */
+if (process.env.WORKFLOW_TEST_MODE === '1') {
+  REPORTS['test-legacy'] = {
+    label: 'تقرير اختباري (اصطناعي)',
+    desc: 'مصدر ذاكرة اصطناعي — لاختبار استيراد تقرير قائم إلى المصمم دون أي اتصال بقاعدة البيانات',
+    fn: () => {
+      const f = W.syntheticFixture();
+      return (f.sourceRows || []).map(r => ({ item: 'صنف ' + r.id, qty: r.qty, price: r.price, note: r.note }));
+    },
+  };
+}
 
 /* ---------- المسارات ---------- */
 /* صف بورصة أو أرصدة يدوي يغيّر تكلفة يومه وما بعده → يُوسم المحرك ليعيد البناء من تاريخه */
@@ -465,9 +539,228 @@ const markCost = async r => {
   if (r && r.date && (r.cat === 'borse' || r.cat === 'balances')) await CE.markDirty(r.date);
 };
 
+  /* يحمّل تقريرًا محفوظًا + بيانات تشغيله (قراءة فقط) — مشترك بين المسارات */
+  /* ---------- التقارير القديمة (31): تنفيذ + استخراج ---------- */
+  let _legacyCodeCache = null;
+  /** نصوص شيفرة التحليل وPower BI — لِلاستخراج الساكن فقط (قراءة ملفات) */
+  function legacyCodeText() {
+    if (_legacyCodeCache) return _legacyCodeCache;
+    const read = f => { try { return fs.readFileSync(path.join(__dirname, f), 'utf8'); } catch (_) { return ''; } };
+    _legacyCodeCache = { analytics: read('analytics.js'), pbix: read('pbix.js') };
+    return _legacyCodeCache;
+  }
+  /** تنفيذ تقرير قديم بنفس دالة التطبيق (المصدر الحقيقي للأعمدة) */
+  async function legacyRows(name, params) {
+    const def = REPORTS[name];
+    if (!def) return { error: 'تقرير غير معروف: ' + name };
+    try {
+      /* parseFilters يتوقّع كائن استعلام ⇒ نُبنيه من المعاملات المُمرَّرة */
+      const src = (params && typeof params === 'object') ? params : {};
+      const q = { get: k => (src[k] === undefined || src[k] === null ? '' : String(src[k])) };
+      const F = A.parseFilters(q);
+      const out = await def.fn(F);
+      const rows = Array.isArray(out) ? out : (out && Array.isArray(out.rows) ? out.rows : []);
+      return { rows };
+    } catch (e) { return { error: (e && e.message) || String(e) }; }
+  }
+  /** أعمدة الصفوف (مفاتيح الصفوف) */
+  function rowsColumns(rows) {
+    const cols = [];
+    const seen = new Set();
+    for (const r of (rows || []).slice(0, 50)) {
+      if (!r || typeof r !== 'object') continue;
+      for (const k of Object.keys(r)) if (!seen.has(k)) { seen.add(k); cols.push(k); }
+    }
+    return cols;
+  }
+  /** بيانات تقرير قديم بشكل بيانات التشغيل (للتصيير في المحرك) */
+  async function legacyData(name, params) {
+    const r = await legacyRows(name, params);
+    if (r.error) return { error: r.error };
+    return { columns: rowsColumns(r.rows), rows: r.rows, formulaColumns: {}, traced: false, legacy: name };
+  }
+
+  /** مصدر نتيجة تشغيل محفوظة — قابل للقراءة كصفوف (Phase 2) */
+  function outputSourceData(sourceName) {
+    const runId = String(sourceName || '').replace(/^output:/, '').replace(/[^A-Za-z0-9_\-]/g, '');
+    if (!runId) return { ok: false, status: 400, error: 'معرّف نتيجة التشغيل مطلوب' };
+    const out = W.loadOutput(runId, WF_ROOT);
+    if (!out) return { ok: false, status: 404, error: 'نتيجة التشغيل غير موجودة: ' + runId };
+    const rows = Array.isArray(out.rows) ? out.rows : [];
+    const columns = Array.isArray(out.columns) && out.columns.length ? out.columns : (rows.length ? Object.keys(rows[0]) : []);
+    const types = W.colTypes(rows);
+    const label = 'نتيجة سابقة — ' + runId + (out.workflowName ? ' · ' + out.workflowName : '');
+    const notes = ['المصدر: نتيجة تشغيل محفوظة ' + runId + (out.workflowName ? ' («' + out.workflowName + '»)' : '')];
+    if (out.definitionChanged) notes.push('تعريف التحليل تغيّر بعد هذا التشغيل — النتيجة محفوظة كما كانت عند التنفيذ');
+    return {
+      ok: true, status: 200,
+      data: {
+        name: 'output:' + runId, label, columns,
+        fields: columns.map(c => ({ name: c, type: types[c] || 'string', description: '' })),
+        sample: rows.slice(0, 8),
+      },
+      rows, columns, notes,
+      source: { name: 'output:' + runId, label, domain: 'outputs', grain: 'صفوف نتيجة محفوظة', canonical: false },
+      runId, truncated: false,
+    };
+  }
+
+  /** وصف موحّد لأي مصدر: synthetic / dataset / file / workbook / output */
+  async function sourceInfo(name, me) {
+    const sid = String(name || '').trim();
+    if (sid.indexOf('output:') === 0) return outputSourceData(sid);
+    if (sid.indexOf('file:') === 0) {
+      const r = await D.resolveFileSource({ type: 'file', name: sid.slice(5) });
+      if (!r.ok) return r;
+      return {
+        ok: true, status: 200,
+        data: {
+          name: sid,
+          label: (r.source && r.source.label) || sid,
+          columns: r.columns, fields: r.fields, sample: r.sample,
+        },
+        notes: r.notes, source: r.source, truncated: r.truncated,
+      };
+    }
+    if (sid.indexOf('workbook:') === 0) {
+      const r = await D.resolveWorkbookSource({ type: 'workbook', name: sid.slice(9) }, me);
+      if (!r.ok) return r;
+      return {
+        ok: true, status: 200,
+        data: {
+          name: sid,
+          label: (r.source && r.source.label) || sid,
+          columns: r.columns, fields: r.fields, sample: r.sample,
+        },
+        notes: r.notes, source: r.source, truncated: r.truncated,
+      };
+    }
+    return D.sourceColumns(sid, me);
+  }
+
+  /** طرف ثانٍ للربط/الاتحاد/المقارنة — مصدر فهرس أو ملف أو نتيجة محفوظة */
+  async function resolveRightSource(name, me, srcSt) {
+    const sid = String(name || '').trim();
+    if (sid.indexOf('output:') === 0) {
+      const r = outputSourceData(sid);
+      if (!r.ok) return r;
+      return {
+        ok: true, status: 200, rows: r.rows, columns: r.columns,
+        label: r.source.label, grain: r.source.grain, limit: null, truncated: false,
+      };
+    }
+    if (sid.indexOf('file:') === 0) {
+      const r = await D.resolveFileSource({ type: 'file', name: sid.slice(5) });
+      if (!r.ok) return r;
+      return {
+        ok: true, status: 200, rows: r.rows, columns: r.columns,
+        label: r.source.label, grain: r.source.grain, limit: r.limit, truncated: r.truncated,
+      };
+    }
+    if (sid.indexOf('workbook:') === 0) {
+      const r = await D.resolveWorkbookSource({ type: 'workbook', name: sid.slice(9) }, me);
+      if (!r.ok) return r;
+      return {
+        ok: true, status: 200, rows: r.rows, columns: r.columns,
+        label: r.source.label, grain: r.source.grain, limit: r.limit, truncated: r.truncated,
+      };
+    }
+    return D.resolveJoinSource(sid, me, srcSt);
+  }
+
+  function sendRunFailure(res, result) {
+    const trace = (result && result.trace) || [];
+    const failed = trace.find(t => t && t.status === 'failed');
+    return send(res, 400, {
+      ok: false,
+      error: (result && result.error) || 'فشل التنفيذ',
+      trace,
+      failedStep: failed ? failed.id : null,
+    });
+  }
+
+  /** قائمة مخرجات التشغيل (مشتركة بين المسارات) + مقارنة البصمة بالتعريف الحالي */
+  function listOutputs() {
+    const dir = path.join(WF_ROOT, '_outputs');
+    const wfCache = new Map();
+    const currentHash = (wid) => {
+      if (!wid) return null;
+      if (wfCache.has(wid)) return wfCache.get(wid);
+      let h = null;
+      try {
+        const wf = W.loadWorkflow(wid, WF_ROOT);
+        if (wf) h = W.definitionHash(W.definitionSnapshot(wf));
+      } catch (_) { h = null; }
+      wfCache.set(wid, h);
+      return h;
+    };
+    if (!fs.existsSync(dir)) return { items: [] };
+    /* بصمة محرّك المعادلات الحالية — تُحسب مرة واحدة لكل القائمة */
+    const curEngineHash = FormulaEngine.formulaEngineHash();
+    const items = fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => {
+      try {
+        const o = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+        return {
+          runId: o.runId, rowCount: o.rowCount, columns: o.columns, savedAt: o.savedAt,
+          source: o.source || null, workflowName: o.workflowName || '', workflowId: o.workflowId || '',
+          traced: !!o.definition, definitionHash: o.definitionHash || null,
+          stepCount: (o.definition && o.definition.steps) ? o.definition.steps.length : 0,
+          filters: (o.definition && o.definition.source && o.definition.source.settings) ? o.definition.source.settings : null,
+          definitionChanged: (o.definition && currentHash(o.workflowId)) ? (currentHash(o.workflowId) !== o.definitionHash) : null,
+          engineVersion: o.engineVersion || null,
+          engineHash: o.engineHash || null,
+          engineState: !o.engineHash ? 'unknown' : (o.engineHash === curEngineHash ? 'same' : 'changed'),
+          currentEngineVersion: FormulaEngine.FORMULA_ENGINE_VERSION,
+          currentEngineHash: curEngineHash,
+          warnings: o.warnings || [], sourceNotes: o.sourceNotes || [],
+          joinCompleteness: o.joinCompleteness || null,
+        };
+      } catch (_) { return null; }
+    }).filter(Boolean);
+    return { items };
+  }
+
+  function reportWithData(id) {
+    const rep = RS.loadReport(id, REPORTS_ROOT);
+    if (!rep) return null;
+    const data = runData(rep.runId);
+    return { report: rep, data };
+  }
+
+  /** بيانات نتيجة تشغيل محفوظة (مع خريطة أعمدة المعادلات وبيانات التتبّع) */
+  function runData(runId) {
+    const out = runId ? W.loadOutput(runId, WF_ROOT) : null;
+    if (!out) return { columns: [], rows: [], formulaColumns: {}, traced: false };
+    return {
+      columns: out.columns || [],
+      rows: out.rows || [],
+      formulaColumns: out.formulaColumns || {},
+      formulaVersions: out.formulaVersions || {},
+      traced: !!out.definition,
+      definitionHash: out.definitionHash || null,
+      savedAt: out.savedAt || '',
+      source: out.source || null,
+      workflowName: out.workflowName || '',
+      engineVersion: out.engineVersion || null,
+      engineHash: out.engineHash || null,
+      warnings: out.warnings || [],
+      joinCompleteness: out.joinCompleteness || null,
+    };
+  }
+
+  /* حلّ مراجع المعادلات — في src/formula-resolver.js (طبقة نقية قابلة للاختبار) */
+  const resolveWorkflowFormulas = (wf, data) => FRes.resolveWorkflowFormulas(wf, FORMULA_ROOT, data);
+  const resolveReportFormulas = (report, data) => FRes.resolveReportFormulas(report, data);
+
 const routes = {
   /* ===== المصادقة والمستخدمون ===== */
   'GET /api/auth/login-info': async (q, res) => {
+    if (process.env.WORKFLOW_TEST_MODE === '1') {
+      return ok(res, {
+        firstLogin: false,
+        roles: Object.entries(Auth.ROLES).map(([id, v]) => ({ id, label: v.label, perms: v.perms })),
+      });
+    }
     const r = await DB.get(`SELECT EXISTS(SELECT 1 FROM users WHERE username = 'admin' AND must_change) AS x`);
     ok(res, {
       firstLogin: !!r.x,
@@ -496,6 +789,15 @@ const routes = {
   },
 
   'GET /api/auth/me': async (q, res, body, req) => {
+    if (process.env.WORKFLOW_TEST_MODE === '1') {
+      const testUser = {
+        id: 0, username: 'workflow-test', full_name: 'Workflow Test (TEST MODE)',
+        role: 'admin', roleLabel: 'مدير', mustChange: false,
+        perms: (Auth.ROLES.admin && Auth.ROLES.admin.perms) || [],
+        tabs: TAB_IDS.slice(),
+      };
+      return ok(res, { user: testUser });
+    }
     const s = await Auth.getSession(Auth.readCookie(req, Auth.COOKIE));
     if (!s) return bad(res, 'انتهى الجلسة — سجّل الدخول', 401);
     ok(res, { user: await pubUser(s) });
@@ -522,29 +824,34 @@ const routes = {
 
   /* ---------- صلاحيات الشاشات (يضبطها المدير لكل مستخدم على حدة) ---------- */
   'GET /api/tabs': async (q, res, body, req, me) => {
+    /* وضع الاختبار: بلا قاعدة بيانات ⇒ لا قائمة مستخدمين (التبويبات فقط) */
+    if (process.env.WORKFLOW_TEST_MODE === '1') return ok(res, { tabs: allTabs(), users: [], perms: {} });
     const users = await Auth.listUsers();
     const perms = {};
-    for (const u of users) perms[u.id] = u.role === 'admin' ? TAB_IDS.slice() : tabsOfUser(u);
-    ok(res, { tabs: TABS, users: users.map(u => ({ id: u.id, username: u.username, full_name: u.full_name, role: u.role, roleLabel: Auth.roleLabel(u.role) })), perms });
+    const all = allTabs().map(t => t.id);
+    for (const u of users) perms[u.id] = u.role === 'admin' ? all : tabsOfUser(u);
+    ok(res, { tabs: allTabs(), users: users.map(u => ({ id: u.id, username: u.username, full_name: u.full_name, role: u.role, roleLabel: Auth.roleLabel(u.role) })), perms });
   },
 
   'POST /api/tabs/save': async (q, res, body, req, me) => {
     const src = (body && body.perms) || {};
     const users = await Auth.listUsers();
     const byId = new Map(users.map(u => [u.id, u]));
+    const KNOWN = allTabs().map(t => t.id);
     for (const [idKey, arr] of Object.entries(src)) {
       const uid = Number(idKey);
       const u = byId.get(uid);
       if (!u) continue;                                   // مستخدم غير معروف → تجاهُل
       if (u.role === 'admin') continue;                   // المدير يملك كل الشاشات دائماً
       /* ترشيح صارم ضد أي معرّفات شاشات غير معروفة */
-      const clean = TAB_IDS.filter(t => (Array.isArray(arr) ? arr : []).map(String).includes(t));
+      const clean = KNOWN.filter(t => (Array.isArray(arr) ? arr : []).map(String).includes(t));
       await DB.run('UPDATE users SET tabs = $1, updated_at = now() WHERE id = $2',
         [JSON.stringify(clean), uid]);
     }
     const users2 = await Auth.listUsers();
     const perms = {};
-    for (const u of users2) perms[u.id] = u.role === 'admin' ? TAB_IDS.slice() : tabsOfUser(u);
+    const all = allTabs().map(t => t.id);
+    for (const u of users2) perms[u.id] = u.role === 'admin' ? all : tabsOfUser(u);
     ok(res, { perms });
   },
 
@@ -708,6 +1015,702 @@ const routes = {
 
   'GET /api/inventory/report': async (q, res) => ok(res, await A.inventoryReport(A.parseFilters(q), q.get('by') || 'detail', q.get('by2') || '', q.get('per') || '', Number(q.get('limit') || 20000))),
   'GET /api/span': async (q, res) => ok(res, await A.dateSpan()),
+  'GET /api/formulas': async (q, res) => ok(res, { items: F.listFunctions() }),
+
+  /* ---------- مصادر بيانات Workflow Studio: وصف فقط (قراءة، بلا جلب) ---------- */
+  'GET /api/datasets': async (q, res) => ok(res, { items: D.listSources() }),
+  'GET /api/datasets/fields': async (q, res, body, req, me) => {
+    const name = String(q.get('name') || '').trim();
+    if (!name) return bad(res, 'name required');
+    const r = await sourceInfo(name, me);
+    if (!r.ok) return bad(res, r.error, r.status || 400);
+    ok(res, r.data);
+  },
+  'GET /api/datasets/files': async (q, res) => {
+    const r = D.listFileSources();
+    ok(res, { items: r.items, root: r.root, testOnly: true });
+  },
+  'GET /api/datasets/workbooks': async (q, res, body, req, me) => {
+    const r = D.listWorkbookSources(me);
+    ok(res, {
+      items: r.items,
+      configured: !!r.configured,
+      denied: !!r.denied,
+      status: r.status || (r.configured ? 'ready' : 'unset'),
+      reason: r.reason || '',
+      fileCount: r.fileCount || 0,
+      sheetCount: r.sheetCount || (r.items || []).length,
+      root: r.root || null,
+      readOnly: true,
+      testOnly: process.env.WORKFLOW_TEST_MODE === '1',
+    });
+  },
+  'GET /api/datasets/workbooks/diagnostics': async (q, res, body, req, me) => {
+    const r = D.workbookDiagnostics(me);
+    ok(res, r);
+  },
+
+  /* ---------- فهرس البيانات الموحّد + قاموس المعادلات + مستكشف العلاقات ---------- */
+  'GET /api/catalog': async (q, res) => ok(res, {
+    summary: CAT.summary(),
+    domains: CAT.DOMAINS,
+    statuses: CAT.STATUS,
+    sources: CAT.listSources(),
+  }),
+  'GET /api/catalog/source': async (q, res, body, req, me) => {
+    const name = String(q.get('name') || '').trim();
+    if (!name) return bad(res, 'name required');
+    const src = CAT.getSource(name);
+    if (!src) return bad(res, 'مصدر غير موجود في الفهرس: ' + name, 404);
+    const r = await D.sourceColumns(name, me);
+    const sample = r && r.ok ? (r.data.sample || []) : [];
+    const fields = (r && r.ok ? r.data.fields : src.fields.map(f => ({ name: f.name, type: f.type, description: f.description, origin: f.origin })));
+    ok(res, {
+      id: src.id, label: src.label, technical: src.technical, domain: src.domain, description: src.description,
+      status: src.status, perm: src.perm, grain: src.grain, rowKey: src.rowKey, timeGrain: src.timeGrain,
+      canonical: !!src.canonical, canonicalFor: src.canonicalFor || null, canonicalNote: src.canonicalNote || null,
+      access: src.access || null, fields, sample, relations: src.relations,
+    });
+  },
+  'GET /api/model/formulas': async (q, res) => {
+    const opts = {};
+    const domain = q.get('domain'); if (domain) opts.domain = domain;
+    const status = q.get('status'); if (status) opts.status = status;
+    const table = q.get('table'); if (table) opts.table = table;
+    ok(res, {
+      items: ME.formulas(opts),
+      summary: ME.summary(),
+      importedVsComputed: ME.IMPORTED_VS_COMPUTED,
+      balanceConversions: ME.BALANCE_CONVERSIONS,
+    });
+  },
+  'GET /api/model/relations': async (q, res) => ok(res, { items: ME.relations() }),
+  'GET /api/model/fields': async (q, res) => {
+    const name = String(q.get('source') || '').trim();
+    if (!name) return bad(res, 'source required');
+    const rows = ME.fields(name);
+    if (!rows.length) return bad(res, 'مصدر غير موجود في الفهرس: ' + name, 404);
+    ok(res, { items: rows });
+  },
+  /* ---------- سجل الشاشات والتقارير ومصادرها ---------- */
+  'GET /api/screens': async (q, res) => ok(res, {
+    summary: SR.summary(),
+    screens: SR.screensWithSources(),
+    reports: SR.listReports(),
+  }),
+
+  /* ---------- الشاشات المخصّصة (مصمم الشاشات) ---------- */
+  'GET /api/screens/custom': async (q, res) => ok(res, {
+    items: ScreenStore.listScreens(SCREENS_ROOT),
+  }),
+  'GET /api/screens/custom/get': async (q, res) => {
+    const id = String(q.get('id') || '').trim();
+    if (!id) return bad(res, 'id required');
+    const sc = ScreenStore.loadScreen(id, SCREENS_ROOT);
+    if (!sc) return bad(res, 'not found', 404);
+    ok(res, sc);
+  },
+  'POST /api/screens/custom/save': async (q, res, body) => {
+    const def = body && body.screen;
+    if (!def || typeof def !== 'object') return bad(res, 'screen required');
+    const norm = AppScreen.normalizeScreen(def);
+    /* التحقق من الروابط: مصدر البيانات يجب أن يكون تشغيلًا محفوظًا فعليًا */
+    const runs = listOutputs();
+    const v = AppScreen.validateScreen(norm, {
+      runs: (runs.items || []).map(r => ({ runId: r.runId, columns: r.columns || [] })),
+    });
+    if (!v.ok) return bad(res, 'تعريف الشاشة غير صالح: ' + v.errors.join(' · '), 400);
+    const r = ScreenStore.saveScreen(norm, SCREENS_ROOT, { reservedIds: TAB_IDS });
+    if (r.error) return bad(res, r.error, 400);
+    ok(res, { id: r.id, screen: r.screen });
+  },
+  'POST /api/screens/custom/delete': async (q, res, body) => {
+    const id = String((body && body.id) || '').trim();
+    if (!id) return bad(res, 'id required');
+    if (!ScreenStore.deleteScreen(id, SCREENS_ROOT)) return bad(res, 'not found', 404);
+    ok(res, { deleted: id });
+  },
+
+  /* ---------- Workflow Studio (MVP) ---------- */
+  'GET /api/workflows': async (q, res) => {
+    const list = W.listWorkflows(WF_ROOT);
+    ok(res, { items: list });
+  },
+  'GET /api/workflows/get': async (q, res) => {
+    const id = String(q.get('id') || '').trim().replace(/[^A-Za-z0-9_\-]/g, '');
+    if (!id) return bad(res, 'id required');
+    const wf = W.loadWorkflow(id, WF_ROOT);
+    if (!wf) return bad(res, 'not found', 404);
+    /* تحليل قديم بلا رسم: نشتق رسمًا للعرض فقط (ولا يُحفظ إلا إذا أعاد المستخدم الحفظ).
+       هذا يجعل كل التحليلات المحفوظة قابلة للفتح في المحرّر المرئي. */
+    if (!wf.graph) {
+      wf.graph = WG.deriveGraphFromWorkflow(wf);
+      wf.graphDerived = true;
+      wf.graphSchemaVersion = WG.GRAPH_SCHEMA_VERSION;
+    }
+    ok(res, wf);
+  },
+  /* ---------- مركز العمل: تجميع حالة المنصة من مصادر فعلية ---------- */
+  'GET /api/workcenter': async (q, res) => {
+    const outputs = listOutputs();
+    const [catalogSum, modelSum, screensSum] = await Promise.all([
+      Promise.resolve(CAT.summary()),
+      Promise.resolve(ME.summary()),
+      Promise.resolve(SR.summary()),
+    ]);
+    ok(res, WC.buildWorkCenter({
+      runs: outputs.items,
+      reports: RS.listReports(REPORTS_ROOT),
+      formulas: FS.listFormulas(FORMULA_ROOT),
+      catalog: catalogSum,
+      model: modelSum,
+      screens: screensSum,
+      savedScreens: ScreenStore.listScreens(SCREENS_ROOT),
+    }));
+  },
+  'GET /api/workflows/outputs': async (q, res) => ok(res, listOutputs()),
+  'GET /api/workflows/output': async (q, res) => {
+    const id = String(q.get('id') || '').trim().replace(/[^A-Za-z0-9_\-]/g, '');
+    if (!id) return bad(res, 'id required');
+    const out = W.loadOutput(id, WF_ROOT);
+    if (!out) return bad(res, 'output not found', 404);
+    /* بصمة/إصدار المحرّك الحاليان ⇒ تستطيع الواجهة تبيّن تغيّر المحرّكsince التشغيل */
+    ok(res, Object.assign({}, out, {
+      currentEngineVersion: FormulaEngine.FORMULA_ENGINE_VERSION,
+      currentEngineHash: FormulaEngine.formulaEngineHash(),
+    }));
+  },
+  'GET /api/workflows/output/csv': async (q, res) => {
+    const id = String(q.get('id') || '').trim().replace(/[^A-Za-z0-9_\-]/g, '');
+    if (!id) return bad(res, 'id required');
+    const out = W.loadOutput(id, WF_ROOT);
+    if (!out) return bad(res, 'output not found', 404);
+    const rows = Array.isArray(out.rows) ? out.rows : [];
+    const csv = Csv.safeToCsv(rows);
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="workflow-${id}.csv"`,
+      'Content-Length': Buffer.byteLength(csv),
+    });
+    return res.end(csv);
+  },
+  'GET /report-schema.js': async (q, res) => {
+    const p = path.join(__dirname, 'report-schema.js');
+    if (!fs.existsSync(p)) return bad(res, 'schema not found', 404);
+    const buf = fs.readFileSync(p);
+    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store, must-revalidate' });
+    return res.end(buf);
+  },
+  'GET /formula-builder.js': async (q, res) => {
+    const p = path.join(__dirname, 'formula-builder.js');
+    if (!fs.existsSync(p)) return bad(res, 'builder not found', 404);
+    const buf = fs.readFileSync(p);
+    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store, must-revalidate' });
+    return res.end(buf);
+  },
+  /* نموذج الشاشات المخصّصة — نفس الملف الذي يخدمه Node (مصدر حقيقة واحد) */
+  'GET /app-screen.js': async (q, res) => {
+    const p = path.join(__dirname, 'app-screen.js');
+    if (!fs.existsSync(p)) return bad(res, 'screen model not found', 404);
+    const buf = fs.readFileSync(p);
+    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store, must-revalidate' });
+    return res.end(buf);
+  },
+  /* فهرس العلاقات بين المصادر/المعادلات/التحليلات/التقارير/الشاشات
+     (ملف عام في public/ — يُخدَم ثابتًا بلا حاجة لإعادة تشغيل الخادم) */
+  'GET /workspace-links.js': async (q, res) => {
+    const p = path.join(PUBLIC, 'workspace-links.js');
+    if (!fs.existsSync(p)) return bad(res, 'workspace links not found', 404);
+    const buf = fs.readFileSync(p);
+    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store, must-revalidate' });
+    return res.end(buf);
+  },
+  /* الشاشات الثلاث للمنصة — مصدر واحد للحقيقة (src/platform-screens.js) يُخدَم للمتصفح */
+  'GET /platform-screens.js': async (q, res) => {
+    const body = '/* الشاشات الثلاث لمنصة التحليل — مولَّدة من src/platform-screens.js (مصدر واحد للحقيقة) */\n'
+      + 'window.PlatformScreens = ' + JSON.stringify(PLATFORM.describe(), null, 1) + ';\n';
+    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store, must-revalidate' });
+    return res.end(body);
+  },
+  /* فهرس الشاشات الثلاث (JSON) — للقراءة من الاختبارات والأدوات */
+  'GET /api/platform/screens': async (q, res) => ok(res, PLATFORM.describe()),
+  'GET /api/reports/saved': async (q, res) => {
+    /* مستند إعدادات الواجهة العام ليس تقريرًا ⇒ لا يظهر في قائمة التقارير */
+    const items = RS.listReports(REPORTS_ROOT).filter(r => r.id !== 'ui-layout');
+    ok(res, { items });
+  },
+  'GET /api/reports/get': async (q, res) => {
+    const id = String(q.get('id') || '').trim();
+    if (!id) return bad(res, 'id required');
+    const rep = RS.loadReport(id, REPORTS_ROOT);
+    if (!rep) return bad(res, 'not found', 404);
+    ok(res, rep);
+  },
+  'POST /api/reports/save': async (q, res, body, req, me) => {
+    const rep = body && body.report;
+    if (!rep || typeof rep !== 'object') return bad(res, 'report required');
+    /* الإعدادات العامة (شاشات/قوائم/أزرار) ⇒ إعدادات لكل المستخدمين ⇒ تتطلّب صلاحية master */
+    if (String(rep.id || '') === 'ui-layout') {
+      /* في الإنتاج comes the session user; in TEST_MODE (public routes) the effective user is the test admin */
+      const effective = me || (process.env.WORKFLOW_TEST_MODE === '1' ? { role: 'admin', active: true } : null);
+      const allowed = (effective && effective.role === 'admin') || (typeof Auth.can === 'function' && Auth.can(effective, 'master'));
+      if (!allowed) return bad(res, 'تعديل إعدادات التطبيق العامة يتطلّب صلاحية «مدير البيانات»', 403);
+      if (!rep.settingsVersion) rep.settingsVersion = 1;
+      try {
+        const UILV = require('./ui-layout-validation');
+        const v = UILV.validate(rep.ui);
+        if (!v.ok) return bad(res, 'تخطيط الواجهة غير صالح: ' + v.errors.join(' · '), 400);
+      } catch (_) {}
+    }
+    /* تحقق النموذج الموحّد أولًا (مصدر · تخطيط · نمط · شروط) ثم محرك Python */
+    const sv = Schema.validateReport(rep);
+    if (!sv.ok) return bad(res, 'تعريف التقرير غير صالح: ' + sv.errors.join(' · '), 400);
+    const v = await R.validateReport(rep);
+    if (!v.ok) return bad(res, v.error || 'invalid report', 400);
+    const r = RS.saveReport(rep, REPORTS_ROOT);
+    if (r.error) return bad(res, r.error, 400);
+    ok(res, { id: r.id });
+  },
+  'POST /api/reports/render': async (q, res, body) => {
+    const rep = body && body.report;
+    const id = body && body.id ? String(body.id).trim().replace(/[^A-Za-z0-9_\-]/g, '') : '';
+    let report = rep;
+    let runId = body && body.runId;
+    if (!report && id) {
+      const p2 = path.join(__dirname, '..', 'data', 'reports', id + '.json');
+      if (!fs.existsSync(p2)) return bad(res, 'report not found', 404);
+      try { report = JSON.parse(fs.readFileSync(p2, 'utf8')); }
+      catch (e) { return bad(res, 'corrupt report', 500); }
+    }
+    if (!report) return bad(res, 'report required');
+    /* مصدر البيانات: نتيجة تشغيل محفوظة، أو تقرير قائم من التطبيق */
+    const legacyName = (body && body.legacy && body.legacy.name)
+      || (report.legacy && report.legacy.name) || '';
+    let data;
+    if (legacyName) {
+      const ld = await legacyData(legacyName, (body && body.legacy && body.legacy.params) || (report.legacy && report.legacy.params));
+      if (ld.error) return bad(res, 'تعذّر تنفيذ التقرير الأصلي: ' + ld.error, 400);
+      data = ld;
+    } else {
+      if (!runId) runId = report.runId;
+      data = runData(runId);
+    }
+    /* مراجع المعادلات ⇒ أعمدة حقيقية (أو رسالة خطأ واضحة) */
+    const rf = resolveReportFormulas(report, data);
+    if (rf.errors.length) return bad(res, rf.errors.join(' · '), 400);
+    const result = await R.renderReport(rf.report, data, { standalone: false });
+    if (!result.ok) return bad(res, result.error || 'render failed', 400);
+    ok(res, result);
+  },
+  /* ---------- استيراد تقرير قائم من التطبيق إلى المصمم ---------- */
+  'POST /api/reports/import-legacy': async (q, res, body) => {
+    const name = String((body && body.name) || '').trim();
+    const def = REPORTS[name];
+    if (!def) return bad(res, 'تقرير غير معروف: ' + name, 404);
+    const params = (body && body.params && typeof body.params === 'object') ? body.params : {};
+    const lr = await legacyRows(name, params);
+    const reg = SR.listReports().find(r => r.key === name) || null;
+    const st = LR.staticFromCode(String(def.fn), legacyCodeText());
+    const out = LR.convertToDesigner({
+      name,
+      label: def.label || name,
+      desc: def.desc || '',
+      rows: lr.error ? null : lr.rows,
+      columns: lr.error ? null : rowsColumns(lr.rows),
+      declared: reg ? (reg.fields || []) : [],
+      staticMeta: st,
+      params,
+      runtimeError: lr.error || null,
+    });
+    ok(res, out);
+  },
+  'POST /api/reports/validate': async (q, res, body) => {
+    const rep = body && body.report;
+    if (!rep || typeof rep !== 'object') return bad(res, 'report required');
+    const sv = Schema.validateReport(rep);
+    /* إن حُدِّد تشغيل ⇒ تُفحص أعمدة التقرير مقابل أعمدة نتيجته (كشف مبكّر قبل الحفظ) */
+    let columns = null;
+    const runId = body && body.runId ? String(body.runId).trim() : '';
+    if (runId) {
+      const out = W.loadOutput(runId, WF_ROOT);
+      if (out) columns = out.columns || [];
+    } else {
+      const lg = (body && body.legacy && body.legacy.name) || (rep.legacy && rep.legacy.name) || '';
+      if (lg) {
+        const ld = await legacyData(lg, (body && body.legacy && body.legacy.params) || (rep.legacy && rep.legacy.params));
+        if (!ld.error) columns = ld.columns;
+      }
+    }
+    const v = await R.validateReport(rep, { columns });
+    const errors = [].concat(sv.errors || [], v.ok ? [] : [v.error || '']).filter(Boolean);
+    ok(res, { ok: errors.length === 0, errors, error: errors.join(' · ') });
+  },
+  /* ---------- سجل المعادلات المحفوظة (مصدر واحد للتدفقات والتقارير) ---------- */
+  'GET /api/formulas/saved': async (q, res) => ok(res, { items: FS.listFormulas(FORMULA_ROOT) }),
+  /* تحقق فعلي: ينفّذ التعبير على صفوف عيّنة ويعيد القيم والأخطاء والاعتماديات */
+  'POST /api/formulas/verify': async (q, res, body) => {
+    const rows = (body && Array.isArray(body.rows)) ? body.rows : [];
+    if (rows.length > FV.MAX_ROWS) return bad(res, 'عدد صفوف التحقق أكبر من الحد (' + FV.MAX_ROWS + ')', 400);
+    let def = (body && body.formula && typeof body.formula === 'object') ? body.formula : null;
+    const id = body && body.id ? String(body.id).trim() : '';
+    if (!def && id) {
+      const out = FV.verifySavedFormula(id, FORMULA_ROOT, rows);
+      if (out.status === 'not-found') return bad(res, out.errors[0] || 'not found', 404);
+      return ok(res, out);
+    }
+    if (!def) return bad(res, 'formula or id required');
+    ok(res, FV.verifyFormula(def, rows));
+  },
+  'GET /api/formulas/saved/get': async (q, res) => {
+    const id = String(q.get('id') || '').trim();
+    if (!id) return bad(res, 'id required');
+    const f = FS.loadFormula(id, FORMULA_ROOT);
+    if (!f) return bad(res, 'not found', 404);
+    ok(res, f);
+  },
+  'POST /api/formulas/save': async (q, res, body) => {
+    const def = body && body.formula;
+    if (!def || typeof def !== 'object') return bad(res, 'formula required');
+    const r = FS.saveFormula(def, FORMULA_ROOT);
+    if (r.error) return bad(res, r.error, 400);
+    ok(res, { id: r.id, formula: r.formula });
+  },
+  'POST /api/formulas/delete': async (q, res) => {
+    const id = String(q.get('id') || '').trim();
+    if (!id) return bad(res, 'id required');
+    if (!FS.deleteFormula(id, FORMULA_ROOT)) return bad(res, 'not found', 404);
+    ok(res, { deleted: id });
+  },
+  'POST /api/reports/delete': async (q, res) => {
+    const id = String(q.get('id') || '').trim();
+    if (!id) return bad(res, 'id required');
+    const done = RS.deleteReport(id, REPORTS_ROOT);
+    if (!done) return bad(res, 'not found', 404);
+    ok(res, { deleted: id });
+  },
+  'GET /api/reports/export/html': async (q, res) => {
+    const id = String(q.get('id') || '').trim();
+    if (!id) return bad(res, 'id required');
+    const r = reportWithData(id);
+    if (!r) return bad(res, 'not found', 404);
+    const rf = resolveReportFormulas(r.report, r.data);
+    if (rf.errors.length) return bad(res, rf.errors.join(' · '), 400);
+    const result = await R.renderReport(rf.report, r.data, { standalone: true });
+    if (!result.ok) return bad(res, result.error || 'render failed', 400);
+    const html = result.html || '';
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="report-' + id + '.html"',
+      'Content-Length': Buffer.byteLength(html),
+    });
+    return res.end(html);
+  },
+  'GET /api/reports/capabilities': async (q, res) => {
+    const cap = await R.capabilities();
+    ok(res, cap.capabilities || cap);
+  },
+  'GET /api/reports/export/xlsx': async (q, res) => {
+    const id = String(q.get('id') || '').trim();
+    if (!id) return bad(res, 'id required');
+    const r = reportWithData(id);
+    if (!r) return bad(res, 'not found', 404);
+    const tmpPath = path.join(os.tmpdir(), 'ccs-report-' + Date.now() + '.xlsx');
+    const result = await R.exportReport(r.report, r.data, 'xlsx', { output_path: tmpPath });
+    if (!result.ok) { try { fs.unlinkSync(tmpPath); } catch(_){} return bad(res, result.error || 'export failed', 400); }
+    const buf = result.buffer || (fs.existsSync(tmpPath) ? fs.readFileSync(tmpPath) : null);
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    if (!buf) return bad(res, 'export failed', 500);
+    res.writeHead(200, {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="report-' + id + '.xlsx"',
+      'Content-Length': buf.length,
+    });
+    return res.end(buf);
+  },
+  /* عرض طباعة المتصفح: نفس مُصيِّر التقرير + CSS طباعة فقط (لا HTML متنكّرًا كـ PDF). */
+  'GET /api/reports/export/print': async (q, res) => {
+    const id = String(q.get('id') || '').trim();
+    if (!id) return bad(res, 'id required');
+    const r = reportWithData(id);
+    if (!r) return bad(res, 'not found', 404);
+    const rf = resolveReportFormulas(r.report, r.data);
+    if (rf.errors.length) return bad(res, rf.errors.join(' · '), 400);
+    const result = await R.renderReport(rf.report, r.data, { standalone: true });
+    if (!result.ok) return bad(res, result.error || 'render failed', 400);
+    const html = RP.buildPrintDocument(result.html || '', {
+      title: String(r.report.title || r.report.name || 'تقرير'),
+      autoPrint: String(q.get('auto') || '1') !== '0',
+    });
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Length': Buffer.byteLength(html),
+    });
+    return res.end(html);
+  },
+  'GET /api/reports/export/pdf': async (q, res) => {
+    const id = String(q.get('id') || '').trim();
+    if (!id) return bad(res, 'id required');
+    const r = reportWithData(id);
+    if (!r) return bad(res, 'not found', 404);
+    const tmpPath = path.join(os.tmpdir(), 'ccs-report-' + Date.now() + '.pdf');
+    const result = await R.exportReport(r.report, r.data, 'pdf', { output_path: tmpPath });
+    if (!result.ok) { try { fs.unlinkSync(tmpPath); } catch(_){} return bad(res, result.error || 'export failed', 400); }
+    const buf = result.buffer || (fs.existsSync(tmpPath) ? fs.readFileSync(tmpPath) : null);
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    if (!buf) return bad(res, 'export failed', 500);
+    res.writeHead(200, {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'attachment; filename="report-' + id + '.pdf"',
+      'Content-Length': buf.length,
+    });
+    return res.end(buf);
+  },
+  'POST /api/workflows/save': async (q, res, body) => {
+    const raw = body && body.workflow;
+    const rg = resolveGraphWorkflow(raw);
+    if (!rg.ok) return bad(res, rg.error, rg.status || 400);
+    const wf = rg.workflow;
+    const v = W.validateWorkflow(wf);
+    if (!v.ok) return bad(res, 'invalid workflow: ' + v.errors.join('; '));
+    // sanitize id (path traversal guard)
+    const safeId = String(wf.id || '').replace(/[^A-Za-z0-9_\-]/g, '');
+    const obj = Object.assign({}, wf, safeId ? { id: safeId } : {});
+    const id = W.saveWorkflow(obj, WF_ROOT);
+    ok(res, { id, graph: !!wf.graph, graphSchemaVersion: wf.graphSchemaVersion || null });
+  },
+  'POST /api/workflows/validate': async (q, res, body) => {
+    const raw = body && body.workflow;
+    const rg = resolveGraphWorkflow(raw);
+    if (!rg.ok) {
+      return ok(res, {
+        ok: false,
+        errors: [{ step: null, errors: rg.graphErrors || [rg.error] }],
+        graphErrors: rg.graphErrors || [rg.error],
+        nodeErrors: rg.nodeErrors || {},
+      });
+    }
+    const wf = rg.workflow;
+    const v = W.validateWorkflow(wf);
+    if (!v.ok) return ok(res, { ok: false, errors: v.errors });
+    const cols = (body && body.data && Array.isArray(body.data.columns)) ? body.data.columns : [];
+    const stepErrors = [];
+    if (Array.isArray(wf.steps)) {
+      for (const s of wf.steps) {
+        const sv = cols.length ? W.validateStep(s, cols) : W.validateStepShape(s);
+        if (!sv.ok) stepErrors.push({ step: s.id || s.type, errors: sv.errors });
+      }
+    }
+    const out = { ok: stepErrors.length === 0, errors: stepErrors };
+    if (wf.graph) {
+      out.graph = {
+        ok: true,
+        schemaVersion: wf.graphSchemaVersion || null,
+        order: (rg.graphInfo && rg.graphInfo.order) || [],
+        outputName: (rg.graphInfo && rg.graphInfo.outputName) || '',
+      };
+    }
+    ok(res, out);
+  },
+  /* فحص الرسم مع أعمدة المصادر — يملأ قوائم الحقول في المحرّر المرئي.
+     لا يجلب صفوفًا ولا ينفّذ شيئًا؛ قراءة وصف فقط وفق الصلاحيات. */
+  'POST /api/workflows/graph/inspect': async (q, res, body, req, me) => {
+    const graph = body && body.graph;
+    if (!graph || typeof graph !== 'object') return bad(res, 'graph required');
+    const sourceIds = Array.from(new Set((Array.isArray(graph.nodes) ? graph.nodes : [])
+      .filter(n => n && n.type === 'source' && n.config && n.config.sourceId)
+      .map(n => String(n.config.sourceId))));
+    const columnsBySource = {};
+    const sourceErrors = {};
+    for (const sid of sourceIds) {
+      if (sid === 'synthetic') {
+        const fix = W.syntheticFixture();
+        columnsBySource[sid] = fix.sourceColumns.map(c => ({ name: c, type: D.SYNTHETIC_TYPES[c] || 'string' }));
+        continue;
+      }
+      const r = await sourceInfo(sid, me);
+      if (r && r.ok) columnsBySource[sid] = (r.data && (r.data.fields || r.data.columns)) || [];
+      else sourceErrors[sid] = (r && r.error) || 'تعذّر قراءة وصف المصدر';
+    }
+    const insp = WG.inspectGraph(graph, { columnsBySource });
+    insp.sourceErrors = sourceErrors;
+    /* الخطوات المترجمة تُعاد للواجهة كي تبقى «القائمة المتقدمة» وJSON متطابقين
+       مع الرسم دون تنفيذ أي بيانات. */
+    if (insp.ok) {
+      const c = WG.compileGraph(graph, { columnsBySource });
+      if (c.ok) insp.compiled = { source: c.source, steps: c.steps, order: c.order, outputName: c.outputName };
+    }
+    ok(res, insp);
+  },
+  'GET /api/workflows/graph/meta': async (q, res) => ok(res, {
+    schemaVersion: WG.GRAPH_SCHEMA_VERSION,
+    nodeTypes: WG.NODE_TYPES,
+    categories: WG.CATEGORIES,
+    filterOps: WG.FILTER_OPS,
+    aggFns: WG.AGG_FNS,
+    joinTypes: WG.JOIN_TYPES,
+    unionModes: WG.UNION_MODES,
+    dedupeKeep: WG.DEDUPE_KEEP,
+    nullActions: WG.NULL_ACTIONS,
+    windowOps: WG.WINDOW_OPS,
+    outlierMethods: WG.OUTLIER_METHODS,
+    outlierActions: WG.OUTLIER_ACTIONS,
+    sortOrders: WG.SORT_ORDERS,
+    pivotDefaultPrefix: WG.PIVOT_DEFAULT_PREFIX,
+    unpivotDefaults: { keyName: WG.UNPIVOT_DEFAULT_KEY, valueName: WG.UNPIVOT_DEFAULT_VALUE },
+    python: PY.pythonNodeStatus(),
+    pythonOps: PY.OPERATION_META,
+  }),
+  'POST /api/workflows/preview': async (q, res, body, req, me) => {
+    const raw = body && body.workflow;
+    const rg = resolveGraphWorkflow(raw);
+    if (!rg.ok) return bad(res, rg.error, rg.status || 400);
+    const wf = rg.workflow;
+    const v = W.validateWorkflow(wf);
+    if (!v.ok) return bad(res, 'invalid workflow: ' + v.errors.join('; '));
+    let data, notes = null, wf2 = wf;
+    if (D.isDataset(wf)) {
+      /* مصدر قائمة بيضاء: يُحسم عند الخادم فقط ويُتجاهَل ما يُرسله العميل من data */
+      const r = await D.resolveDataset(wf.source, me);
+      if (!r.ok) return bad(res, r.error, r.status || 400);
+      data = r.data;
+      notes = (r.notes && r.notes.length) ? r.notes : null;
+      wf2.sourceMeta = r.source || null;
+    } else if (D.isFileSource(wf)) {
+      const r = await D.resolveFileSource(wf.source);
+      if (!r.ok) return bad(res, r.error, r.status || 400);
+      data = { rows: r.rows, columns: r.columns };
+      notes = (r.notes && r.notes.length) ? r.notes : null;
+      wf2.sourceMeta = r.source || null;
+    } else if (D.isWorkbookSource(wf)) {
+      const r = await D.resolveWorkbookSource(wf.source, me);
+      if (!r.ok) return bad(res, r.error, r.status || 400);
+      data = { rows: r.rows, columns: r.columns };
+      notes = (r.notes && r.notes.length) ? r.notes : null;
+      wf2.sourceMeta = r.source || null;
+    } else if (wf.source && wf.source.type === 'output') {
+      const r = outputSourceData('output:' + String(wf.source.name || ''));
+      if (!r.ok) return bad(res, r.error, r.status || 400);
+      data = { rows: r.rows, columns: r.columns };
+      notes = (r.notes && r.notes.length) ? r.notes : null;
+      wf2.sourceMeta = r.source || null;
+    } else {
+      const fix = (body && body.data) ? null : W.syntheticFixture();
+      data = (body && body.data) ? body.data : { rows: fix.sourceRows, columns: fix.sourceColumns };
+      wf2 = fix ? injectFixtureRights(wf, fix) : wf;
+    }
+    /* ربط بمصدر حقيقي مسجَّل في الفهرس (rightSource) — يُحَلّ هنا بصلاحيات وحدود */
+    const srcSt = (wf2.source && wf2.source.settings) || {};
+    const prep = await W.prepareWorkflow(wf2, async (name) => resolveRightSource(name, me, srcSt));
+    wf2 = prep.workflow;
+    if (prep.notes && prep.notes.length) notes = (notes || []).concat(prep.notes);
+    /* معادلات محفوظة ⇒ تُحلّ إلى تعبيراتها (محرك واحد: src/formulas.js) */
+    const fx = resolveWorkflowFormulas(wf2, data);
+    wf2 = fx.workflow;
+    if (fx.notes && fx.notes.length) notes = (notes || []).concat(fx.notes);
+    const until = body && body.until ? String(body.until).trim() : '';
+    if (until && wf2 && Array.isArray(wf2.steps)) {
+      const idx = wf2.steps.findIndex(s => String(s.id || s.type) === until);
+      if (idx >= 0) wf2 = Object.assign({}, wf2, { steps: wf2.steps.slice(0, idx + 1) });
+    }
+    const limit = Math.max(1, Math.min(Number((body && body.limit) || 20), 1000));
+    const res2 = await W.previewWorkflowAsync(wf2, data, limit);
+    if (!res2.ok) return sendRunFailure(res, res2);
+    if (notes) res2.sourceNotes = notes;
+    if (until) res2.previewedStep = until;
+    ok(res, res2);
+  },
+  'POST /api/workflows/run': async (q, res, body, req, me) => {
+    const raw = body && body.workflow;
+    const rg = resolveGraphWorkflow(raw);
+    if (!rg.ok) return bad(res, rg.error, rg.status || 400);
+    const wf = rg.workflow;
+    const v = W.validateWorkflow(wf);
+    if (!v.ok) return bad(res, 'invalid workflow: ' + v.errors.join('; '));
+    let data, notes = null, wf2 = wf;
+    if (D.isDataset(wf)) {
+      /* مصدر قائمة بيضاء: قراءة عند الخادم بعد الصلاحية — ما يُرسله العميل من data لا يُوثق */
+      const r = await D.resolveDataset(wf.source, me);
+      if (!r.ok) return bad(res, r.error, r.status || 400);
+      data = r.data;
+      notes = (r.notes && r.notes.length) ? r.notes : null;
+      wf2.sourceMeta = r.source || null;
+    } else if (D.isFileSource(wf)) {
+      const r = await D.resolveFileSource(wf.source);
+      if (!r.ok) return bad(res, r.error, r.status || 400);
+      data = { rows: r.rows, columns: r.columns };
+      notes = (r.notes && r.notes.length) ? r.notes : null;
+      wf2.sourceMeta = r.source || null;
+    } else if (D.isWorkbookSource(wf)) {
+      const r = await D.resolveWorkbookSource(wf.source, me);
+      if (!r.ok) return bad(res, r.error, r.status || 400);
+      data = { rows: r.rows, columns: r.columns };
+      notes = (r.notes && r.notes.length) ? r.notes : null;
+      wf2.sourceMeta = r.source || null;
+    } else if (wf.source && wf.source.type === 'output') {
+      const r = outputSourceData('output:' + String(wf.source.name || ''));
+      if (!r.ok) return bad(res, r.error, r.status || 400);
+      data = { rows: r.rows, columns: r.columns };
+      notes = (r.notes && r.notes.length) ? r.notes : null;
+      wf2.sourceMeta = r.source || null;
+    } else {
+      const fix = (body && body.data) ? null : W.syntheticFixture();
+      data = (body && body.data) ? body.data : { rows: fix.sourceRows, columns: fix.sourceColumns };
+      wf2 = fix ? injectFixtureRights(wf, fix) : wf;
+    }
+    /* ربط بمصدر حقيقي مسجَّل في الفهرس (rightSource) */
+    const srcSt = (wf2.source && wf2.source.settings) || {};
+    const prep = await W.prepareWorkflow(wf2, async (name) => resolveRightSource(name, me, srcSt));
+    wf2 = prep.workflow;
+    if (prep.notes && prep.notes.length) notes = (notes || []).concat(prep.notes);
+    /* معادلات محفوظة ⇒ تُحلّ إلى تعبيراتها (محرك واحد: src/formulas.js) */
+    const fx = resolveWorkflowFormulas(wf2, data);
+    wf2 = fx.workflow;
+    if (fx.notes && fx.notes.length) notes = (notes || []).concat(prep.notes).concat(fx.notes);
+    const res2 = await W.executeWorkflowAsync(wf2, data);
+    if (!res2.ok) return sendRunFailure(res, res2);
+    /* أعمدة المعادلات المحسوبة ونسخها ⇒ ليتمكّن التقرير من الإشارة إلى المعادلة (نفس التشغيل) */
+    if (fx.formulaColumns && Object.keys(fx.formulaColumns).length) res2.formulaColumns = fx.formulaColumns;
+    if (fx.formulaVersions && Object.keys(fx.formulaVersions).length) res2.formulaVersions = fx.formulaVersions;
+    const runId = 'run_' + Date.now();
+    /* النتيجة تُحفظ مع مصدرها واسم التدفق ⇒ استوديو التقارير يعرف من أين جاءت */
+    if (wf2.sourceMeta) res2.source = wf2.sourceMeta;
+    else if (wf && wf.source && wf.source.type === 'memory') {
+      /* مصدر داخلي (synthetic): يُسجَّل من الفهرس نفسه حتى لا يكون المصدر مجهولاً */
+      const s = CAT.getSource('synthetic');
+      if (s) res2.source = { name: s.id, label: s.label, domain: s.domain, grain: s.grain, canonical: false };
+    }
+    res2.workflowName = wf.name || '';
+    res2.workflowId = wf.id || '';
+    /* نسخة مستقلة من التعريف المنفَّذ + بصمته ⇒ تتبّع كامل وإعادة إنتاج */
+    try {
+      const def = W.definitionSnapshot(wf2);
+      res2.definition = def;
+      res2.definitionHash = W.definitionHash(def);
+    } catch (_) { /* لا يمنع التشغيل */ }
+    if (fx.formulaColumns) res2.formulaColumns = fx.formulaColumns;
+    if (fx.formulaVersions) res2.formulaVersions = fx.formulaVersions;
+    /* تحذيرات المسار (اكتمال الربط) تُحفظ مع النتيجة — لا تُنتج نتيجة تبدو سليمة */
+    const traceWarnings = (res2.trace || []).flatMap(t => (t.warnings || []).map(w => (t.id ? '[' + t.id + '] ' : '') + w));
+    if (traceWarnings.length) res2.warnings = traceWarnings;
+    const comps = (res2.trace || []).map(t => t.completeness).filter(Boolean);
+    if (comps.length) {
+      res2.joinCompleteness = comps.includes('incomplete') ? 'incomplete'
+        : (comps.includes('possibly-truncated') ? 'possibly-truncated' : 'complete');
+    }
+    /* إصدار محرك المعادلات: لتعرف النتيجة أي محرّك أنتجها */
+    res2.engineVersion = FormulaEngine.FORMULA_ENGINE_VERSION;
+    res2.engineHash = FormulaEngine.formulaEngineHash();
+    try { W.saveOutput(runId, res2, WF_ROOT); res2.runId = runId; } catch (_) {}
+    if (notes) res2.sourceNotes = notes;
+    ok(res, res2);
+  },
+  'GET /api/reconcile': async (q, res) => ok(res, await A.reconcile({
+    limit: Number(q.get('limit') || 100),
+    offset: Number(q.get('offset') || 0),
+    onlyMismatch: q.get('all') ? false : true,
+    F: A.parseFilters(q),
+  })),
 
   /* ---------- البورصة اليومية ---------- */
   'GET /api/borse': async (q, res) => {
@@ -922,6 +1925,18 @@ const routes = {
     const def = REPORTS[name];
     if (!def) return bad(res, 'اسم تقرير غير معروف');
     const F = A.parseFilters(q);
+    /* تقرير المطابقة: قراءة من balances (بدون recon) + فلترة/ترقيم في SQL */
+    if (name === 'reconcile') {
+      const limit = Math.max(1, Number(q.get('limit') || q.get('pageSize') || 500));
+      const page = Math.max(1, Number(q.get('page') || 1));
+      const offset = (page - 1) * limit;
+      let r;
+      try { r = await A.reconcileReport(F, limit, offset); }
+      catch (e) { return bad(res, 'خطأ في التقرير: ' + (e && e.message ? e.message : e), 500); }
+      const pages = Math.max(1, Math.ceil(r.total / limit));
+      const p = Math.min(page, pages);
+      return ok(res, { name, label: def.label, desc: def.desc, raw: true, total: r.total, page: p, pages, pageSize: limit, rows: r.rows });
+    }
     let rows;
     try {
       rows = await def.fn(F);
@@ -963,7 +1978,7 @@ const routes = {
       return bad(res, 'خطأ في التقرير: ' + (e && e.message ? e.message : e), 500);
     }
     rows = await contractViewFilter(name, rows, q);
-    const csv = toCsv(rows);
+    const csv = Csv.toCsv(rows);
     res.writeHead(200, {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="${name}.csv"`,
@@ -973,7 +1988,12 @@ const routes = {
   },
 };
 
-/* ---------- الشاشات وصلاحياتها ---------- */
+/* ---------- الشاشات وصلاحياتها ----------
+   منصة التحليل = ثلاثة أقسام (src/platform-screens.js):
+     البيانات والتحليل · التقارير ولوحات المعلومات · تصميم الشاشات والتحكم
+   الصلاحيات المخزَّنة (users.tabs) لا تُكسر: التبويبات القديمة
+   (analysis/workflow/workcenter/reports-manager) تُترجم عبر HOST_OF،
+   فيبقى «workflow» مدخلًا إلى قسم «البيانات والتحليل» لا شاشة رابعة. */
 const TABS = [
   { id: 'dashboard', label: 'لوحة التحكم' },
   { id: 'md-items', label: 'الأصناف الأساسية' },
@@ -988,9 +2008,23 @@ const TABS = [
   { id: 'costs', label: 'التكلفة اليومية' },
   { id: 'contracts', label: 'عقود الاستيراد' },
   { id: 'reports', label: 'التقارير' },
+  { id: 'analysis', label: 'البيانات والتحليل' },
+  { id: 'report-studio', label: 'التقارير ولوحات المعلومات' },
+  { id: 'screen-studio', label: 'تصميم الشاشات والتحكم' },
 ];
 const TAB_IDS = TABS.map(t => t.id);
 const TAB_LABEL = Object.fromEntries(TABS.map(t => [t.id, t.label]));
+/* الشاشات المخصّصة (من data/screens) تُعامَل كشاشات التطبيق نفسها:
+   تظهر في قائمة الصلاحيات (المدير يفعّلها لكل مستخدم) وفي الشريط، بلا أي
+   تجاوز لنظام الصلاحيات — الفهرس هنا قائمة، وال.Filter يتم في tabsOfUser. */
+function customTabs() {
+  let list = [];
+  try { list = ScreenStore.listScreens(SCREENS_ROOT); } catch (_) { list = []; }
+  return list.map(s => ({ id: s.id, label: s.name || s.id, custom: true }));
+}
+/** كل الشاشات: الثابتة + المخصّصة */
+function allTabs() { return TABS.concat(customTabs()); }
+function isCustomTabId(id) { return String(id || '').indexOf('cs_') === 0; }
 /* الافتراضي قبل أي تعديل من المدير: لوحة التحكم (المستخدمون والصلاحيات) للمدير فقط،
    والبقية للمحاسب كاملاً، والمشاهد للشاشات كلها عدا لوحة التحكم.
    الاستيراد ليس شاشة (أُزيل التبويب العام) بل صلاحية تُفعِّل أزرار الاستيراد اليومي.
@@ -998,43 +2032,35 @@ const TAB_LABEL = Object.fromEntries(TABS.map(t => [t.id, t.label]));
    يُضبط شاشاته على حدة، والدور لا يعدّلها. */
 const DEFAULT_TABS = {
   admin: TAB_IDS.slice(),
-  accountant: TAB_IDS.filter(t => t !== 'dashboard'),
-  viewer: TAB_IDS.filter(t => t !== 'dashboard'),
+  accountant: TAB_IDS.filter(t => t !== 'dashboard' && t !== 'screen-studio'),
+  viewer: TAB_IDS.filter(t => t !== 'dashboard' && t !== 'screen-studio'),
 };
 function tabsForRole(role) { return (DEFAULT_TABS[role] || TAB_IDS).slice(); }
-/** شاشات المستخدم المسموح بها: users.tabs (JSON) إن وُجد، وإلا افتراضي دوره */
+/** شاشات المستخدم المسموح بها: users.tabs (JSON) إن وُجد، وإلا افتراضي دوره.
+    الشاشات المخصّصة (cs_*) لا تُمنح تلقائيًا لأي دور — المدير يفعّلها لكل مستخدم.
+    التبويبات المدموجة (workcenter · workflow · reports-manager) تترجم إلى أقسامها
+    المضيفة ⇒ الصلاحيات المخزَّنة قبل الدمج تبقى نافذة بلا كسر. */
 function tabsOfUser(u) {
-  if (!u) return TAB_IDS.slice();
-  if (u.role === 'admin') return TAB_IDS.slice();
+  const ALL = allTabs().map(t => t.id);
+  if (!u) return ALL;
+  if (u.role === 'admin') return ALL;
   if (u.tabs) {
     try {
       const arr = JSON.parse(u.tabs);
-      if (Array.isArray(arr)) return TAB_IDS.filter(t => arr.includes(t));
+      if (Array.isArray(arr)) {
+        const set = new Set(arr);
+        for (const [oldId, hostId] of Object.entries(PLATFORM.HOST_OF)) {
+          if (set.has(oldId)) set.add(hostId);
+        }
+        return ALL.filter(t => set.has(t));
+      }
     } catch (_) { /* عمود تالف → الافتراضي */ }
   }
   return tabsForRole(u.role);
 }
-/* مسارات API محمية بصلاحية الشاشة: بادئة المسار ← الشاشات التي تكفي للوصول.
-   المسارات الشائعة (overview/health/span...) خارج القائمة عمداً،
-   ومسارات الاستيراد اليومي/الإدخال اليدوي محمية بصلاحية «import» في PERM_ROUTES
-   (بعد إزالة تبويب الاستيراد العام لم تبقَ شاشةٌ باسمه). */
-const TAB_API = [
-  ['/api/md/items', ['md-items']],
-  ['/api/md/locs', ['md-locations']],
-  ['/api/md/mtypes', ['md-movetypes']],
-  ['/api/md/mtypes/categories', ['md-movetypes']],
-  ['/api/md/refs', ['md-contractrefs']],
-  ['/api/inventory', ['inventory']],
-  ['/api/sales', ['sales']],
-  ['/api/movements', ['movements']],
-  ['/api/borse', ['borse']],
-  ['/api/prices', ['prices']],
-  ['/api/costs', ['costs']],
-  ['/api/reports', ['reports']],
-  ['/api/report', ['reports']],
-  ['/api/export', ['reports']],
-  ['/api/contracts', ['contracts']],
-];
+/* سياسة المسارات (قراءة/كتابة/شاشات) في src/route-policy.js — قابلة للاختبار بلا خادم. */
+const TAB_API = Policy.TAB_API;
+const CUSTOM_SCREEN_API = Policy.CUSTOM_SCREEN_API;
 
 /* ---------- المصادقة ---------- */
 async function pubUser(u) {
@@ -1048,64 +2074,11 @@ async function pubUser(u) {
   };
 }
 
-/* مسارات عامة (قبل الدخول) */
-const PUBLIC_ROUTES = new Set([
-  'GET /api/auth/login-info',
-  'POST /api/auth/login',
-  'GET /api/auth/me',
-  'GET /api/health',
-]);
-
-/* صلاحيات إضافية فوق «تسجيل الدخول» */
-const PERM_ROUTES = {
-  /* الاستيراد اليومي + الإدخال اليدوي (صلاحية import — لا شاشة) */
-  'POST /api/import/preview': 'import',
-  'POST /api/import/commit': 'import',
-  'GET /api/import/status': 'import',
-  'GET /api/files/daily': 'import',
-  'POST /api/files/delete': 'import',
-  'GET /api/daily/list': 'import',
-  'GET /api/daily/preview-no': 'import',
-  'POST /api/daily/save': 'import',
-  'POST /api/daily/delete': 'import',
-  'POST /api/borse/fetch': 'sync',
-  'POST /api/borse/override': 'sync',
-  'POST /api/borse/override/delete': 'sync',
-  'POST /api/prices/override': 'sync',
-  'POST /api/prices/override/delete': 'sync',
-  'POST /api/settings/cost': 'master',
-  'GET /api/users': 'users',
-  'POST /api/users': 'users',
-  'POST /api/users/update': 'users',
-  'POST /api/users/delete': 'users',
-  'POST /api/tabs/save': 'users',
-  /* البيانات الأساسية: الإضافة والتعديل بصلاحية master */
-  'POST /api/md/items/save': 'master',
-  'POST /api/md/items/delete': 'master',
-  'POST /api/md/items/groups/save': 'master',
-  'POST /api/md/items/groups/delete': 'master',
-  'POST /api/md/items/classes/save': 'master',
-  'POST /api/md/items/classes/delete': 'master',
-  'POST /api/md/locs/company/save': 'master',
-  'POST /api/md/locs/company/delete': 'master',
-  'POST /api/md/locs/unit/save': 'master',
-  'POST /api/md/locs/unit/delete': 'master',
-  'POST /api/md/locs/warehouse/save': 'master',
-  'POST /api/md/locs/warehouse/delete': 'master',
-  'POST /api/md/locs/warehouse/report-active': 'master',
-  'POST /api/md/mtypes/save': 'master',
-  'POST /api/md/mtypes/delete': 'master',
-  'POST /api/md/mtypes/category/save': 'master',
-  'POST /api/md/mtypes/category/delete': 'master',
-  'POST /api/md/refs/save': 'master',
-  'POST /api/md/refs/delete': 'master',
-};
-
-const PERM_LABEL = {
-  import: 'استيراد', sync: 'جلب البورصة والتعديل اليدوي على الأسعار',
-  users: 'إدارة المستخدمين',
-  master: 'الإضافة والتعديل في البيانات الأساسية',
-};
+/* مسارات عامة وصلاحيات الكتابة — من وحدة السياسة القابلة للاختبار. */
+const TEST_MODE = process.env.WORKFLOW_TEST_MODE === '1';
+const PUBLIC_ROUTES = Policy.publicRoutes(TEST_MODE);
+const PERM_ROUTES = Policy.WRITE_PERM_ROUTES;
+const PERM_LABEL = Policy.PERM_LABEL;
 
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -1134,11 +2107,15 @@ const server = http.createServer((req, res) => {
       if (hit) {
         const allowed = tabsOfUser(me);
         if (!hit[1].some(t => allowed.includes(t))) {
-          send(res, 403, {
-            ok: false, error: 'forbidden',
-            message: `دورك لا يملك صلاحية شاشة «${TAB_LABEL[hit[1][0]] || hit[1][0]}» — اطلب من المدير تفعيلها`,
-          });
-          return 'stop';
+          /* استثناء الشاشات المخصّصة: تقرأ نتيجة التشغيل المحفوظة وتصيّر مكوّناتها فقط */
+          const customOk = CUSTOM_SCREEN_API.has(u.pathname) && allowed.some(t => isCustomTabId(t));
+          if (!customOk) {
+            send(res, 403, {
+              ok: false, error: 'forbidden',
+              message: `دورك لا يملك صلاحية شاشة «${TAB_LABEL[hit[1][0]] || hit[1][0]}» — اطلب من المدير تفعيلها`,
+            });
+            return 'stop';
+          }
         }
       }
     }
@@ -1211,10 +2188,38 @@ const server = http.createServer((req, res) => {
 
 (async () => {
   try {
-    await DB.init();
-    const seeded = await Auth.seedAdmin();   // إنشاء مدير النظام عند أول تشغيل
-    const info = await DB.info();
-    const fetchAt = await BF.fetchTime();
+    const LIVE = process.env.WORKFLOW_LIVE === '1';
+    let info = null, fetchAt = null, seeded = false;
+    if (TEST_MODE) {
+      console.log('==================================================');
+      console.log('  ⚠  WORKFLOW TEST MODE ENABLED');
+      console.log('  - Database (PostgreSQL) is NOT connected');
+      console.log('  - CE.flush() / BF scheduler / Auth.seedAdmin skipped');
+      console.log('  - Workflow & Formula routes use synthetic data only');
+      console.log('  - Auth bypassed for workflow/formula routes (test user)');
+      console.log('  - NOT for production use');
+      console.log('==================================================');
+    } else if (LIVE) {
+      /* وضع الحي للقراءة فقط (Workflow Studio): فحص اتصال فقط — بلا migrate
+         (لا DDL) ولا seedAdmin ولا مجدول جلب ولا CE.flush — صفر كتابة خدمية.
+         الدخول حقيقي بالصلاحيات الموجودة، ومصادر datasets بورصة القراءة فقط. */
+      await DB.pool.query('SELECT 1');
+      console.log('==================================================');
+      console.log('  ⚠  WORKFLOW LIVE READ-ONLY MODE');
+      console.log('  - PostgreSQL connected: connection check only (no schema migration, no DDL)');
+      console.log('  - No seedAdmin / BF scheduler / CE.flush — zero service-side writes');
+      console.log('  - Workflow Studio dataset sources enabled: borse (read-only, ≤5000 rows)');
+      console.log('  - Login flow unchanged (sessions/last_login are auth-lifecycle writes)');
+      console.log('  - NOT for general production use');
+      console.log('==================================================');
+    } else {
+      await DB.init();
+      seeded = await Auth.seedAdmin();   // إنشاء مدير النظام عند أول تشغيل
+      info = await DB.info();
+      fetchAt = await BF.fetchTime();
+    }
+    const wbStatus = D.workbookConfigStatus();
+    const pyStatus = PY.pythonNodeStatus();
     server.on('error', e => {
       if (e.code === 'EADDRINUSE') {
         console.error(`المنفذ ${PORT} مشغول — خادم آخر يعمل على http://${HOST}:${PORT} بالفعل`);
@@ -1228,17 +2233,44 @@ const server = http.createServer((req, res) => {
       console.log('==============================================');
       console.log('  نظام متابعة الاستهلاك والتكاليف');
       console.log(`  الرابط          : http://${HOST}:${PORT}`);
-      console.log(`  قاعدة البيانات  : PostgreSQL — ${info.database} @ ${info.host}:${info.port}`);
-      console.log(`  جلب البورصة     : يومياً الساعة ${fetchAt} (Yahoo + بنك مصر)`);
-      if (seeded) console.log('  حساب المدير     : admin / admin123  (غيّره بعد أول دخول)');
+      if (wbStatus.code === 'ready') {
+        console.log('  مصدر Excel      : ' + wbStatus.fileCount + ' ملفًا في ' + wbStatus.root + ' (قراءة فقط)');
+      } else if (wbStatus.code === 'empty') {
+        console.log('  مصدر Excel      : المجلد مهيأ لكنه بلا ملفات مدعومة — ' + wbStatus.root);
+      } else {
+        console.log('  مصدر Excel      : معطّل — ' + wbStatus.reason);
+      }
+      console.log('  عقدة Python     : ' + (pyStatus.enabled
+        ? 'مقيّدة ومتاحة (عمليات بيضاء فقط)'
+        : 'معطّلة — ' + pyStatus.reason));
+      if (TEST_MODE) {
+        console.log('  وضع              : WORKFLOW TEST MODE (DB disabled)');
+        console.log('  قاعدة البيانات  : (غير متصلة)');
+        console.log('  جلب البورصة     : (معطّل)');
+        console.log('  محرك التكلفة    : (معطّل — لا CE.flush)');
+      } else if (LIVE) {
+        console.log('  وضع              : WORKFLOW LIVE READ-ONLY (datasets: borse)');
+        console.log('  قاعدة البيانات  : متصلة — قراءة فقط (بلا migrate/seed/مجدول)');
+        console.log('  جلب البورصة     : (معطّل في هذا النسخ)');
+        console.log('  محرك التكلفة    : (معطّل — لا CE.flush)');
+      } else {
+        console.log(`  قاعدة البيانات  : PostgreSQL — ${info.database} @ ${info.host}:${info.port}`);
+        console.log(`  جلب البورصة     : يومياً الساعة ${fetchAt} (Yahoo + بنك مصر)`);
+        if (seeded) console.log('  حساب المدير     : admin / admin123  (غيّره بعد أول دخول)');
+        BF.startScheduler().catch(e => console.error('  ! تعذّر بدء مجدول الجلب: ' + e.message));
+        /* تأكد من اكتمال «سمكة اليوم» في محرك التكلفة دون أن يعطّل بدء الخادم */
+        CE.flush().catch(e => console.error('  ! تعذّر تهيئة محرك التكلفة: ' + e.message));
+      }
       console.log('==============================================');
-      BF.startScheduler().catch(e => console.error('  ! تعذّر بدء مجدول الجلب: ' + e.message));
-      /* تأكد من اكتمال «سمكة اليوم» في محرك التكلفة دون أن يعطّل بدء الخادم */
-      CE.flush().catch(e => console.error('  ! تعذّر تهيئة محرك التكلفة: ' + e.message));
     });
   } catch (e) {
-    console.error('\n!!! تعذّر الاتصال بقاعدة البيانات PostgreSQL');
-    console.error('    ' + e.message);
+    if (TEST_MODE) {
+      console.error('\n!!! خطأ أثناء بدء WORKFLOW TEST MODE');
+      console.error('    ' + e.message);
+    } else {
+      console.error('\n!!! تعذّر الاتصال بقاعدة البيانات PostgreSQL');
+      console.error('    ' + e.message);
+    }
     console.error('    تأكد أن خدمة postgresql تعمل، وكلمة المرور صحيحة في:');
     console.error('    ' + DB.CONFIG_PATH);
     console.error('    ثم أعد التشغيل.\n');

@@ -11,6 +11,8 @@
 </head>
 <body>
 
+<a class="skip-link" href="#main-content">تجاوز إلى المحتوى الرئيسي</a>
+
 <!-- ============ تسجيل الدخول ============ -->
 <div class="login-wrap" id="login-screen">
   <div class="login-card">
@@ -37,11 +39,11 @@
     <div class="mark"><span></span>م</div>
     <div class="brand-txt">
       <b>الاستهلاك والتكاليف</b>
-      <small>Cost Control Suite</small>
+      <small>نظام متابعة التكاليف</small>
     </div>
   </div>
 
-  <nav>
+    <nav>
     <div class="nav-label">الرئيسية</div>
     <button data-tab="dashboard" class="active"><i>◧</i><span>لوحة التحكم</span></button>
 
@@ -51,30 +53,34 @@
         <button data-grp="md" data-goto="md-items"><i>▦</i><span>الأصناف الأساسية</span></button>
         <button data-grp="md" data-goto="md-locations"><i>⌂</i><span>المواقع والمصانع</span></button>
         <button data-grp="md" data-goto="md-movetypes"><i>⇅</i><span>أنواع الحركات</span></button>
-                <button data-grp="md" data-goto="md-contractrefs" data-pane="supplier"><i>🏭</i><span>الموردين</span></button>
+        <button data-grp="md" data-goto="md-contractrefs" data-pane="supplier"><i>🏭</i><span>الموردين</span></button>
         <button data-grp="md" data-goto="md-contractrefs" data-pane="source"><i>🌍</i><span>المصادر</span></button>
         <button data-grp="md" data-goto="md-contractrefs" data-pane="arrival_port"><i>⚓</i><span>موانئ الوصول</span></button>
         <button data-grp="md" data-goto="md-contractrefs" data-pane="loading_port"><i>🚢</i><span>موانئ التحميل</span></button>
       </div>
     </div>
+
     <div class="nav-drop" id="nav-daily-drop">
-      <button data-tab="daily" data-drop="daily" id="nav-daily-btn"><i>◫</i><span>البيانات اليومية</span><em class="caret">▾</em></button>
+      <button data-tab="daily" data-drop="daily" id="nav-daily-btn"><i>◫</i><span>تسجيل البيانات</span><em class="caret">▾</em></button>
       <div class="nav-menu" id="nav-daily-menu" hidden>
-        <div class="nav-cap">البيانات</div>
-        <button data-grp="daily" data-goto="movements"><i>⇄</i><span>حركات سيستم يومية</span></button>
+        <button class="has-sub" data-submenu="nav-daily-sub"><i>◫</i><span>بيانات يومية</span><em class="caret-side">◀</em></button>
+        <button class="has-sub" data-submenu="nav-price-sub"><i>¤</i><span>الأسعار والتكلفة</span><em class="caret-side">◀</em></button>
+        <button class="has-sub" data-submenu="nav-con-menu"><i>📄</i><span>عقود الاستيراد</span><em class="caret-side">◀</em></button>
+      </div>
+      <div class="nav-menu nav-sub" id="nav-daily-sub" hidden>
+        <div class="nav-cap">بيانات يومية</div>
+        <button data-grp="daily" data-goto="movements"><i>⇄</i><span>حركات يومية</span></button>
         <button data-grp="daily" data-goto="sales"><i>◈</i><span>مبيعات يومية</span></button>
         <button data-grp="daily" data-goto="inventory"><i>◫</i><span>أرصدة يومية</span></button>
-        <div class="nav-sep"></div>
-        <div class="nav-cap">الأسعار والتكلفة</div>
-        <button data-grp="daily" data-goto="borse"><i>⌁</i><span>متابعة البورصة اليومية</span></button>
-        <button data-grp="daily" data-goto="prices"><i>¤</i><span>أسعار السوق اليومية</span></button>
-        <button data-grp="daily" data-goto="costs"><i>∑</i><span>حساب التكلفة اليومية</span></button>
       </div>
-    </div>
-    <div class="nav-drop" id="nav-con-drop">
-      <button data-tab="contracts" data-drop="contracts" id="nav-con-btn"><i>📄</i><span>عقود الاستيراد</span><em class="caret">▾</em></button>
-      <div class="nav-menu" id="nav-con-menu" hidden>
-        <div class="nav-cap">خطوات العقد</div>
+      <div class="nav-menu nav-sub" id="nav-price-sub" hidden>
+        <div class="nav-cap">الأسعار والتكلفة</div>
+        <button data-grp="pricing" data-goto="borse"><i>⌁</i><span>بورصة يومية</span></button>
+        <button data-grp="pricing" data-goto="prices"><i>¤</i><span>أسعار يومية</span></button>
+        <button data-grp="pricing" data-goto="costs"><i>∑</i><span>تكلفة يومية</span></button>
+      </div>
+      <div class="nav-menu nav-sub" id="nav-con-menu" hidden>
+        <div class="nav-cap">عقود الاستيراد</div>
         <button data-con-step="contract_registrations"><i>①</i><span>تسجيل عقد</span></button>
         <button data-con-step="contract_details"><i>②</i><span>تفصيلى العقد / المركب</span></button>
         <button data-con-step="contract_loading"><i>③</i><span>التحميل</span></button>
@@ -83,25 +89,21 @@
         <button data-con-step="contract_release"><i>⑥</i><span>الافراج</span></button>
         <button data-con-step="contract_payments"><i>⑦</i><span>السداد</span></button>
         <button data-rep-name="contract-unified"><i>⑧</i><span>تسجيل + تفصيل (موحّد)</span></button>
-    </div>
+      </div>
     </div>
 
-    <div class="nav-label">البيانات</div>
-    <div class="nav-drop" id="nav-rep-drop">
-      <button data-tab="reports" data-drop="reports" id="nav-rep-btn"><i>⤓</i><span>التقارير</span><em class="caret">▾</em></button>
-      <div class="nav-menu" id="nav-rep-menu" hidden>
-        <div class="nav-cap">مجموعات التقارير</div>
-        <button data-rep-grp="sales"><i>◈</i><span>تقارير مبيعات</span></button>
-        <button data-rep-grp="store"><i>⇄</i><span>تقارير مخازن</span></button>
-        <button data-rep-grp="bal"><i>◫</i><span>تقارير أرصدة</span></button>
-        <button data-rep-grp="pbix"><i>📊</i><span>تقارير Power BI (عقود)</span></button>
-      </div>
-      <div class="nav-menu nav-sub" id="nav-rep-sub" hidden>
-        <div class="nav-cap">التقارير</div>
-        <div id="rep-sub-list"></div>
+    <div class="nav-drop" id="nav-platform-drop">
+      <button data-drop="platform" id="nav-platform-btn" title="منصة التحليل — المهام الداخلية"><i>◧</i><span>منصة التحليل</span><em class="caret">▾</em></button>
+      <div class="nav-menu" id="nav-platform-menu" hidden>
+        <div class="nav-cap">مهام المنصة</div>
+        <button data-grp="platform" data-goto="analysis" data-panel="sources"><i>🔗</i><span>البيانات والعلاقات</span></button>
+        <button data-grp="platform" data-goto="analysis" data-panel="build"><i>∑</i><span>المعادلات والتحليل</span></button>
+        <button data-grp="platform" data-goto="report-studio" data-panel="app"><i>📊</i><span>التقارير ولوحات المعلومات</span></button>
+        <button data-grp="platform" data-goto="screen-studio" data-panel="system"><i>▤</i><span>تصميم الشاشات والتحكم</span></button>
       </div>
     </div>
-    <div class="nav-tools">
+    
+<div class="nav-tools">
       <span class="me" id="me-chip" hidden>
         <span class="avatar" id="me-avatar">م</span>
         <span class="who">
@@ -124,7 +126,7 @@
 <!-- ============ المحتوى ============ -->
 <div class="shell">
 
-  <main>
+  <main id="main-content" tabindex="-1">
 
   <!-- ============ لوحة التحكم — إدارة المستخدمين والصلاحيات ============ -->
   <section id="tab-dashboard" class="active">
@@ -599,7 +601,7 @@
     <div class="card mt">
       <div class="card-h">
         <h3>التقرير التفصيلي للمبيعات <small>قيمة البيع • الكمية • قيمة البيع للوحدة — بدون التكلفة</small></h3>
-        <a class="exp" id="sal-csv" href="#">⬇ CSV</a>
+        <a class="exp" id="sal-csv" href="#">⬇ تصدير CSV</a>
       </div>
       <div id="tbl-sal-detail" class="tblwrap"></div>
       <div class="muted xs" id="sal-detail-count" style="margin-top:8px"></div>
@@ -617,65 +619,126 @@
             <i>←</i>
             <span class="dwrap sm"><input type="date" id="mf-to" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
           </span>
-          <select id="mf-group" class="input sm" title="التجميع على مستوى">
-            <option value="item">تجميع: الصنف</option>
-            <option value="grp">تجميع: المجموعة</option>
-            <option value="cls">تجميع: التصنيف</option>
-            <option value="detail">تقرير تفصيلي</option>
-          </select>
-          <select id="mf-break" class="input sm" title="والتفصيل على مستوى">
-            <option value="total">تقرير إجمالي</option>
-            <option value="place">المكان</option>
-            <option value="company">الشركة</option>
-            <option value="unit">الوحدة</option>
-            <option value="storage">المخزن</option>
-          </select>
-          <select id="mf-per" class="input sm" title="تجميع على مستوى الفترة">
-            <option value="">بدون فترة</option>
-            <option value="week">أسبوعي</option>
-            <option value="month">شهري</option>
-            <option value="quarter">ربع سنوي</option>
-            <option value="half">نصف سنوي</option>
-            <option value="q3">3 أرباع</option>
-            <option value="year">سنوي</option>
-          </select>
-          <div class="cpp filters-mv-menu">
-            <button class="btn sm ghost" id="mf-more-btn" data-more type="button">فلاتر أخرى ▾</button>
-            <div class="cpp-menu filters-mv-pop" id="mf-more-menu" hidden>
-              <div class="fl fl-range"><span class="fl-range-lbl">المكان</span>
-                <span class="fl-range-in">
-                  <select id="mf-place" class="input" title="من"><option value="">من…</option></select>
-                  <i>←</i>
-                  <select id="mf-place-to" class="input" title="إلى"><option value="">إلى…</option></select>
-                </span>
+          <!-- القوائم الأربع -->
+          <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;">
+            <!-- أصناف -->
+            <div class="cpp" style="position:relative;">
+              <button class="btn sm sec" id="btn-items" onclick="toggleMenu('items-menu',this)" type="button">أصناف ▾</button>
+              <div class="cpp-menu" id="items-menu" hidden style="min-width:260px;">
+                <div class="fl"><span class="fl-range-lbl">المجموعة</span></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-grp" class="input" style="flex:1"><option value="">كل المجموعات</option></select>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-grp-from" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">من</option></select><span>—</span><select id="mf-grp-to" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">إلى</option></select>
+                </div>
+                <div class="nav-sep" style="margin:4px 0"></div>
+                <div class="fl"><span class="fl-range-lbl">التصنيف</span></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-cls" class="input" style="flex:1"><option value="">كل التصنيفات</option></select>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-cls-from" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">من</option></select><span>—</span><select id="mf-cls-to" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">إلى</option></select>
+                </div>
+                <div class="nav-sep" style="margin:4px 0"></div>
+                <div class="fl"><span class="fl-range-lbl">الصنف</span></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-item-inner" class="input" style="flex:1"><option value="">كل الأصناف</option></select>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-item-inner-from" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">من</option></select><span>—</span><select id="mf-item-inner-to" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">إلى</option></select>
+                </div>
+                <div class="nav-sep" style="margin:6px 0"></div>
+                <div style="display:flex;gap:6px;">
+                  <button class="btn xs ghost" onclick="clearMenu('items')" style="flex:1">مسح</button>
+                  <button class="btn xs" onclick="applyMenu('items')" style="flex:1">تطبيق</button>
+                </div>
               </div>
-              <div class="fl fl-range"><span class="fl-range-lbl">نوع الحركة</span>
-                <span class="fl-range-in">
-                  <select id="mf-mtype" class="input" title="من"><option value="">من…</option></select>
-                  <i>←</i>
-                  <select id="mf-mtype-to" class="input" title="إلى"><option value="">إلى…</option></select>
-                </span>
+            </div>
+            <!-- حركات -->
+            <div class="cpp" style="position:relative;">
+              <button class="btn sm sec" id="btn-types" onclick="toggleMenu('types-menu',this)" type="button">حركات ▾</button>
+              <div class="cpp-menu" id="types-menu" hidden style="min-width:260px;">
+                <div class="fl"><span class="fl-range-lbl">الحركة</span></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-mtype" class="input" style="flex:1"><option value="">كل الحركات</option></select>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-mtype-from" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">من</option></select><span>—</span><select id="mf-mtype-to" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">إلى</option></select>
+                </div>
+                <div class="nav-sep" style="margin:4px 0"></div>
+                <div class="fl"><span class="fl-range-lbl">تصنيف الحركة</span></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-mtype-cat" class="input" style="flex:1"><option value="">كل التصنيفات</option></select>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-mtype-cat-from" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">من</option></select><span>—</span><select id="mf-mtype-cat-to" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">إلى</option></select>
+                </div>
+                <div class="nav-sep" style="margin:4px 0"></div>
+                <div class="fl"><span class="fl-range-lbl">التوجيه</span></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-dir" class="input" style="flex:1"><option value="">كل التوجيهات</option></select>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-dir-from" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">من</option></select><span>—</span><select id="mf-dir-to" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">إلى</option></select>
+                </div>
+                <div class="nav-sep" style="margin:6px 0"></div>
+                <div style="display:flex;gap:6px;">
+                  <button class="btn xs ghost" onclick="clearMenu('types')" style="flex:1">مسح</button>
+                  <button class="btn xs" onclick="applyMenu('types')" style="flex:1">تطبيق</button>
+                </div>
               </div>
-              <div class="fl fl-range"><span class="fl-range-lbl">التوجيه</span>
-                <span class="fl-range-in">
-                  <select id="mf-dir" class="input" title="من"><option value="">من…</option></select>
-                  <i>←</i>
-                  <select id="mf-dir-to" class="input" title="إلى"><option value="">إلى…</option></select>
-                </span>
+            </div>
+            <!-- الأماكن -->
+            <div class="cpp" style="position:relative;">
+              <button class="btn sm sec" id="btn-places" onclick="toggleMenu('places-menu',this)" type="button">الأماكن ▾</button>
+              <div class="cpp-menu" id="places-menu" hidden style="min-width:260px;">
+                <div class="fl"><span class="fl-range-lbl">الشركة</span></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-company" class="input" style="flex:1"><option value="">كل الشركات</option></select>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-company-from" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">من</option></select><span>—</span><select id="mf-company-to" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">إلى</option></select>
+                </div>
+                <div class="nav-sep" style="margin:4px 0"></div>
+                <div class="fl"><span class="fl-range-lbl">المكان</span></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-place" class="input" style="flex:1"><option value="">كل الأماكن</option></select>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-place-from" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">من</option></select><span>—</span><select id="mf-place-to" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">إلى</option></select>
+                </div>
+                <div class="nav-sep" style="margin:4px 0"></div>
+                <div class="fl"><span class="fl-range-lbl">المخزن</span></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-storage" class="input" style="flex:1"><option value="">كل المخازن</option></select>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-storage-from" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">من</option></select><span>—</span><select id="mf-storage-to" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">إلى</option></select>
+                </div>
+                <div class="nav-sep" style="margin:6px 0"></div>
+                <div style="display:flex;gap:6px;">
+                  <button class="btn xs ghost" onclick="clearMenu('places')" style="flex:1">مسح</button>
+                  <button class="btn xs" onclick="applyMenu('places')" style="flex:1">تطبيق</button>
+                </div>
               </div>
-              <div class="fl fl-range"><span class="fl-range-lbl">الوحدة</span>
-                <span class="fl-range-in">
-                  <select id="mf-unit" class="input" title="من"><option value="">من…</option></select>
-                  <i>←</i>
-                  <select id="mf-unit-to" class="input" title="إلى"><option value="">إلى…</option></select>
-                </span>
-              </div>
-              <div class="fl fl-range"><span class="fl-range-lbl">المخزن</span>
-                <span class="fl-range-in">
-                  <select id="mf-storage" class="input" title="من"><option value="">من…</option></select>
-                  <i>←</i>
-                  <select id="mf-storage-to" class="input" title="إلى"><option value="">إلى…</option></select>
-                </span>
+            </div>
+            <!-- أخرى -->
+            <div class="cpp" style="position:relative;">
+              <button class="btn sm sec" id="btn-other" onclick="toggleMenu('other-menu',this)" type="button">أخرى ▾</button>
+              <div class="cpp-menu" id="other-menu" hidden style="min-width:260px;">
+                <div class="fl"><span class="fl-range-lbl">العميل</span></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-cust" class="input" style="flex:1"><option value="">كل العملاء</option></select>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <select id="mf-cust-from" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">من</option></select><span>—</span><select id="mf-cust-to" class="input" style="flex:1;font-size:11px;padding:4px;"><option value="">إلى</option></select>
+                </div>
+                <div class="nav-sep" style="margin:6px 0"></div>
+                <div style="display:flex;gap:6px;">
+                  <button class="btn xs ghost" onclick="clearMenu('other')" style="flex:1">مسح</button>
+                  <button class="btn xs" onclick="applyMenu('other')" style="flex:1">تطبيق</button>
+                </div>
               </div>
             </div>
           </div>
@@ -688,9 +751,6 @@
     </div>
 
     <div class="card mt">
-      <div class="card-h">
-        <h3>تقرير الحركات <small>كمية وقيمة صافية + قيمة الوحدة — الأرقام بعد إسقاط حركات الإلغاء</small></h3>
-      </div>
       <div id="mv-report" class="tblwrap"></div>
       <div class="muted xs" id="mv-report-count" style="margin-top:8px"></div>
     </div>
@@ -722,7 +782,7 @@
               <option value="3000">الكل</option>
             </select>
             <select class="input sm" id="borse-item" title="الصنف"></select>
-            <a class="exp" href="/api/export?name=borse-latest">⬇ CSV</a>
+            <a class="exp" href="/api/export?name=borse-latest">⬇ تصدير CSV</a>
           </span>
           <button class="btn sm ghost" id="bo-clear" title="مسح الفلاتر والبحث وإرجاع النطاق لآخر أيام">🗗 مسح</button>
           <button class="btn sm" id="btn-borse-fetch">⚡ جلب</button>
@@ -754,7 +814,7 @@
     <div class="card mt">
       <div class="card-h">
         <h3>سجل التسجيلات اليومية <small>آخر الصفوف كما هي مسجَّلة في القاعدة</small></h3>
-        <a class="exp" href="/api/export?name=borse-raw">⬇ CSV كامل</a>
+        <a class="exp" href="/api/export?name=borse-raw">⬇ تصدير CSV كامل</a>
       </div>
       <div id="tbl-borse" class="tblwrap"></div>
     </div>
@@ -821,7 +881,7 @@
               <span class="dwrap sm"><input type="date" id="pr-to" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
             </span>
             <select class="input sm" id="pr-item" title="الصنف" style="max-width:220px;min-width:150px"><option value="">كل الأصناف</option></select>
-            <a class="exp" href="/api/export?name=prices-latest">⬇ CSV</a>
+            <a class="exp" href="/api/export?name=prices-latest">⬇ تصدير CSV</a>
           </span>
           <button class="btn sm ghost" id="pr-clear" title="مسح الفلاتر والبحث">🗗 مسح</button>
           <button class="btn sm ghost" data-manual="prices">يدوى</button>
@@ -909,7 +969,7 @@
             </select>
             <select class="input sm" id="cs-item" title="الصنف" style="max-width:160px;min-width:110px"></select>
             <select class="input sm" id="cs-unit" title="المصنع" hidden style="max-width:100px;min-width:80px"></select>
-            <a class="exp btn sm" href="/api/export?name=costs-grid" style="align-self:center;padding:5px 9px;font-size:12px">⬇ CSV</a>
+            <a class="exp btn sm" href="/api/export?name=costs-grid" style="align-self:center;padding:5px 9px;font-size:12px">⬇ تصدير CSV</a>
             <button class="btn sm ghost" id="cs-clear" title="مسح الفلاتر والبحث" style="padding:5px 9px;font-size:12px">🗗 مسح</button>
             </div>
         </div>
@@ -986,7 +1046,8 @@
             </select>
           </label>
         </span>
-        <a class="exp btn sm" id="rep-csv" href="#" style="display:none;align-self:flex-end;margin-bottom:2px">⬇ CSV</a>
+        <button class="btn sm" id="rep-recon-btn" style="display:none;align-self:flex-end;margin-bottom:2px">احسب المطابقة</button>
+        <a class="exp btn sm" id="rep-csv" href="#" style="display:none;align-self:flex-end;margin-bottom:2px">⬇ تصدير CSV</a>
       </div>
       <span class="rf-view-tools" id="rf-view-tools">
               <select id="rf-item" class="input sm" title="اختر صنفاً من القائمة" style="max-width:150px"></select>
@@ -1045,8 +1106,7 @@
                   </div>
                 </div>
               </div>
-              <a class="exp btn sm" id="rep-csv" href="#" style="display:none">⬇ CSV</a>
-              <button class="btn sm ghost" id="rep-clear" title="مسح الفلاتر والبحث">🗗 مسح</button>
+              <a class="exp btn sm" id="rep-csv-view" href="#" style="display:none">⬇ تصدير CSV</a>
             </span>
       <div id="rep-chart"></div>
       <div class="legend" id="rep-legend"></div>
@@ -1059,7 +1119,7 @@
   <section id="tab-contracts">
     <div class="card">
       <div class="card-h">
-        <h3>عقود الاستيراد</h3>
+        <h3>عقود الاستيراد <small id="con-sub-label">— تسجيل عقد</small></h3>
         <div class="row hdr-tools">
           <span class="con-view-tools" id="con-view-tools">
             <button class="btn sm" id="con-add">＋ إضافة</button>
@@ -1070,13 +1130,13 @@
               <span class="dwrap sm"><input type="date" id="con-to" class="input mv-date" lang="en-GB" required><span class="dph">dd/mm/yyyy</span></span>
             </span>
             <select class="input sm" id="con-status" title="حالة العقد" autocomplete="off">
-              <option value="">كل الحالات</option>
-              <option value="ACTIVE" selected>نشط</option>
+              <option value="" selected>كل الحالات</option>
+              <option value="ACTIVE">نشط</option>
               <option value="UNDER">تحت التنفيذ</option>
               <option value="FINISH">مكتمل</option>
             </select>
             <button class="btn sm ghost" id="con-view-refresh" title="تحديث">↻</button>
-            <a class="exp" id="con-csv" href="#" style="display:none">⬇ CSV</a>
+            <a class="exp" id="con-csv" href="#" style="display:none">⬇ تصدير CSV</a>
             <button class="btn sm ghost" id="con-clear" title="مسح الفلاتر">🗗 مسح</button>
           </span>
         </div>
@@ -1085,9 +1145,7 @@
 
     <div id="con-view">
       <div class="card">
-        <div class="card-h">
-          <h3 id="con-view-title">تسجيل عقد</h3>
-        </div>
+        <div class="card-h"></div>
         <div class="hint" style="margin-top:10px">
           كل صف يدوي يظهر بوسم <span class="pill warning">يدوي</span> ويمكن تعديله/حذفه من هنا؛ الصفوف المستوردة (المحفوظة في قاعدة البيانات) للقراءة فقط.
           <br>«الرقم داخلي» يربط الخطوات ببعضها ويُولَّد تلقائياً عند تسجيل عقد جديد.
@@ -1098,12 +1156,508 @@
         </div>
       </div>
     </div>
+    <div id="con-detail-panel" class="card" hidden style="margin-top:12px">
+      <div class="card-h">
+        <h3>تفاصيل العقد المحدد <small id="con-detail-no"></small></h3>
+        <div class="row" style="gap:6px">
+          <button class="btn sm" id="con-detail-add">＋ إضافة تفصيلى</button>
+          <button class="btn sm ghost" id="con-detail-back">العودة إلى قائمة العقود</button>
+        </div>
+      </div>
+      <div id="tbl-con-detail" class="tblwrap" style="margin-top:10px;max-height:400px"></div>
+      <div class="row" style="margin-top:8px;align-items:center">
+        <span class="muted xs" id="con-detail-count"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ (٠) الصفحة الرئيسية لمنصة التحليل والتقارير ============ -->
+  <section id="tab-platform" class="wf-section">
+    <div class="wc-degraded" id="wc-degraded" hidden></div>
+    <div class="pf-hero">
+      <div class="pf-hero-head">
+        <span class="pf-kicker">منصة التحليل</span>
+        <h3>من البيانات إلى تقرير وشاشة — في مكان واحد</h3>
+        <p class="muted">ثلاثة أقسام واضحة: البيانات والتحليل، التقارير ولوحات المعلومات، تصميم الشاشات والتحكم.</p>
+      </div>
+      <div class="pf-flow" aria-label="مسار العمل داخل المنصة">
+        <span>مصدر</span><i>←</i><span>معادلة</span><i>←</i><span>تحليل</span><i>←</i><span>تقرير</span><i>←</i><span>شاشة</span>
+      </div>
+    </div>
+    <div class="pf-status" id="platform-home-status" hidden></div>
+    <div class="pf-grid" id="platform-home-grid" aria-live="polite"></div>
+    <div class="hint pf-note" id="platform-home-note"></div>
+  </section>
+
+  <!-- ============ (١) البيانات والتحليل ============ -->
+  <section id="tab-analysis" class="wf-section">
+    <div class="ws-context" id="ws-context-analysis" hidden></div>
+    <div class="ps-status" id="ps-status-analysis" hidden></div>
+
+    <!-- لوحة ١: المصادر والجداول -->
+    <div class="card" id="an-p-sources">
+      <div class="card-h">
+        <h3>البيانات والتحليل</h3>
+        <span class="muted xs">المصادر والجداول والحقول · العلاقات · الأعمدة المحسوبة والمعادلات · بناء التحليل</span>
+      </div>
+      <div class="wf-row an-filters">
+        <input class="input sm" id="an-search" placeholder="بحث في المصادر والجداول والحقول..." style="max-width:320px" />
+        <select class="wf-select" id="an-domain"><option value="">كل المجالات</option></select>
+        <select class="wf-select" id="an-status"><option value="">كل الحالات</option></select>
+        <select class="wf-select" id="an-nature"><option value="">كل طبيعة البيانات</option></select>
+        <button type="button" class="btn sm ghost" id="an-refresh">تحديث</button>
+      </div>
+      <div class="hint">اختر المصدر ← اختر الحقول ← عدّل الحساب أو أضف معادلة ← عاين ← نفّذ ← احفظ التحليل لتستخدمه في تقرير.</div>
+      <div id="an-sources" class="an-panel"></div>
+    </div>
+
+    <!-- لوحة ٢: العلاقات -->
+    <div class="card" id="an-p-relations" hidden>
+      <div class="card-h"><h3>العلاقات بين الجداول</h3>
+        <span class="muted xs">حقول الربط والاتجاه ودرجة التأكد لكل مصدر</span></div>
+      <div id="an-relations" class="an-panel"></div>
+    </div>
+
+    <!-- لوحة ٣: المعادلات -->
+    <div class="card" id="wf-p-formulas" hidden>
+      <div class="card-h"><h3>المعادلات والأعمدة المحسوبة</h3>
+        <span class="muted xs">قاموس مرجعي للاطلاع · معادلات محفوظة قابلة للتنفيذ والاختبار وإدارة الإصدارات</span></div>
+      <div class="wf-row an-filters">
+        <input class="input sm" id="fml-search" placeholder="بحث في المعادلات..." style="max-width:320px" />
+        <select class="wf-select" id="fml-status"><option value="">كل الحالات</option></select>
+      </div>
+      <div class="ws-subtabs" id="fml-subtabs" role="tablist" aria-label="أقسام المعادلات">
+        <button type="button" class="ws-subtab active" data-an="formulas" role="tab" aria-selected="true">القاموس المرجعي</button>
+        <button type="button" class="ws-subtab" data-an="savedFormulas" role="tab" aria-selected="false">المعادلات المحفوظة</button>
+      </div>
+      <div id="an-formulas" class="an-panel"></div>
+      <div id="an-savedFormulas" class="an-panel" hidden></div>
+      <div class="ws-detail" id="an-fml-detail" hidden></div>
+      <div class="hint" id="wf-msg"></div>
+    </div>
+
+    <!-- لوحة ٤: بناء التحليل -->
+    <div class="card wf-canvas-mode" id="wf-p-build" hidden>
+      <div class="card-h"><h3>بناء التحليل</h3><span class="muted xs">اختر المصدر والحقول ⇒ ابنِ المسار بصريًا ⇒ تحقق ثم عاين ثم نفّذ</span></div>
+      <div class="wf-toolbar">
+        <button class="btn sm" id="wf-new">جديد</button>
+        <select id="wf-list" class="wf-select"><option value="">— اختر تحليلًا محفوظًا —</option></select>
+        <button class="btn sm" id="wf-load">تحميل</button>
+        <input id="wf-name" class="wf-input" placeholder="اسم التحليل" />
+        <input type="hidden" id="wf-id" />
+        <button class="btn sm" id="wf-save">حفظ</button>
+        <button class="btn sm sec" id="wf-save-as">حفظ باسم</button>
+      </div>
+      <div class="wf-row" id="wf-source-row">
+        <label>المصدر:</label>
+        <select id="wf-source" class="wf-select"><option value="synthetic">بيانات تجريبية (synthetic)</option></select>
+        <span class="muted xs">نطاق زمني (للمصادر التي تدعمه):</span>
+        <input type="date" id="wf-from" class="input sm" title="من تاريخ" />
+        <input type="date" id="wf-to" class="input sm" title="إلى تاريخ" />
+      </div>
+      <div id="wf-workbook-status" class="wf-workbook-note" hidden></div>
+      <div class="wf-row" id="wf-fields-row" hidden>
+        <label>حقول المصدر:</label>
+        <input class="input sm" id="wf-field-search" placeholder="بحث في الحقول..." style="max-width:240px" />
+        <div id="wf-source-fields" class="wf-chips"></div>
+      </div>
+      <div class="wf-row" id="wf-sample-row" hidden>
+        <details class="wf-details" open>
+          <summary>عينة من المصدر (أول 5 صفوف)</summary>
+          <div id="wf-source-sample" class="wf-result"></div>
+        </details>
+      </div>
+
+      <!-- ===== المحرّر المرئي (Phase 1) — الرسم مصدر الحقيقة، والقائمة المتقدمة تعرض الخطوات المترجمة ===== -->
+      <div class="wfg-viewbar" role="tablist" aria-label="طريقة تحرير التحليل">
+        <button type="button" class="wfg-viewtab active" data-wfg-view="canvas" role="tab" aria-selected="true" aria-controls="wfg-editor">المحرّر المرئي</button>
+        <button type="button" class="wfg-viewtab" data-wfg-view="steps" role="tab" aria-selected="false" aria-controls="wf-legacy-view">القائمة المتقدمة</button>
+        <span class="muted xs">الرسم يُترجم إلى نفس خطوات محرك التنفيذ — لا نسخة ثانية.</span>
+      </div>
+
+      <div id="wfg-editor" class="wfg-editor">
+        <div class="wfg-head">
+          <div class="wfg-title">
+            <h4>مساحة بناء التحليل</h4>
+            <span id="wfg-state" class="wfg-badge is-draft" role="status" aria-live="polite">مسودة جديدة</span>
+          </div>
+          <div class="wfg-actions">
+            <button type="button" class="btn sm" id="wfg-validate">تحقق</button>
+            <button type="button" class="btn sm sec" id="wfg-preview">معاينة</button>
+            <button type="button" class="btn sm" id="wfg-run">تنفيذ</button>
+            <span class="wfg-sep" aria-hidden="true"></span>
+            <button type="button" class="btn xs ghost" id="wfg-fit" title="ملاءمة العرض">ملاءمة</button>
+            <button type="button" class="btn xs ghost" id="wfg-zoom-out" title="تصغير" aria-label="تصغير">−</button>
+            <span id="wfg-zoom" class="wfg-zoom">100%</span>
+            <button type="button" class="btn xs ghost" id="wfg-zoom-in" title="تكبير" aria-label="تكبير">＋</button>
+          </div>
+        </div>
+
+        <div class="wfg-grid">
+          <aside class="wfg-palette" aria-label="مكتبة المكوّنات">
+            <div class="wfg-palette-h">مكوّنات جاهزة</div>
+            <div id="wfg-palette" class="wfg-palette-body"></div>
+            <div class="wfg-palette-foot">اسحب المكوّن إلى المساحة أو اضغطه لإضافته. كل مكوّن هنا له تنفيذ حقيقي.</div>
+          </aside>
+
+          <div class="wfg-canvas-wrap">
+            <div id="wfg-canvas" class="wfg-canvas" tabindex="0" aria-label="مساحة الرسم البياني للتحليل">
+              <div id="wfg-stage" class="wfg-stage">
+                <svg id="wfg-edges" class="wfg-edges" aria-hidden="true"></svg>
+                <div id="wfg-nodes" class="wfg-nodes"></div>
+              </div>
+              <div id="wfg-empty" class="wfg-empty" hidden>
+                <b>ابدأ بمصدر، ثم أضف خطوة، ثم صِل المخرج بالمدخل.</b>
+                <span>مثال: مصدر ← تصفية ← عمود محسوب ← مخرج. اضغط «تحقق» لفحص الرسم، و«تنفيذ» لحفظ النتيجة.</span>
+              </div>
+            </div>
+            <div id="wfg-msg" class="wfg-msg" role="status" aria-live="polite"></div>
+          </div>
+
+          <aside class="wfg-inspector" aria-label="خصائص العقدة المحددة">
+            <div id="wfg-inspector"></div>
+          </aside>
+        </div>
+
+        <div class="wfg-results">
+          <div class="wfg-resulttabs" role="tablist" aria-label="لوحة النتائج">
+            <button type="button" class="wfg-rtab active" data-rtab="validation" role="tab" aria-selected="true" aria-controls="wfg-result">التحقق والأخطاء</button>
+            <button type="button" class="wfg-rtab" data-rtab="result" role="tab" aria-selected="false" aria-controls="wfg-result">البيانات والنتيجة</button>
+            <button type="button" class="wfg-rtab" data-rtab="trace" role="tab" aria-selected="false" aria-controls="wfg-result">سجل التنفيذ</button>
+            <button type="button" class="wfg-rtab" data-rtab="source" role="tab" aria-selected="false" aria-controls="wfg-result">عينة المصدر</button>
+          </div>
+          <div id="wfg-result" class="wfg-result" role="tabpanel" aria-label="نتائج التحليل" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <div id="wf-legacy-view" hidden>
+      <div class="wf-row">
+        <label>خطوات التحليل (خط أنابيب):</label>
+        <div id="wf-steps-list" class="wf-steps-list"></div>
+        <div class="wf-toolbar">
+          <button class="btn sm" id="wf-add-step">＋ إضافة خطوة</button>
+          <span class="muted xs" id="wf-steps-count"></span>
+        </div>
+      </div>
+      <div class="wf-row" id="wf-editor" hidden>
+        <div class="card" style="padding:12px">
+          <div class="card-h"><h3 id="wf-editor-title">إعداد الخطوة</h3></div>
+          <div id="wf-editor-body"></div>
+          <div class="wf-toolbar">
+            <button class="btn sm" id="wf-apply-step">تطبيق</button>
+            <button class="btn sm ghost" id="wf-cancel-step">إلغاء</button>
+          </div>
+          <div id="wf-editor-err" class="neg xs" hidden></div>
+        </div>
+      </div>
+      <div class="wf-toolbar">
+        <button class="btn sm" id="wf-validate">تحقق</button>
+        <button class="btn sm" id="wf-preview">معاينة</button>
+        <button class="btn sm" id="wf-run">تنفيذ</button>
+        <button class="btn sm sec" id="wf-export">تصدير CSV</button>
+      </div>
+      <div class="wf-toolbar">
+        <input class="input sm" id="wf-runid" placeholder="معرّف تشغيل (run_...)" style="min-width:220px" />
+        <button class="btn sm ghost" id="wf-retrieve">استرجاع تشغيل</button>
+        <span class="muted xs">تصدير/استرجاع نتائج تشغيل محفوظة (لا معاينة محدودة).</span>
+      </div>
+      <div id="wf-status" class="hint"></div>
+      <div id="wf-result" class="wf-result"></div>
+      <details class="wf-details">
+        <summary>الوظائف المتاحة (دوال محرك المعادلات)</summary>
+        <div id="wf-fns" class="wf-fns"></div>
+      </details>
+      <details class="wf-details">
+        <summary>JSON متقدم (مصدر الحقيقة)</summary>
+        <textarea id="wf-steps" class="wf-textarea" rows="12" placeholder='[{"id":"s1","type":"select","columns":["item","qty"]}]'></textarea>
+        <div class="wf-toolbar">
+          <button class="btn sm ghost" id="wf-apply-json">تطبيق JSON</button>
+          <span class="muted xs">أي تعديل هنا يُحدّث المُنشئ بعد الضغط على «تطبيق JSON».</span>
+        </div>
+      </details>
+      </div><!-- /wf-legacy-view -->
+    </div>
+
+    <!-- لوحة ٥: النتائج المحفوظة -->
+    <div class="card" id="wf-p-runs" hidden>
+      <div class="card-h"><h3>النتائج المحفوظة</h3>
+        <span class="muted xs">كل نتيجة تشغيل محفوظة — افتحها أو أرسلها إلى مصمّم التقارير أو إلى شاشة</span></div>
+      <div class="wf-row" style="align-items:flex-start">
+        <select id="wf-runs-list" class="wf-select" style="min-width:320px"></select>
+        <button class="btn sm" id="wf-run-open">فتح المخرج</button>
+        <button class="btn sm sec" id="wf-run-report">تصميم تقرير منه</button>
+        <span class="muted xs" id="wf-runs-msg"></span>
+      </div>
+      <div id="wf-runs-info" class="wf-result"></div>
+    </div>
+
+    <!-- لوحة ٦: الشاشات والتقارير المرتبطة -->
+    <div class="card" id="an-p-screens" hidden>
+      <div class="card-h"><h3>الشاشات والتقارير المرتبطة</h3>
+        <span class="muted xs">أي شاشة أو تقرير يعتمد أي مصدر — ومن أين يقرأ</span></div>
+      <div id="an-screens" class="an-panel"></div>
+    </div>
+
+    <div class="ws-detail" id="an-detail" hidden></div>
+    <div class="hint" id="an-msg"></div>
+  </section>
+  <!-- ============ (٢) التقارير ولوحات المعلومات ============ -->
+  <section id="tab-report-studio" class="wf-section">
+    <div class="ws-context" id="ws-context-report-studio" hidden></div>
+    <div class="ps-status" id="ps-status-report-studio" hidden></div>
+
+    <!-- لوحة ١: جميع التقارير -->
+    <div class="card" id="rp-p-app">
+      <div class="card-h"><h3>جميع التقارير</h3>
+        <span class="muted xs">تقارير التطبيق والتقارير المحفوظة في قائمة موحدة — افتح، عدّل، أو أنشئ من تحليل محفوظ</span></div>
+      <div class="wf-row">
+        <input id="rp-app-search" class="input sm" placeholder="بحث بالاسم..." style="max-width:280px" />
+        <select id="rp-app-source" class="wf-select"><option value="">كل المصادر</option></select>
+        <span class="muted xs" id="rp-app-counts"></span>
+      </div>
+      <div class="pf-chips" id="rp-app-groups" role="group" aria-label="تصنيفات التقارير">
+        <button type="button" class="btn xs active" data-pf-group="">كل التقارير</button>
+        <button type="button" class="btn xs ghost" data-pf-group="app">تقارير التطبيق</button>
+        <button type="button" class="btn xs ghost" data-pf-group="saved">تقاريري المحفوظة</button>
+        <button type="button" class="btn xs ghost" data-pf-group="draft">المسودات</button>
+        <button type="button" class="btn xs ghost" data-pf-group="sales">مبيعات</button>
+        <button type="button" class="btn xs ghost" data-pf-group="store">مخازن</button>
+        <button type="button" class="btn xs ghost" data-pf-group="bal">أرصدة</button>
+        <button type="button" class="btn xs ghost" data-pf-group="pbix">Power BI</button>
+      </div>
+      <div class="rm-grid" id="rp-app-grid"></div>
+      <div class="hint" id="rp-app-msg"></div>
+      <div class="ws-detail" id="rp-app-detail" hidden></div>
+    </div>
+
+    <!-- لوحة ٢: مصمّم التقارير -->
+    <div class="card" id="rp-p-designer" hidden>
+      <div class="card-h"><h3>مصمّم التقارير</h3>
+        <span class="muted xs">ابنِ التقرير بصريًا: عناصر على شبكة · تخطيط · نمط · شروط — والحفظ يعيد التصميم كما هو</span></div>
+      <div class="wf-toolbar">
+        <button class="btn sm" id="rs-new">جديد</button>
+        <select id="rs-list" class="wf-select"><option value="">— اختر تقريرًا —</option></select>
+        <button class="btn sm" id="rs-load">فتح</button>
+        <input id="rs-name" class="wf-input" placeholder="اسم التقرير" />
+        <input id="rs-title" class="wf-input" placeholder="عنوان التقرير (يظهر في الملف المُصدَّر)" style="max-width:280px" />
+        <input id="rs-description" class="wf-input" placeholder="وصف مختصر (اختياري)" style="max-width:260px" />
+        <input type="hidden" id="rs-id" />
+        <button class="btn sm" id="rs-save">حفظ</button>
+        <button class="btn sm sec" id="rs-save-as">حفظ باسم</button>
+        <button class="btn sm ghost" id="rs-delete">حذف</button>
+        <button class="btn sm ghost" id="rs-rebuild">إعادة الهيكلة</button>
+        <button class="btn sm sec" id="rs-to-screen">＋ إدراج في شاشة</button>
+        <span class="muted xs" id="rs-to-screen-msg"></span>
+      </div>
+
+      <div class="rd-source">
+        <div class="wf-row">
+          <label>مصدر البيانات:</label>
+          <select id="rs-runlist" class="wf-select"><option value="">— اختر تشغيلًا محفوظًا —</option></select>
+          <button class="btn sm ghost" id="rs-loadrun">جلب الأعمدة</button>
+          <input id="rs-runid" class="wf-input" placeholder="run_..." style="min-width:200px" />
+          <button class="btn sm" id="rs-quick">تقرير سريع</button>
+        </div>
+        <div class="muted xs" id="rs-source-info"></div>
+        <div class="rd-quick" id="rs-quick-panel" hidden>
+          <div class="rd-quick-head"><b>تقرير سريع</b><span class="muted xs">مصدر معتمد + أعمدة ⇒ نتيجة تشغيل جاهزة للتقرير (بلا بناء تدفق يدوي، ودون حسابات موازية)</span></div>
+          <div class="wf-row">
+            <label>المصدر</label>
+            <select id="rs-quick-source" class="wf-select"></select>
+            <label>من</label>
+            <input type="date" id="rs-quick-from" class="input sm" title="من تاريخ" />
+            <label>إلى</label>
+            <input type="date" id="rs-quick-to" class="input sm" title="إلى تاريخ" />
+          </div>
+          <div class="wf-row">
+            <label>الأعمدة</label>
+            <select id="rs-quick-cols" class="wf-select" multiple size="6"></select>
+            <button class="btn sm" id="rs-quick-create">إنشاء النتيجة وفتح المصمم</button>
+          </div>
+          <div class="hint" id="rs-quick-msg"></div>
+        </div>
+      </div>
+
+      <div class="rd-legacy" id="rs-legacy-panel">
+        <div class="rd-quick-head"><b>استيراد تقرير من التطبيق</b><span class="muted xs">تقرير قائم ⇒ استخراج تعريفه وأعمدته ومقاييسه ثم تحويله إلى تصميم قابل للتحرير — الأصل يبقى كما هو</span></div>
+        <div class="wf-row">
+          <select id="rs-legacy-list" class="wf-select"></select>
+          <button class="btn sm" id="rs-legacy-import">استيراد في المصمم</button>
+        </div>
+        <div class="hint" id="rs-legacy-msg"></div>
+        <div class="hint" id="rs-legacy-cap"></div>
+        <div id="rs-legacy-notes" class="rd-notes"></div>
+      </div>
+
+      <div class="rd-filters" id="rs-filters-panel">
+        <div class="rd-quick-head"><b>فلاتر البيانات (على مستوى التقرير)</b><span class="muted xs">تُطبَّق على الصفوف قبل التصيير — والعدد المستبعد يظهر في المعاينة</span></div>
+        <div class="wf-row">
+          <button class="btn sm" id="rs-add-filter">＋ إضافة فلتر</button>
+          <span class="muted xs" id="rs-filters-count"></span>
+        </div>
+        <div id="rs-filters-list" class="rd-filters-list"></div>
+      </div>
+
+      <div class="rd-layout">
+        <div class="rd-main">
+          <div class="wf-toolbar">
+            <button class="btn sm" id="rs-add-kpi">＋ مؤشر</button>
+            <button class="btn sm" id="rs-add-table">＋ جدول</button>
+            <button class="btn sm" id="rs-add-bar">＋ أعمدة</button>
+            <button class="btn sm" id="rs-add-line">＋ خطي</button>
+            <button class="btn sm" id="rs-add-pie">＋ دائري</button>
+            <button class="btn sm" id="rs-add-heading">＋ عنوان</button>
+            <button class="btn sm" id="rs-add-text">＋ نص</button>
+            <button class="btn sm" id="rs-add-divider">＋ فاصل</button>
+            <button class="btn sm" id="rs-add-shape">＋ شكل</button>
+            <span class="muted xs" style="margin-inline-start:auto">التراجع/الإعادة:</span>
+            <button class="btn sm ghost" id="rs-undo" title="تراجع (Ctrl+Z)">↶ تراجع</button>
+            <button class="btn sm ghost" id="rs-redo" title="إعادة (Ctrl+Y)">↷ إعادة</button>
+            <span class="muted xs">(<span id="rs-history-count">0</span> خطوة)</span>
+          </div>
+          <div id="rs-canvas" class="rd-canvas"></div>
+          <div class="wf-toolbar">
+            <button class="btn sm" id="rs-validate">تحقق</button>
+            <button class="btn sm" id="rs-preview">معاينة</button>
+            <button class="btn sm ghost" id="rs-live" aria-pressed="false">معاينة حيّة: مُعطّلة</button>
+            <button class="btn sm sec" id="rs-export">تصدير HTML</button>
+            <button class="btn sm ghost" id="rs-export-csv">تصدير CSV</button>
+            <button class="btn sm ghost" id="rs-export-xlsx">تصدير Excel</button>
+            <button class="btn sm ghost" id="rs-export-pdf">تصدير PDF</button>
+          </div>
+          <div class="hint" id="rs-status"></div>
+          <div class="card" style="padding:12px;margin-top:10px">
+            <div class="card-h"><h3>معاينة التقرير</h3><span class="muted xs">تُبنى في Python من بيانات التشغيل المحدد</span></div>
+            <div id="rs-result" class="wf-result"></div>
+          </div>
+          <details class="wf-details">
+            <summary>JSON متقدم (تعريف التقرير)</summary>
+            <textarea id="rs-json" class="wf-textarea" rows="12"></textarea>
+            <div class="wf-toolbar">
+              <button class="btn sm ghost" id="rs-apply-json">تطبيق JSON</button>
+            </div>
+          </details>
+        </div>
+
+        <aside class="rd-inspector">
+          <div class="rd-tabs" id="rs-tabs">
+            <button type="button" class="rd-tab active" data-rt="data">البيانات</button>
+            <button type="button" class="rd-tab" data-rt="layout">التخطيط</button>
+            <button type="button" class="rd-tab" data-rt="style">النمط</button>
+            <button type="button" class="rd-tab" data-rt="rules">الشروط</button>
+          </div>
+          <div id="rs-inspector" class="rd-inspector-body">
+            <div class="hint">اختر عنصرًا من اللوحة لتحرير بياناته وتخطيطه ونمطه.</div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- لوحة ٣: التقارير المحفوظة -->
+    <div class="card" id="rp-p-saved" hidden>
+      <div class="card-h"><h3>التقارير المحفوظة</h3><span class="muted xs">فتح · تعديل · نسخ · تصدير · حذف</span></div>
+      <div class="wf-row">
+        <input id="rm-search" class="input sm" placeholder="بحث بالاسم..." style="max-width:280px" />
+        <select id="rm-source" class="wf-select"><option value="">كل المصادر</option></select>
+        <select id="rm-sort" class="wf-select">
+          <option value="date">الأحدث تعديلًا</option>
+          <option value="name">الاسم (أبجدي)</option>
+          <option value="source">المصدر</option>
+        </select>
+        <span class="muted xs" id="rm-counts"></span>
+      </div>
+      <div class="rm-grid" id="rm-grid"></div>
+      <div class="hint" id="rm-msg"></div>
+    </div>
+  </section>
+
+  <!-- ============ (٣) تصميم الشاشات والتحكم ============ -->
+  <section id="tab-screen-studio" class="wf-section">
+    <div class="ws-context" id="ws-context-screen-studio" hidden></div>
+    <div class="ps-status" id="ps-status-screen-studio" hidden></div>
+
+    <!-- لوحة ١: الشاشات المخصّصة -->
+    <div class="card" id="ss-p-custom">
+      <div class="card-h"><h3>شاشات مخصّصة</h3><span class="muted xs" id="ss-msg"></span></div>
+      <div class="rd-quick-head"><b>شاشات مخصّصة داخل التطبيق</b><span class="muted xs">أنشئ شاشة باسم ومعرّف فريدين، اربطها بنتيجة تشغيل محفوظة، أضف مكوّنات وفلاتر وأزراراً حقيقية، ثم احفظها لتظهر في الشريط (حسب صلاحية المستخدم).</span></div>
+      <div class="wf-row">
+        <label>الشاشة</label>
+        <select id="ss-list" class="wf-select"></select>
+        <button class="btn sm" id="ss-new">＋ شاشة جديدة</button>
+        <button class="btn sm ghost" id="ss-copy">نسخ</button>
+        <button class="btn sm ghost" id="ss-rename">إعادة تسمية</button>
+        <button class="btn sm ghost danger" id="ss-delete">حذف</button>
+        <button class="btn sm sec" id="ss-save">حفظ</button>
+        <button class="btn sm" id="ss-preview">معاينة</button>
+      </div>
+      <div class="wf-row" id="ss-custom-open-row" hidden>
+        <label>فتح شاشة مخصّصة محفوظة:</label>
+        <div id="ss-custom-open" class="pf-chips"></div>
+      </div>
+
+      <div class="wf-row">
+        <label>مصدر البيانات (تشغيل محفوظ):</label>
+        <select id="ss-run" class="wf-select"></select>
+        <span class="muted xs" id="ss-run-info"></span>
+      </div>
+      <div class="wf-row">
+        <label>إدراج تقرير محفوظ في الشاشة:</label>
+        <select id="ss-insert-report" class="wf-select"><option value="">— اختر تقريرًا محفوظًا —</option></select>
+        <button type="button" class="btn sm" id="ss-insert-report-btn">＋ إدراج محتوى التقرير</button>
+        <span class="muted xs" id="ss-insert-msg"></span>
+      </div>
+      <div class="wf-row" id="ss-palette"></div>
+      <div class="rd-layout">
+        <div class="ss-canvas" id="ss-canvas"></div>
+        <aside class="rd-inspector">
+          <div class="rd-tabs"><div class="rd-tab active">خصائص المكوّن</div></div>
+          <div class="rd-inspector-body" id="ss-inspector"></div>
+        </aside>
+      </div>
+      <div class="wf-row" style="align-items:flex-start">
+        <b>المدخلات (فلاتر على الأعمدة):</b>
+        <button type="button" class="btn sm" id="ss-add-input">＋ مدخل</button>
+      </div>
+      <div class="ss-list" id="ss-inputs"></div>
+      <div class="wf-row" style="align-items:flex-start">
+        <b>الأزرار (إجراءات حقيقية):</b>
+        <button type="button" class="btn sm" id="ss-add-button">＋ زر</button>
+      </div>
+      <div class="ss-list" id="ss-buttons"></div>
+      <div class="ss-preview" id="ss-preview-host"></div>
+    </div>
+
+    <!-- لوحة ٢: شاشات التطبيق والتحكّم في الواجهة -->
+    <div class="card" id="ss-p-system" hidden>
+      <div class="card-h"><h3>شاشات التطبيق والتحكّم</h3>
+        <span class="muted xs">اختر أي شاشة أصلية ⇒ انظر عناصرها الفعلية (أزرار · حقول · فلاتر · جداول · تقارير) وغيّر أسماءها ومواضعها وتصميمها</span></div>
+      <div class="rd-quick-head"><b>تحرير شاشات التطبيق</b><span class="muted xs">التعديل = تجاوز على عنصر قائم: المعرّف والوظيفة والصلاحية لا تتغيّر (الإخفاء فقط للإخفاء) — والحفظ ينعكس على الواجهة لكل المستخدمين</span></div>
+      <div class="wf-row">
+        <label>الشاشة</label>
+        <select id="ss-ui-screen" class="wf-select"></select>
+        <button class="btn sm" id="ss-ui-preview">معاينة على الواجهة</button>
+        <button class="btn sm sec" id="ss-ui-save">حفظ التخطيط</button>
+        <button class="btn sm ghost" id="ss-ui-reset">إعادة الضبط للافتراضي</button>
+        <button class="btn sm ghost" id="ss-ui-add-btn">＋ زر جديد</button>
+        <button class="btn sm ghost" id="ss-system-screens">قائمة شاشات النظام</button>
+        <span class="muted xs" id="ss-ui-msg"></span>
+      </div>
+      <div class="rd-ui-panes">
+        <div id="ss-ui-groups" class="rd-ui-groups"></div>
+        <div id="ss-ui-props" class="rd-ui-props"></div>
+      </div>
+      <div class="rd-quick-head" style="margin-top:12px"><b>التحكّم في التطبيق</b><span class="muted xs">صلاحيات المستخدمين والشاشات من لوحة التحكم — هنا نتحكّم في شكل الشاشات وترتيبها فقط</span></div>
+      <div class="wf-row">
+        <button class="btn sm ghost" id="ss-ui-perms">إدارة المستخدمين وصلاحيات الشاشات</button>
+        <span class="muted xs">الفتح ينقلك إلى «لوحة التحكم» (صلاحيات المستخدمين) — لا تغيير في الصلاحيات من محرّر الشاشات.</span>
+      </div>
+    </div>
   </section>
 
   </main>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ============ تغيير كلمة المرور ============ -->
 <div class="modal" id="pw-modal" hidden>
@@ -1187,7 +1741,7 @@
     </div>
     <div class="modal-body">
       <form id="de-form" autocomplete="off" novalidate>
-        <div class="grid three" id="de-fields"></div>
+        <div id="de-fields" style="display:flex;flex-wrap:wrap;gap:4px;row-gap:3px"></div>
         <div class="row" style="margin-top:4px">
           <button class="btn" type="submit" id="de-save-btn">حفظ</button>
           <button class="btn ghost" type="button" id="de-reset" style="display:none">إلغاء التعديل</button>
@@ -1195,11 +1749,9 @@
         <div class="login-err" id="de-err" hidden></div>
       </form>
       <div class="card-h" style="margin-top:20px">
-        <h3>السجلات اليدوية <small>يُعدَّل ويُحذف ما أُدخل يدوياً فقط — صفوف الملفات محصّنة</small></h3>
-        <button class="btn sm ghost" id="de-refresh" title="تحديث القائمة">↻</button>
+        <h3>تقسيم الكمية المتعاقد عليها <small>الكمية الإجمالية تُقسَّم على شركات داخلية متعددة — كل شركة بكمية تفصيلية مرتبطة بالعقد نفسه</small></h3>
+        <div class="hint">اضغط زر «فتح التفاصيل» بجانب العقد لفتح تفاصيل الكمية والشركات الداخلية المرتبطة بهذا الرقم الداخلي.</div>
       </div>
-      <div id="tbl-de" class="tblwrap" style="margin-top:8px;max-height:320px"></div>
-      <div class="muted xs" id="de-count" style="margin-top:8px"></div>
     </div>
   </div>
 </div>
@@ -1303,6 +1855,16 @@
             </select>
           </label>
         </div>
+        <label>الحال <span class="muted xs">— اختياري</span>
+          <select class="input" id="mi-status">
+            <option value="">— بدون حال —</option>
+            <option value="SUB">صب</option>
+            <option value="PACKED">معبأ</option>
+            <option value="TANK">تنك</option>
+            <option value="JUMBO">جامبو</option>
+            <option value="BULK">سايب</option>
+          </select>
+        </label>
         <div class="login-err" id="mi-err" hidden></div>
         <div class="row">
           <button class="btn" type="submit" id="mi-btn">حفظ</button>
@@ -1530,7 +2092,57 @@
   </div>
 </div>
 
+<style>
+  .wf-section .wf-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  .wf-section .wf-row { margin: 8px 0; display: flex; flex-direction: column; gap: 4px; }
+  .wf-section .wf-input { padding: 6px 8px; min-width: 200px; }
+  .wf-section .wf-select { padding: 6px 8px; }
+  .wf-section .wf-textarea { width: 100%; font-family: monospace; font-size: 13px; padding: 8px; box-sizing: border-box; }
+  .wf-section .wf-result { margin-top: 12px; max-height: 400px; overflow: auto; }
+  .wf-section .wf-fns { max-height: 300px; overflow: auto; font-size: 12px; }
+  .wf-section .wf-fn { border-bottom: 1px solid var(--line); padding: 4px 0; }
+  .wf-section table { width: 100%; border-collapse: collapse; }
+  .wf-section th, .wf-section td { border: 1px solid var(--line); padding: 4px 6px; font-size: 12px; }
+  /* مُنشئ Workflow */
+  .wf-steps-list { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+  .wf-step { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-2); }
+  .wf-step-rail { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .wf-step-num { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 12px; background: var(--grad); color: #04101f; }
+  .wf-step-type { font-size: 11px; }
+  .wf-step-body { min-width: 0; }
+  .wf-step-id { font-weight: 700; font-size: 13px; color: var(--txt); }
+  .wf-step-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+  .wf-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .wf-chip { display: inline-block; padding: 3px 8px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); font-size: 11.5px; color: var(--txt-2); font-family: var(--font-num); }
+  .wf-fn-insert { display: flex; flex-wrap: wrap; gap: 4px; }
+  @media (prefers-reduced-motion: reduce) { .wf-step { transition: none; } }
+  /* شاشات ضيقة: أزرار المكوّن تنتقل لسطر مستقل بدل الضغط */
+  @media (max-width: 720px) {
+    .wf-section .wf-step { grid-template-columns: auto 1fr; }
+    .wf-section .wf-step-actions { grid-column: 1 / -1; justify-content: flex-start; }
+    .wf-section .wf-step-actions .btn { flex: 0 0 auto; }
+    .wf-section .wf-toolbar { gap: 6px; }
+  }
+</style>
+
+<script src="/platform-screens.js"></script>
+<script src="/relations-graph.js"></script>
+<script src="/ui-editor.js"></script>
+<script src="/platform-shell.js"></script>
 <script src="/charts.js"></script>
 <script src="/app.js"></script>
+<script src="/workflow-canvas.js"></script>
+<script src="/formula-editor-core.js"></script>
+<script src="/formula-editor.js"></script>
+<script src="/analysis.js"></script>
+<script src="/report-schema.js"></script>
+<script src="/formula-builder.js"></script>
+<script src="/report-designer.js"></script>
+<script src="/ui-layout.js"></script>
+<script src="/workcenter.js"></script>
+<script src="/app-screen.js"></script>
+<script src="/screen-studio.js"></script>
+<script src="/workspace-links.js"></script>
+<script src="/workspace.js"></script>
 </body>
 </html>

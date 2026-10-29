@@ -50,7 +50,7 @@ const SIGNATURES = {
   contract_items: [/كود الصنف/, /اسم الصنف/],
   contract_suppliers: [/كود المورد/, /اسم المورد/],
   contract_ports: [/كود الميناء/, /اسم الميناء/],
-  contract_companies_internal: [/كود الشركة الداخلية/, /اسم الشركة الداخلية/],
+  companies: [/كود الشركة/, /اسم الشركة/],
   contract_countries: [/كود المصدر/, /اسم المصدر/],
 };
 
@@ -74,7 +74,7 @@ const DATASET_LABEL = {
   contract_items: 'عقود الاستيراد - عناصر',
   contract_suppliers: 'عقود الاستيراد - الموردين',
   contract_ports: 'عقود الاستيراد - موانئ التحميل',
-  contract_companies_internal: 'عقود الاستيراد - شركات داخلية',
+  companies: 'الشركات (المصدر الموحد)',
   contract_countries: 'عقود الاستيراد - المصادر',
   contract_arrival_ports: 'عقود الاستيراد - موانئ الوصول',
 };
@@ -94,7 +94,7 @@ const TABLE_OF = {
   contract_items: 'contract_items',
   contract_suppliers: 'contract_suppliers',
   contract_ports: 'contract_ports',
-  contract_companies_internal: 'contract_companies_internal',
+  companies: 'companies',
   contract_countries: 'contract_countries',
   contract_arrival_ports: 'contract_arrival_ports',
 };
@@ -561,7 +561,7 @@ const BUILDERS = {
   contract_balances: { cols: ['report_date','item_code','item_name','unit','qty_sawaki','qty_waha','qty_ameriya','qty_sahlia','total_balance','consumption_rate','days_enough','enough_until','contract_additions','port_additions','consumption','lot','factor','daily_rate','expenses','price_usd','market_price','source_row','import_id','source_file'], fn: contractBalancesRows, pk: null },
   contract_suppliers: { cols: ['code','name','source_file','updated_at'], fn: contractSuppliersRows, pk: 'code' },
   contract_ports: { cols: ['code','name','source_file','updated_at'], fn: contractPortsRows, pk: 'code' },
-  contract_companies_internal: { cols: ['code','name','source_file','updated_at'], fn: contractCompaniesInternalRows, pk: 'code' },
+  companies: { cols: ['company_code','company_name','source_file','updated_at'], fn: contractCompaniesInternalRows, pk: 'company_code' },
   contract_countries: { cols: ['code','name','source_file','updated_at'], fn: contractCountriesRows, pk: 'code' },
   contract_arrival_ports: { cols: ['code','name','source_file','updated_at'], fn: contractArrivalPortsRows, pk: 'code' },
 };
@@ -660,6 +660,10 @@ async function importFile(filePath, opts = {}) {
   const order = ['items', 'locations', 'movement_types', 'balances', 'movements', 'sales'];
   detected.sort((a, b) => order.indexOf(a.t.dataset) - order.indexOf(b.t.dataset));
 
+/* تجميع الأصناف المستخرجة من شيتات الحركات (كود + اسم + وحدة + مجموعة) لمزامنتها
+   لاحقاً مع جدول items — منع التكرار بالكود (PK) مع ON CONFLICT DO NOTHING */
+const movementDerivedItems = new Map();
+
   for (const d of detected) {
     const ds = d.t.dataset;
     const builder = BUILDERS[ds];
@@ -680,10 +684,86 @@ async function importFile(filePath, opts = {}) {
         const inserted = await insertRows(ds, builder.cols, built.rows, builder.pk);
         await run(`UPDATE imports SET rows_inserted = $1, rows_skipped = $2 WHERE id = $3`, [inserted, built.skipped, importId]);
         result.tables.push({ dataset: ds, label: DATASET_LABEL[ds], sheet: d.sheet, rows: inserted, skipped: built.skipped, importId });
+
+      /* استخراج الأصناف من شيت الحركات (كود، اسم، وحدة، مجموعة) */
+      if (ds === 'movements' && Array.isArray(built.rows)) {
+        const sheetName = str(d.sheet || path.basename(sourceFile) || '');
+        for (const row of built.rows) {
+          const code = str(row[0]);
+          if (!code) continue;
+          if (!movementDerivedItems.has(code)) {
+            movementDerivedItems.set(code, [
+              code,                              // code
+              str(row[1]),                       // descr
+              str(row[2]),                       // uom
+              str(row[19]),                      // group_code (من 'مجموعه المواد الخارجيه')
+              str(row[20]),                      // group_desc
+              str(row[17]),                      // class_code (من 'مجموعه المواد')
+              str(row[18]),                      // class_desc
+              new Date().toISOString(),          // updated_at
+              sourceFile,                        // source_file
+              'movement',                        // origin
+              'item',                            // kind
+              sheetName,                         // movement_sheet_name (اسم شيت الحركات)
+              dateFromFileName(path.basename(sourceFile)), // movement_sheet_date (تاريخ الشيت)
+              null,                              // status (محفوظ من المستخدم)
+            ]);
+          }
+        }
+      }
       });
     } catch (e) {
       await run(`UPDATE imports SET status = 'error', notes = $1 WHERE id = $2`, [String(e.message).slice(0, 500), importId]);
       result.tables.push({ dataset: ds, label: DATASET_LABEL[ds], rows: 0, error: e.message });
+    }
+  }
+
+  /* ===== مزامنة الأصناف من الحركات (دائم) ===== */
+  if (movementDerivedItems.size > 0) {
+    progress('مزامنة الأصناف من الحركات');
+    /* الاستعلام عن الأكواد الموجودة */
+    const existingRows = await all('SELECT code FROM items');
+    const existingSet = new Set((existingRows || []).map(r => String(r.code || '').trim()));
+    const newItems = [];
+    for (const [code, itemRow] of movementDerivedItems) {
+      if (!existingSet.has(code)) newItems.push(itemRow);
+    }
+    result.itemSync = {
+      totalExtracted: movementDerivedItems.size,
+      alreadyExisting: movementDerivedItems.size - newItems.length,
+      newItems: newItems.length,
+      newCodes: newItems.map(r => r[0]),
+      dryRun: !!opts.dryRun,
+    };
+    if (newItems.length > 0 && !opts.dryRun) {
+      const itemCols = ['code','descr','uom','group_code','group_desc','class_code','class_desc','updated_at','source_file','origin','kind','movement_sheet_name','movement_sheet_date','status'];
+      /* إدراج مع ON CONFLICT DO NOTHING لمنع تكرار/تحديث الأصناف المُسجّلة يدوياً */
+      const chunk = 2000;
+      const size = Math.max(1, Math.min(chunk, Math.floor(60000 / Math.max(1, itemCols.length))));
+      let total = 0;
+      for (let i = 0; i < newItems.length; i += size) {
+        const part = newItems.slice(i, i + size);
+        const params = [];
+        const tuples = part.map(r => '(' + itemCols.map((c, ci) => { params.push(r[ci] === undefined ? null : r[ci]); return '$' + params.length; }).join(', ') + ')');
+        await run(
+          `INSERT INTO items (${itemCols.join(', ')}) VALUES ${tuples.join(', ')}
+           ON CONFLICT (code) DO UPDATE SET
+           movement_sheet_name = CASE
+             WHEN EXCLUDED.movement_sheet_name IS NOT NULL AND EXCLUDED.movement_sheet_name <> ''
+              THEN EXCLUDED.movement_sheet_name
+              ELSE items.movement_sheet_name
+           END,
+           movement_sheet_date = CASE
+             WHEN EXCLUDED.movement_sheet_date IS NOT NULL
+              AND (items.movement_sheet_date IS NULL OR EXCLUDED.movement_sheet_date > items.movement_sheet_date)
+             THEN EXCLUDED.movement_sheet_date
+             ELSE items.movement_sheet_date
+           END,
+           updated_at = now()
+         WHERE items.origin = 'movement'`, params);
+        total += part.length;
+      }
+      result.itemSync.inserted = total;
     }
   }
 
