@@ -1,0 +1,637 @@
+TABLE COLUMNS KEYS: ["ID","ModelID","Name","DataCategory","Description","IsHidden","TableStorageID","ModifiedTime","StructureModifiedTime","SystemFlags","ShowAsVariationsOnly","IsPrivate","DefaultDetailRowsDefinitionID","AlternateSourcePrecedence","RefreshPolicyID","CalculationGroupID","ExcludeFromModelRefresh","LineageTag","SourceLineageTag","SystemManaged","ExcludeFromAutomaticAggregations"]
+COLUMN KEYS: ["ID","TableID","ExplicitName","InferredName","ExplicitDataType","InferredDataType","DataCategory","Description","IsHidden","State","IsUnique","IsKey","IsNullable","Alignment","TableDetailPosition","IsDefaultLabel","IsDefaultImage","SummarizeBy","ColumnStorageID","Type","SourceColumn","ColumnOriginID","Expression","FormatString","IsAvailableInMDX","SortByColumnID","AttributeHierarchyID","ModifiedTime","StructureModifiedTime","RefreshedTime","SystemFlags","KeepUniqueRows","DisplayOrdinal","ErrorMessage","SourceProviderType","DisplayFolder","EncodingHint","RelatedColumnDetailsID","AlternateOfID","LineageTag","SourceLineageTag"]
+MEASURE KEYS: ["ID","TableID","Name","Description","DataType","Expression","FormatString","IsHidden","State","ModifiedTime","StructureModifiedTime","KPIID","IsSimpleMeasure","ErrorMessage","DisplayFolder","DetailRowsDefinitionID","DataCategory","LineageTag","SourceLineageTag"]
+PARTITION KEYS: ["ID","TableID","Name","Description","DataSourceID","QueryDefinition","State","Type","PartitionStorageID","Mode","DataView","ModifiedTime","RefreshedTime","SystemFlags","ErrorMessage","RetainDataTillForceCalculate","RangeStart","RangeEnd","RangeGranularity","RefreshBookmark","QueryGroupID","ExpressionSourceID","MAttributes"]
+
+=== RELATIONSHIPS (named) ===
+السداد[#126] -> الاصناف[#66] active=true cross=1
+السداد[#123] -> تسجيل_العقود[#70] active=true cross=1
+التحميل[#140] -> الاصناف[#66] active=true cross=1
+التحميل[#137] -> تسجيل_العقود[#70] active=true cross=1
+الربط[#149] -> الاصناف[#66] active=true cross=1
+الربط[#145] -> تسجيل_العقود[#70] active=true cross=1
+الارصدة[#163] -> الاصناف[#65] active=true cross=1
+الرولينج[#183] -> الاصناف[#66] active=true cross=1
+الرولينج[#179] -> تسجيل_العقود[#70] active=true cross=1
+الافراج[#199] -> تسجيل_العقود[#70] active=true cross=1
+الافراج[#202] -> الاصناف[#66] active=true cross=1
+بيع_خارجى[#206] -> تسجيل_العقود[#70] active=true cross=1
+بيع_خارجى[#209] -> الاصناف[#66] active=true cross=1
+
+=== PARTITIONS full ===
+{"ID":212,"TableID":10,"Name":"الاصناف","Description":null,"DataSourceID":null,"QueryDefinition":"let\n    Source = Excel.Workbook(File.Contents(\"C:\\Users\\Aleman\\Desktop\\عقود الاستيراد - 2026 - جديد.xlsm\"), null, true){[Name=\"الاصناف\"]}[Data],\n    #\"Changed Type\" = Table.TransformColumnTypes(Source,{{\"كود الصنف\", Int64.Type}, {\"اسم الصنف\", type text}, {\"التوجية\", type text}})\nin\n    #\"Changed Type\"","State":1,"Type":4,"PartitionStorageID":671,"Mode":2,"DataView":3,"ModifiedTime":"/Date(1790233736306)/","RefreshedTime":"/Date(1791176699900)/","SystemFlags":0,"ErrorMessage":null,"RetainDataTillForceCalculate":false,"RangeStart":null,"RangeEnd":null,"RangeGranularity":-1,"RefreshBookmark":null,"QueryGroupID":null,"ExpressionSourceID":null,"MAttributes":null}
+{"ID":213,"TableID":13,"Name":"تسجيل_العقود","Description":null,"DataSourceID":null,"QueryDefinition":"let\n    Source = Excel.Workbook(File.Contents(\"C:\\Users\\Aleman\\Desktop\\عقود الاستيراد - 2026 - جديد.xlsm\"), null, true){[Name=\"تسجيل_العقود\"]}[Data],\n    #\"اضافة عمود ترقيم تلقائى\" = Table.AddIndexColumn(Source, \"AUTO\", 1, 1, Int64.Type),\n    #\"تغير نوع البيانات\" = Table.TransformColumnTypes(#\"اضافة عمود ترقيم تلقائى\",{{\"الرقم داخلي\", type text}, {\"تصنيف التعاقد\", type text}, {\"نوع التعاقد\", type text}, {\"تاريخ التعاقد\", type date}, {\"التصنيف\", type text}, {\"المورد\", type text}, {\"المصدر\", type text}, {\"شركة التعاقد\", type text}, {\"رقم العقد\", type text}, {\"الكمية\", type number}, {\"بريم التعاقد\", Currency.Type}, {\"بورصة التعاقد\", type date},  {\"الشحن\", type text}, {\"قيمة الشحن\", type number}, {\"ملاحظات التسجيل\", type text}, {\"موقف العقد\", type text}, {\"متوقع سداد\", type date}, {\"سعر CIF متوقع\", type number}}),\n    #\"دمج مع جدول الاصناف\" = Table.NestedJoin(#\"تغير نوع البيانات\", {\"التصنيف\"}, الاصناف, {\"اسم الصنف\"}, \"الاصناف\", JoinKind.LeftOuter),\n    #\"توسيع مع جدول الاصناف\" = Table.ExpandTableColumn(#\"دمج مع جدول الاصناف\", \"الاصناف\", {\"كود الصنف\"}, {\"كود الصنف\"}),\n    tfy_wb = Excel.Workbook(File.Contents(\"C:\\Users\\Aleman\\Desktop\\عقود الاستيراد - 2026 - جديد.xlsm\"), null, true),\n    tfy_sel = Table.SelectRows(tfy_wb, each [Kind] = \"Sheet\" and [Name] = \"تفصيلى\"),\n    tfy_src = tfy_sel{0}[Data],\n    tfy_ph = Table.PromoteHeaders(tfy_src, [PromoteAllScalars=true]),\n    tfy_typed = Table.TransformColumnTypes(tfy_ph,{{\"الرقم داخلي\", type text}}),\n    tfy_grp = Table.Group(tfy_typed, {\"الرقم داخلي\"}, {{\"الباخرة\", each List.Min([الباخرة]), type any}, {\"ميناء الوصول\", each List.Min([ميناء الوصول]), type any}, {\"وصول متوقع\", each List.Min([وصول متوقع]), type any}, {\"بداية تشغيل\", each List.Min([بداية تشغيل]), type any}, {\"مدة التحميل\", each List.Min([مدة التحميل]), type any}, {\"نهاية تشغيل\", each List.Min([نهاية تشغيل]), type any}, {\"موقف المركب\", each List.Min([موقف المركب]), type any}}),\n    tfy_join = Table.NestedJoin(#\"توسيع مع جدول الاصناف\", {\"الرقم داخلي\"}, tfy_grp, {\"الرقم داخلي\"}, \"تفصيلى\", JoinKind.LeftOuter),\n    tfy_exp = Table.ExpandTableColumn(tfy_join, \"تفصيلى\", {\"وصول متوقع\", \"الباخرة\", \"ميناء الوصول\", \"بداية تشغيل\", \"مدة التحميل\", \"نهاية تشغيل\", \"موقف المركب\"}, {\"وصول متوقع\", \"الباخرة\", \"ميناء الوصول\", \"بداية تشغيل\", \"مدة التحميل\", \"نهاية تشغيل\", \"موقف المركب\"}),\n    tfy_types = Table.TransformColumnTypes(tfy_exp,{{\"وصول متوقع\", type date}, {\"الباخرة\", type text}, {\"ميناء الوصول\", type text}, {\"بداية تشغيل\", type date}, {\"مدة التحميل\", Int64.Type}, {\"نهاية تشغيل\", type date}, {\"موقف المركب\", type text}}),\n    #\"اضافة عمود شهر كميات\" = Table.AddColumn(tfy_types, \"شهر كميات\", each \"كميات  \" & Date.ToText([وصول متوقع], \"MM-yy\")),\n    #\"اضافة عمود شهر عربى\" = Table.AddColumn(#\"اضافة عمود شهر كميات\", \"شهر عربي\", each Date.ToText([وصول متوقع], [Format=\"MMMM - yy\", Culture=\"ar-EG\"]), type text),\n    #\"اضافة عمود البريم CIF\" = Table.AddColumn(#\"اضافة عمود شهر عربى\", \"البريم CIF\", each if [الشحن] = \"FOB\" then ([قيمة الشحن] / 0.393685) + [بريم التعاقد] \nelse if [الشحن] = \"CIF\" then [بريم التعاقد] \nelse null, type number),\n    #\"دمج مع جدول الربط\" = Table.NestedJoin(#\"اضافة عمود البريم CIF\", {\"الرقم داخلي\"}, الربط, {\"الرقم الداخلي\"}, \"الربط\", JoinKind.LeftOuter),\n    #\"توسيع مع جدول الربط\" = Table.AggregateTableColumn(#\"دمج مع جدول الربط\", \"الربط\", {{\"كمية الربط\", List.Sum, \"Sum of كمية الربط\", Int64.Type}, {\"سعر البورصة\", List.Average, \"Average of سعر البورصة\", type number},{\"سعر الربط\", List.Average, \"Average of سعر الربط\", type number}, {\"بورصة الربط\", List.Max, \"Max of بورصة الربط\", type date}}),\n    #\"دمج مع جدول السداد\" = Table.NestedJoin(#\"توسيع مع جدول الربط\", {\"الرقم داخلي\"}, السداد, {\"الرقم الداخلي\"}, \"السداد\", JoinKind.LeftOuter),\n    #\"توسيع مع جدول السداد\" = Table.AggregateTableColumn(#\"دمج مع جدول السداد\", \"السداد\", {{\"كمية السداد\", List.Sum, \"Sum of كمية السداد\", Int64.Type}, {\"سعر السداد\", List.Average, \"Average of سعر السداد\", type number },{\"موقف السداد\", List.First, \"موقف سداد\", type text}}),\n    #\"اضافة عمود السعر CIF\" = Table.AddColumn(#\"توسيع مع جدول السداد\", \"السعر CIF\", each [Average of سعر السداد]+[قيمة الشحن], type number),\n    #\"دمج مع جدول التحميل\" = Table.NestedJoin(#\"اضافة عمود السعر CIF\", {\"الرقم داخلي\"}, التحميل, {\"الرقم الداخلي\"}, \"التحميل\", JoinKind.LeftOuter),\n    #\"توسيع مج جدول التحميل\" = Table.AggregateTableColumn(#\"دمج مع جدول التحميل\", \"التحميل\", {{\"كمية التحميل\", List.Sum, \"Sum of كمية التحميل\", type number}}),\n    #\"تغير النال الى زيرو\" = Table.ReplaceValue(#\"توسيع مج جدول التحميل\",null,0,Replacer.ReplaceValue,{\"Sum of كمية الربط\", \"Sum of كمية السداد\", \"Sum of كمية التحميل\"}),\n    #\"اضافة عمود كمية ربط تقديرى\" = Table.AddColumn(#\"تغير النال الى زيرو\", \"كمية الربط تقديرى\", each if [Sum of كمية الربط] = null or [الكمية] = null then 0\nelse if [Sum of كمية الربط] > [الكمية] then [الكمية] \nelse if Number.Abs([Sum of كمية الربط] - [الكمية]) <= 150 then [الكمية] \nelse [Sum of كمية الربط] , type number ),\n    #\"اضافة عمود موقف التسعير\" = Table.AddColumn(#\"اضافة عمود كمية ربط تقديرى\", \"موقف التسعير\", each if [Sum of كمية الربط] = null or [Sum of كمية الربط] = 0 then null \nelse if Number.From([Sum of كمية الربط]) > Number.From([الكمية]) then \"مسعر بالكامل\" \nelse if (Number.RoundUp(Number.From([Sum of كمية الربط]) / 1000) * 1000) = (Number.RoundUp(Number.From([الكمية]) / 1000) * 1000) then \"مسعر بالكامل\" \nelse if Number.From([Sum of كمية الربط]) < (Number.RoundUp(Number.From([الكمية]) / 1000) * 1000) then \"مسعر جزئى\" else null, type text),\n    #\"اضافة عمود موقف السداد\" = Table.AddColumn(#\"اضافة عمود موقف التسعير\", \"موقف السداد\", each if [موقف سداد] = \"منتظر\" then null\nelse if [Sum of كمية السداد] = null or [Sum of كمية السداد] = 0 then null \nelse if Number.From([Sum of كمية السداد]) > Number.From([الكمية]) then \"مسدد بالكامل\" \nelse if (Number.RoundUp(Number.From([Sum of كمية السداد]) / 1000) * 1000) = (Number.RoundUp(Number.From([الكمية]) / 1000) * 1000) then \"مسدد بالكامل\" \nelse if Number.From([Sum of كمية السداد]) < (Number.RoundUp(Number.From([الكمية]) / 1000) * 1000) then \"مسدد جزئى\" \nelse null),\n    #\"اضافة عمود كمية المطلوب سداده\" = Table.AddColumn(#\"اضافة عمود موقف السداد\", \"كمية المطلوب سداده\", each if [موقف سداد] = \"منتظر\" then [Sum of كمية السداد]\nelse if ([الكمية] - [Sum of كمية السداد]) < 200 then 0 \nelse [الكمية] - [Sum of كمية السداد]),\n    #\"اضافة عمود قيمة المطلوب سداده\" = Table.AddColumn(#\"اضافة عمود كمية المطلوب سداده\", \"قيمة المطلوب سداده\", each [سعر CIF متوقع]*[كمية المطلوب سداده], type number ),\n    #\"اضافة عمود حالة التجميع\" = Table.AddColumn(#\"اضافة عمود قيمة المطلوب سداده\", \"حالة التجميع\", each if [موقف العقد] <> \"FINISH\" and [التصنيف] = \"الصويا\" then \"SOYA - \" & Text.From([سعر CIF متوقع])\nelse if [التصنيف] <> \"الصويا\" then [الرقم داخلي]\nelse \"مستبعد\", type text )\nin #\"اضافة عمود حالة التجميع\"","State":1,"Type":4,"PartitionStorageID":706,"Mode":2,"DataView":3,"ModifiedTime":"/Date(1790844821690)/","RefreshedTime":"/Date(1791176703416)/","SystemFlags":0,"ErrorMessage":null,"RetainDataTillForceCalculate":false,"RangeStart":null,"RangeEnd":null,"RangeGranularity":-1,"RefreshBookmark":null,"QueryGroupID":null,"ExpressionSourceID":null,"MAttributes":null}
+{"ID":214,"TableID":16,"Name":"السداد","Description":null,"DataSourceID":null,"QueryDefinition":"let\n    Source = Excel.Workbook(File.Contents(\"C:\\Users\\Aleman\\Desktop\\عقود الاستيراد - 2026 - جديد.xlsm\"), null, true){[Name=\"السداد\"]}[Data],\n    #\"Promoted Headers\" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),\n    #\"Changed Type\" = Table.TransformColumnTypes(#\"Promoted Headers\",{{\"الرقم الداخلي\", type text}, {\"تاريخ السداد\", type date}, {\"شركة السداد\", type text}, {\"الصنف\", type text}, {\"المورد\", type text}, {\"رقم العقد\", type text}, {\"الشركة الداخلية\", type text}, {\"نوع السداد\", type text}, {\"نوع السعر\", type text}, {\"كمية السداد\", type number}, {\"سعر السداد\", type number}, {\"ريت السداد\", type number}, {\"مسئول السداد\", type text}, {\"ملاحظات السداد\", type text}, {\"موقف السداد\", type text}})\nin\n    #\"Changed Type\"","State":1,"Type":4,"PartitionStorageID":985,"Mode":2,"DataView":3,"ModifiedTime":"/Date(1790233736306)/","RefreshedTime":"/Date(1791176699910)/","SystemFlags":0,"ErrorMessage":null,"RetainDataTillForceCalculate":false,"RangeStart":null,"RangeEnd":null,"RangeGranularity":-1,"RefreshBookmark":null,"QueryGroupID":null,"ExpressionSourceID":null,"MAttributes":null}
+{"ID":215,"TableID":19,"Name":"التحميل","Description":null,"DataSourceID":null,"QueryDefinition":"let\n    Source = Excel.Workbook(File.Contents(\"C:\\Users\\Aleman\\Desktop\\عقود الاستيراد - 2026 - جديد.xlsm\"), null, true){[Name=\"التحميل\"]}[Data],\n    #\"Promoted Headers\" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),\n    #\"Changed Type\" = Table.TransformColumnTypes(#\"Promoted Headers\",{{\"الرقم الداخلي\", type text}, {\"تاريخ التحميل\", type text}, {\"رقم العقد\", type text}, {\"الصنف\", type text}, {\"اسم المركب\", type text}, {\"نوع التحميل\", type text}, {\"كمية التحميل\", type number}, {\"ملاحظات التحميل\", type text}})\nin\n    #\"Changed Type\"","State":1,"Type":4,"PartitionStorageID":1069,"Mode":2,"DataView":3,"ModifiedTime":"/Date(1790233736306)/","RefreshedTime":"/Date(1791176699906)/","SystemFlags":0,"ErrorMessage":null,"RetainDataTillForceCalculate":false,"RangeStart":null,"RangeEnd":null,"RangeGranularity":-1,"RefreshBookmark":null,"QueryGroupID":null,"ExpressionSourceID":null,"MAttributes":null}
+{"ID":216,"TableID":22,"Name":"الربط","Description":null,"DataSourceID":null,"QueryDefinition":"let\n    Source = Excel.Workbook(File.Contents(\"C:\\Users\\Aleman\\Desktop\\عقود الاستيراد - 2026 - جديد.xlsm\"), null, true){[Name=\"الربط\"]}[Data],\n    #\"Promoted Headers\" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),\n    #\"Changed Type\" = Table.TransformColumnTypes(#\"Promoted Headers\",{{\"الرقم الداخلي\", type text}, {\"تاريخ الربط\", type date}, {\"المورد\", type text}, {\"رقم العقد\", type text}, {\"الصنف\", type text}, {\"بورصة التعاقد\", type date}, {\"عدد العقود\", Int64.Type}, {\"كمية الربط\", Int64.Type}, {\"سعر البورصة\", type number}, {\"بورصة الربط\", type date}, {\"بريم الربط\", type number}, {\"سعر الربط\", type number}, {\"ملاحظات الربط\", type text}}),\n    #\"Added Index\" = Table.AddIndexColumn(#\"Changed Type\", \"Index\", 1, 1, Int64.Type)\nin\n    #\"Added Index\"","State":1,"Type":4,"PartitionStorageID":1123,"Mode":2,"DataView":3,"ModifiedTime":"/Date(1790233736306)/","RefreshedTime":"/Date(1791176699910)/","SystemFlags":0,"ErrorMessage":null,"RetainDataTillForceCalculate":false,"RangeStart":null,"RangeEnd":null,"RangeGranularity":-1,"RefreshBookmark":null,"QueryGroupID":null,"ExpressionSourceID":null,"MAttributes":null}
+{"ID":217,"TableID":25,"Name":"الارصدة","Description":null,"DataSourceID":null,"QueryDefinition":"let\n    Source = Excel.Workbook(File.Contents(\"C:\\Users\\Aleman\\Desktop\\عقود الاستيراد - 2026 - جديد.xlsm\"), null, true){[Name=\"الارصدة\"]}[Data],\n    #\"Promoted Headers\" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),\n    #\"Changed Type\" = Table.TransformColumnTypes(#\"Promoted Headers\",{{\"تاريخ التقرير\", type date}, {\"كود الصنف\", Int64.Type}, {\"اسم الصـــــــنف\", type text}, {\"الوحدة\", type text}, {\" مــوقع#(lf) الـسواقي \", Int64.Type}, {\" مــوقع #(lf)الــواحة \", Int64.Type}, {\" مــوقع #(lf)العامرية \", Int64.Type}, {\" مــوقع #(lf)الصالحية \", type number}, {\"اجمالى الرصيد\", Int64.Type}, {\"معدل #(lf)الاستهلاك \", Currency.Type}, {\"   يكفى لمدة (بالايام)\", type number}, {\"حتي تاريخ\", type date}, {\"الاستهلاك\", type number}, {\"اللوط\", type number}, {\"تعاقدات إضافات\", Int64.Type}, {\"ميناء إضافات\", type number}}),\n    #\"Merged Queries\" = Table.NestedJoin(#\"Changed Type\", {\"كود الصنف\"}, الاصناف, {\"كود الصنف\"}, \"الاصناف\", JoinKind.LeftOuter),\n    #\"Expanded الاصناف\" = Table.ExpandTableColumn(#\"Merged Queries\", \"الاصناف\", {\"اسم الصنف\", \"التوجية\"}, {\"التصنيف\", \"التوجية\"})\nin\n    #\"Expanded الاصناف\"","State":1,"Type":4,"PartitionStorageID":1222,"Mode":2,"DataView":3,"ModifiedTime":"/Date(1790233736306)/","RefreshedTime":"/Date(1791176699930)/","SystemFlags":0,"ErrorMessage":null,"RetainDataTillForceCalculate":false,"RangeStart":null,"RangeEnd":null,"RangeGranularity":-1,"RefreshBookmark":null,"QueryGroupID":null,"ExpressionSourceID":null,"MAttributes":null}
+{"ID":218,"TableID":28,"Name":"الرولينج","Description":null,"DataSourceID":null,"QueryDefinition":"let\n    Source = Excel.Workbook(File.Contents(\"C:\\Users\\Aleman\\Desktop\\عقود الاستيراد - 2026 - جديد.xlsm\"), null, true){[Name=\"الرولينج\"]}[Data],\n    #\"Changed Type\" = Table.TransformColumnTypes(Source,{{\"الرقم الداخلي\", type text}, {\"تاريخ الترويل\", type datetime}, {\"رقم العقد\", type any}, {\"المورد\", type text}, {\"الصنف\", type text}, {\"كمية الترويل\", type number}, {\"بورصة التعاقد\", type date}, {\"بورصة الربط\", type date}, {\"بورصة سابقة\", type date}, {\"بورصة الرولينج\", type date}, {\"سعر الرولينج\", type number}, {\"ملاحظات الرولينج\", type any}})\nin\n    #\"Changed Type\"","State":1,"Type":4,"PartitionStorageID":1319,"Mode":2,"DataView":3,"ModifiedTime":"/Date(1790233736306)/","RefreshedTime":"/Date(1791176699910)/","SystemFlags":0,"ErrorMessage":null,"RetainDataTillForceCalculate":false,"RangeStart":null,"RangeEnd":null,"RangeGranularity":-1,"RefreshBookmark":null,"QueryGroupID":null,"ExpressionSourceID":null,"MAttributes":null}
+{"ID":220,"TableID":34,"Name":"الافراج","Description":null,"DataSourceID":null,"QueryDefinition":"let\n    Source = Excel.Workbook(File.Contents(\"C:\\Users\\Aleman\\Desktop\\عقود الاستيراد - 2026 - جديد.xlsm\"), null, true){[Name=\"الافراج\"]}[Data],\n    #\"Promoted Headers\" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),\n    #\"Changed Type\" = Table.TransformColumnTypes(#\"Promoted Headers\",{{\"الرقم الداخلي\", type text}, {\"تاريخ الافراج\", type datetime}, {\"رقم العقد\", type text}, {\"الصنف\", type text}, {\"اسم المركب\", type text}, {\"كمية الافراج\", type number}})\nin\n    #\"Changed Type\"","State":1,"Type":4,"PartitionStorageID":1443,"Mode":2,"DataView":3,"ModifiedTime":"/Date(1790233736306)/","RefreshedTime":"/Date(1791176699890)/","SystemFlags":0,"ErrorMessage":null,"RetainDataTillForceCalculate":false,"RangeStart":null,"RangeEnd":null,"RangeGranularity":-1,"RefreshBookmark":null,"QueryGroupID":null,"ExpressionSourceID":null,"MAttributes":null}
+{"ID":221,"TableID":37,"Name":"بيع_خارجى","Description":null,"DataSourceID":null,"QueryDefinition":"let\n    Source = Excel.Workbook(File.Contents(\"C:\\Users\\Aleman\\Desktop\\عقود الاستيراد - 2026 - جديد.xlsm\"), null, true){[Name=\"بيع_خارجى\"]}[Data],\n    #\"Changed Type\" = Table.TransformColumnTypes(Source,{{\"الرقم الداخلي\", type text}, {\"تاريخ البيع\", type datetime}, {\"رقم العقد\", type text}, {\"الصنف\", type text}, {\"اسم المركب\", type text}, {\"كمية المبيعات\", Int64.Type}})\nin\n    #\"Changed Type\"","State":1,"Type":4,"PartitionStorageID":1492,"Mode":2,"DataView":3,"ModifiedTime":"/Date(1790233736306)/","RefreshedTime":"/Date(1791176699900)/","SystemFlags":0,"ErrorMessage":null,"RetainDataTillForceCalculate":false,"RangeStart":null,"RangeEnd":null,"RangeGranularity":-1,"RefreshBookmark":null,"QueryGroupID":null,"ExpressionSourceID":null,"MAttributes":null}
+
+=== COLUMNS ===
+
+##### الاصناف #####
+  - undefined  [type=undefined dtype=6] KEY HIDDEN
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+
+##### تسجيل_العقود #####
+  - undefined  [type=undefined dtype=6] KEY HIDDEN
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+        = FORMAT('تسجيل_العقود'[وصول متوقع], "MM - yyyy")
+  - undefined  [type=undefined dtype=1]
+        = MONTH([متوقع سداد])
+  - undefined  [type=undefined dtype=1]
+        = SWITCH( MONTH([متوقع سداد]), 1, "يناير", 2, "فبراير", 3, "مارس", 4, "أبريل", 5, "مايو", 6, "يونيو", 7, "يوليو", 8, "أغسطس", 9, "سبتمبر", 10, "أكتوبر", 11, "نوفمبر", 12, "ديسمبر" ) & " - " & FORMAT([متوقع سداد], "yy")
+  - undefined  [type=undefined dtype=1] HIDDEN
+        = MONTH([وصول متوقع])
+  - undefined  [type=undefined dtype=1]
+        = YEAR('تسجيل_العقود'[وصول متوقع]) * 10000 + MONTH('تسجيل_العقود'[وصول متوقع]) * 100 + DAY('تسجيل_العقود'[وصول متوقع])&[AUTO]&[الرقم داخلي]
+  - undefined  [type=undefined dtype=1] HIDDEN
+        = MONTH([بداية تشغيل])
+  - undefined  [type=undefined dtype=1]
+        = FORMAT([بداية تشغيل], "MMM")
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=6]
+        = IF( ISBLANK([وصول متوقع]), BLANK(), INT(FORMAT([وصول متوقع], "YYYYMM")) )
+  - undefined  [type=undefined dtype=1]
+        = IF( ISBLANK([متوقع سداد]), BLANK(), INT(FORMAT([متوقع سداد], "YYYYMM")) )
+  - undefined  [type=undefined dtype=2]
+
+##### السداد #####
+  - undefined  [type=undefined dtype=6] KEY HIDDEN
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+
+##### التحميل #####
+  - undefined  [type=undefined dtype=6] KEY HIDDEN
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=2]
+
+##### الربط #####
+  - undefined  [type=undefined dtype=6] KEY HIDDEN
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=1]
+        = CALCULATE( SUM('الربط'[كمية الربط]), FILTER( ALL('الربط'), 'الربط'[الصنف] = EARLIER('الربط'[الصنف]) && 'الربط'[Index] >= EARLIER('الربط'[Index]) ) )
+  - undefined  [type=undefined dtype=1]
+        = [الكمية التراكمية]-[كمية الربط]
+  - undefined  [type=undefined dtype=2]
+
+##### الارصدة #####
+  - undefined  [type=undefined dtype=6] KEY HIDDEN
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=10]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=1]
+        = [اجمالى الرصيد]+[ميناء إضافات]
+  - undefined  [type=undefined dtype=1]
+        = VAR DaysAvailable = [المتاح يكفى] RETURN TODAY() + DaysAvailable
+  - undefined  [type=undefined dtype=1]
+        = [كمية المتاح اضافات]+[تعاقدات إضافات]
+  - undefined  [type=undefined dtype=1]
+        = VAR DaysAvailable = [الاجمالى يكفى] RETURN TODAY() + DaysAvailable
+  - undefined  [type=undefined dtype=1]
+        = DIVIDE([كمية المتاح اضافات],'الارصدة'[الاستهلاك])
+  - undefined  [type=undefined dtype=1]
+        = DIVIDE([الاجمالى الكلى],'الارصدة'[الاستهلاك])
+  - undefined  [type=undefined dtype=1]
+        = INT('الارصدة'[المتاح يكفى]) & " DAY " & FORMAT('الارصدة'[المتاح يكفى حتى], "YYYY-MM-DD")
+  - undefined  [type=undefined dtype=1]
+        = INT('الارصدة'[الاجمالى يكفى]) & " DAY " & FORMAT('الارصدة'[الاجمالى يكفى حتى], "YYYY-MM-DD")
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=6]
+  - undefined  [type=undefined dtype=6]
+        = [الريت اليومى]*[السعر بالدولار]+[المصاريف]
+  - undefined  [type=undefined dtype=1]
+        = [سعر السوق]-[تكلفة حالية]
+
+##### الرولينج #####
+  - undefined  [type=undefined dtype=6] KEY HIDDEN
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=2]
+
+##### الافراج #####
+  - undefined  [type=undefined dtype=6] KEY HIDDEN
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=8]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+
+##### بيع_خارجى #####
+  - undefined  [type=undefined dtype=6] KEY HIDDEN
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=9]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=2]
+  - undefined  [type=undefined dtype=6]
+
+=== MEASURES ===
+
+##### تسجيل_العقود #####
+  * Active ما تم دفعه وفتحه فعليا (السداد)
+        = CALCULATE(
+    [كمية سداد],
+    'تسجيل_العقود'[موقف العقد] <> "FINISH"
+)
+  * Active ما تم سحبه
+        = CALCULATE(
+    [كمية تحميل],
+    'تسجيل_العقود'[موقف العقد]  <> "FINISH"
+)
+  * Active المتبقى من الكمية المفتوحة fmt=#,0
+        = [Active ما تم دفعه وفتحه فعليا (السداد)]-[Active ما تم سحبه]
+  * Active رصيد المصانع fmt=#,0
+        = CALCULATE(
+    [كمية رصيد],
+    TREATAS(
+        VALUES('تسجيل_العقود'[التصنيف]),
+        'الارصدة'[التصنيف]
+    )
+)
+  * Active الكميات المدفوعة بدون تسعير fmt=#,0
+        = [Active ما تم دفعه وفتحه فعليا (السداد)]-[Active كمية ربط تقديرى]
+  * Active رصيد التغطية fmt=#,0
+        = ([Active المتبقى من الكمية المفتوحة]+[Active رصيد المصانع])-[Active الكميات المدفوعة بدون تسعير]
+  * Active Position
+        = IF([Active رصيد التغطية]<0,"Position SHORT","Position LONG")
+  * Active عدد الايام fmt=#,0
+        = CALCULATE( 
+    SUMX(
+        'الارصدة',
+        DIVIDE( CALCULATE([Active رصيد التغطية]), 'الارصدة'[الاستهلاك] )
+    ), 
+    TREATAS( VALUES('تسجيل_العقود'[التصنيف]), 'الارصدة'[التصنيف] ),
+    KEEPFILTERS( 'تسجيل_العقود'[موقف العقد] <> "FINISH" ) 
+)
+  * Active عدد العقود fmt=#,0
+        = CALCULATE( 
+    SUMX(
+        'الارصدة',
+        DIVIDE( CALCULATE([Active رصيد التغطية]), 'الارصدة'[اللوط] )
+    ), 
+    TREATAS( VALUES('تسجيل_العقود'[التصنيف]), 'الارصدة'[التصنيف] ),
+    KEEPFILTERS( 'تسجيل_العقود'[موقف العقد] <> "FINISH" ) 
+)
+  * Activeكمية مراكب الذرة fmt=#,0
+        = CALCULATE(
+    [كمية التعاقد], 
+   'تسجيل_العقود'[موقف العقد] <> "FINISH",
+    'تسجيل_العقود'[التصنيف] = "الــــــــــذرة"
+)
+  * كمية التعاقد
+        = SUM([الكمية])
+  * Active عدد مراكب الذرة
+        = CALCULATE(
+    COUNTROWS('تسجيل_العقود'), 
+    'تسجيل_العقود'[موقف العقد] <> "FINISH",
+    'تسجيل_العقود'[التصنيف] = "الــــــــــذرة"
+)
+  * Activeاجمالي كميات مسعرة الذرة fmt=#,0
+        = CALCULATE(
+    [Active رصيد التغطية], 
+    'تسجيل_العقود'[التصنيف] = "الــــــــــذرة"
+)
+  * Active كميات مسعرة بدون سداد الذرة fmt=#,0
+        = CALCULATE(
+    [Active الكميات المدفوعة بدون تسعير], 
+    'تسجيل_العقود'[التصنيف] = "الــــــــــذرة"
+)
+  * Active كمية المطلوب سداده fmt=0
+        = 
+CALCULATE (
+    SUM('تسجيل_العقود'[كمية المطلوب سداده]),
+    'تسجيل_العقود'[حالة التجميع] <> "مستبعد",
+    'تسجيل_العقود'[موقف العقد] <> "FINISH",
+    FILTER (
+        VALUES ( 'تسجيل_العقود' ),
+        [كمية المطلوب سداده] > 200
+    )
+)
+
+  * كمية مطلوب سدادها
+        = SUM([كمية المطلوب سداده])
+  * Active سعر CIF المتوقع الفعلي
+        = 
+CALCULATE (
+    SELECTEDVALUE('تسجيل_العقود'[سعر CIF متوقع]),
+    'تسجيل_العقود'[حالة التجميع] <> "مستبعد",
+    'تسجيل_العقود'[موقف العقد] <> "FINISH",
+    FILTER ( VALUES ( 'تسجيل_العقود' ), [كمية المطلوب سداده] > 200 )
+)
+
+  * Active كمية ربط تقديرى
+        = CALCULATE(
+    [ربط تقديرى],
+  'تسجيل_العقود'[موقف العقد] <> "FINISH"
+)
+  * ربط تقديرى
+        = SUM([كمية الربط تقديرى])
+  * Active كمية مدفوعة وغير مفتوحة fmt=#,0
+        = CALCULATE(
+   CALCULATE( [Active ما تم دفعه وفتحه فعليا (السداد)]-[Active ما تم الافراج عنه],
+  'تسجيل_العقود'[موقف العقد] = "UNDER"
+  || 'تسجيل_العقود'[موقف العقد] = "ACTIVE"
+))
+  * Active كمية مطلوب سدادها fmt=#,0
+        = 
+CALCULATE(
+    [كمية مطلوب سدادها],
+    'تسجيل_العقود'[موقف العقد] IN { "UNDER", "ACTIVE" },
+    'تسجيل_العقود'[موقف سداد] <> "منتظر"
+)
+
+  * Active كمية تعاقدات fmt=#,0
+        = CALCULATE(
+    [كمية التعاقد],
+  'تسجيل_العقود'[موقف العقد] = ""
+)
+  * Active رصيد متاح ميناء fmt=#,0
+        = IF(
+    [Active كمية مدفوعة وغير مفتوحة] = [Active المتبقى من الكمية المفتوحة],
+    BLANK(),
+    [Active المتبقى من الكمية المفتوحة]
+)-[Active كمية مدفوعة وغير مفتوحة]
+  * Active اجمالى الرصيد fmt=#,0
+        = IF (
+    ISBLANK ( [Active كمية مدفوعة وغير مفتوحة] ),
+    0,
+    [Active كمية مدفوعة وغير مفتوحة]
+)
+    + IF (
+        ISBLANK ( [Active كمية مطلوب سدادها] ),
+        0,
+        [Active كمية مطلوب سدادها]
+    )
+    + IF ( ISBLANK ( [Active كمية تعاقدات] ), 0, [Active كمية تعاقدات] )
+    + IF ( ISBLANK ( [Active رصيد متاح ميناء] ), 0, [Active رصيد متاح ميناء] )
+    + IF ( ISBLANK ( [Active رصيد المصانع] ), 0, [Active رصيد المصانع] )-[Activeما تم بيعه]
+  * Active كمية الاستهلاك
+        = CALCULATE(
+    SUM('الارصدة'[الاستهلاك]),
+    TREATAS(
+        VALUES('تسجيل_العقود'[التصنيف]),
+        'الارصدة'[التصنيف]
+    )
+)
+  * Active اجمالى المتاح
+        = [Active رصيد متاح ميناء]+[Active رصيد المصانع]
+  * Active المتاح يكفى fmt=#,0
+        = DIVIDE([Active اجمالى المتاح],[Active كمية الاستهلاك])
+  * Active الاجمالى يكفى fmt=0
+        = DIVIDE([Active اجمالى الرصيد],[Active كمية الاستهلاك])
+  * Active ما تم الافراج عنه
+        = CALCULATE(
+    [كمية افراج],
+  'تسجيل_العقود'[موقف العقد] <> "FINISH"
+)
+  * Activeما تم بيعه fmt=#,0
+        = CALCULATE(
+    [كمية بيع],
+  'تسجيل_العقود'[موقف العقد] <> "FINISH"
+)
+  * Sum of قيمة المطلوب سداده
+        = 
+VAR CurrentSum = SUM('تسجيل_العقود'[قيمة المطلوب سداده])
+RETURN
+IF(CurrentSum = 0, BLANK(), CurrentSum)
+
+  * موقف ربط الخامات
+        = 
+VAR Corn =
+    CALCULATE(
+        [Active رصيد التغطية],
+        'تسجيل_العقود'[التصنيف] = "الذرة"
+    )
+
+VAR Soy =
+    CALCULATE(
+        [Active رصيد التغطية],
+        'تسجيل_العقود'[التصنيف] = "الصويا"
+    )
+
+VAR Seed =
+    CALCULATE(
+        [Active رصيد التغطية],
+        'تسجيل_العقود'[التصنيف] = "البذرة"
+    )
+
+VAR CornArrow =
+    IF(Corn >= 0, "LO" , "SH")
+
+VAR SoyArrow =
+    IF(Soy >= 0, "LO" , "SH")
+
+VAR SeedArrow =
+    IF(Seed >= 0, "LO" , "SH")
+
+RETURN
+    "الذرة " & CornArrow &
+    "     الصويا " & SoyArrow &
+    "     البذرة " & SeedArrow
+  * موقف ربط الخامات لون
+        = 
+VAR Corn =
+    CALCULATE(
+        [Active رصيد التغطية],
+        'تسجيل_العقود'[التصنيف] = "الذرة"
+    )
+
+VAR Soy =
+    CALCULATE(
+        [Active رصيد التغطية],
+        'تسجيل_العقود'[التصنيف] = "الصويا"
+    )
+
+VAR Seed =
+    CALCULATE(
+        [Active رصيد التغطية],
+        'تسجيل_العقود'[التصنيف] = "البذرة"
+    )
+
+VAR ShortCount =
+    IF(Corn < 0, 1, 0) +
+    IF(Soy < 0, 1, 0) +
+    IF(Seed < 0, 1, 0)
+
+RETURN
+    IF(ShortCount > 0, "#F2ADAD","#B7D1C4")
+  * مسمى كميات مسعرة
+        = 
+VAR CurrentValue = [Active كميات مسعرة بدون سداد الذرة]
+RETURN
+    SWITCH(
+        TRUE(),
+        ISBLANK(CurrentValue), "لا توجد بيانات",
+        CurrentValue >= 0, "كميات مسددة بدون تسعير",
+        CurrentValue < 0, "كميات مسعرة بدون سداد"
+    )
+
+  * صافي البريم
+        = 
+ [صافي البريم النهائي]+ COALESCE(SELECTEDVALUE('تسجيل_العقود'[قيمة الشحن])/0.393685, 0
+    
+    
+)
+  * المتاح خامات يكفى حتى fmt=Short Date
+        = 
+VAR DaysCount = INT([Active المتاح يكفى])
+RETURN
+    TODAY() + DaysCount
+
+  * الاجمالى خامات يكفى حتى fmt=Short Date
+        = 
+VAR DaysCount = INT([Active الاجمالى يكفى])
+RETURN
+    TODAY() + DaysCount
+
+  * أعلى قيمة بورصة fmt=mmmm\, yyyy
+        = 
+COALESCE(
+    -- الشرط الأول: جلب أكبر قيمة من جدول الرولينج
+    CALCULATE( MAX('الرولينج'[بورصة الرولينج]) ),
+    
+    -- الشرط الثاني: إذا كان الأول فارغاً، يجلب أكبر قيمة من جدول الربط
+    CALCULATE( MAX('الربط'[بورصة الربط]) ),
+    
+    -- الشرط الثالث: إذا كان الثاني فارغاً، يجلب أكبر قيمة من عمود بورصة التعاقد
+    CALCULATE( MAX('تسجيل_العقود'[بورصة التعاقد]) )
+)
+
+  * لون اعلى قيمة بورصة fmt=0
+        = MONTH([أعلى قيمة بورصة])
+
+  * صافي البريم النهائي
+        = 
+VAR CurrentInternalNo = SELECTEDVALUE('تسجيل_العقود'[الرقم داخلي])
+VAR CurrentCategory   = SELECTEDVALUE('تسجيل_العقود'[التصنيف])
+VAR OriginalPremium   = SELECTEDVALUE('تسجيل_العقود'[بريم التعاقد])
+
+-- 1. جلب بريم الربط الأساسي بشكل معزول (إن وُجد)
+VAR RabtPremium = 
+    CALCULATE(
+        AVERAGE('تسجيل_العقود'[بريم التعاقد]), 
+        FILTER(
+            ALL('تسجيل_العقود'), 
+            'تسجيل_العقود'[الرقم داخلي] = CurrentInternalNo && 'تسجيل_العقود'[التصنيف] = CurrentCategory
+        )
+    )
+
+-- 2. تحديد السعر الأساسي (الربط أولاً، وإلا التعاقد)
+VAR BasePremium = IF(ISBLANK(RabtPremium), OriginalPremium, RabtPremium)
+
+-- 3. حساب المتوسط المرجح التراكمي لكل بورصة رولينج مستقلة وعزلها تماماً
+VAR RollingCumulativeImpact = 
+    SUMX(
+        CALCULATETABLE(
+            DISTINCT('الرولينج'[بورصة الرولينج]),
+            FILTER(
+                ALL('الرولينج'),
+                'الرولينج'[الرقم الداخلي] = CurrentInternalNo && 'الرولينج'[الصنف] = CurrentCategory
+            )
+        ),
+        VAR CurrentBourse = 'الرولينج'[بورصة الرولينج]
+        RETURN
+        CALCULATE(
+            DIVIDE(
+                SUMX('الرولينج', 'الرولينج'[كمية الترويل] * 'الرولينج'[سعر الرولينج]),
+                SUM('الرولينج'[كمية الترويل]),
+                0
+            ),
+            FILTER(
+                ALL('الرولينج'),
+                'الرولينج'[الرقم الداخلي] = CurrentInternalNo && 
+                'الرولينج'[الصنف] = CurrentCategory && 
+                'الرولينج'[بورصة الرولينج] = CurrentBourse
+            )
+        )
+    )
+
+RETURN
+BasePremium + COALESCE(RollingCumulativeImpact, 0)
+
+  * الاجمالى خامات يكفى يوم  حتى تاريخ
+        = 
+INT('تسجيل_العقود'[Active الاجمالى يكفى]) & " DAY  " & FORMAT('تسجيل_العقود'[الاجمالى خامات يكفى حتى], "YYYY-MM-DD")
+  * المتاح خامات يكفى يوم  حتى تاريخ
+        = 
+INT('تسجيل_العقود'[Active المتاح يكفى]) & " DAY  " & FORMAT('تسجيل_العقود'[المتاح خامات يكفى حتى], "YYYY-MM-DD")
+  * لون شهر الوصول
+        = 
+VAR CurrentDate = MAX([وصول متوقع])
+VAR UniqueMonth = (YEAR(CurrentDate) * 12) + MONTH(CurrentDate)
+VAR ColorIndex = MOD(UniqueMonth, 5) 
+RETURN
+IF(
+    ISBLANK(CurrentDate), 
+    BLANK(),
+    SWITCH(
+        ColorIndex,
+        0, "#5DADE2", -- أزرق مائي واضح
+            1, "#48C9B0", -- أخضر فيروزي مميز
+            2, "#F4D03F", -- أصفر خردلي معتدل
+            3, "#EB984E", -- برتقالي هادئ
+            4, "#AF7AC5"  -- بنفسجي أوركيد مريح
+    )
+)
+
+  * لون فترة السداد
+        = 
+VAR CurrentDate = MAX([متوقع سداد])
+VAR UniqueMonth = (YEAR(CurrentDate) * 12) + MONTH(CurrentDate)
+VAR ColorIndex = MOD(UniqueMonth, 5) 
+RETURN
+IF(
+    ISBLANK(CurrentDate) || CurrentDate = 0, 
+    BLANK(),
+    FORMAT(
+        SWITCH(
+            ColorIndex,
+            0, "#5DADE2", -- أزرق مائي واضح
+            1, "#48C9B0", -- أخضر فيروزي مميز
+            2, "#F4D03F", -- أصفر خردلي معتدل
+            3, "#EB984E", -- برتقالي هادئ
+            4, "#AF7AC5"  -- بنفسجي أوركيد مريح
+        ),
+        "General Number"
+    )
+)
+
+
+##### السداد #####
+  * كمية سداد
+        = SUM([كمية السداد])
+
+##### التحميل #####
+  * كمية تحميل
+        = SUM([كمية التحميل])
+
+##### الارصدة #####
+  * كمية رصيد fmt=#,0
+        = SUM([اجمالى الرصيد])
+
+##### الافراج #####
+  * كمية افراج
+        = SUM([كمية الافراج])
+
+##### بيع_خارجى #####
+  * كمية بيع
+        = SUM([كمية المبيعات])

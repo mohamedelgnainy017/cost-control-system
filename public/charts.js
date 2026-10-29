@@ -142,7 +142,8 @@ function lineChart(host, series, { height = 250, fmt = fmtC, area = true, zero =
 
   /* سماكة الرأسية ~12px والتاريخ يُعرض يوم-شهر فقط — نُخفف الخطوة فقط إذا ضاق المكان:
      كلما زادت النقاط تُعرض كلها ما دامت متباعدة بلا تداخل */
-  const step = Math.max(1, Math.ceil(labels.length / Math.max(1, Math.floor(iw / (hasDate ? 15 : 34)))));
+  /* العنوان الرأسي «يوم-شهر» يشغل أفقياً قدر ارتفاع النص (~11px) ويكفيه ~20px حتى لا يتراكم */
+  const step = Math.max(1, Math.ceil(labels.length / Math.max(1, Math.floor(iw / (hasDate ? 20 : 34)))));
   labels.forEach((lb, i) => {
     if (i % step) return;
     const s = String(lb), isDate = ISO.test(s);
@@ -205,30 +206,17 @@ function resetSort() {
 let onTableFilter = null;
 
 /* انواع الفلترة المتاحة في رأس العمود */
-const TH_OPS = [
-  { id: 'contains', label: 'يحتوي على' },
-  { id: 'startswith', label: 'يبدأ بـ' },
-  { id: 'endswith', label: 'ينتهي بـ' },
-  { id: 'eq', label: 'يساوي' },
-  { id: 'ne', label: 'لا يساوي' },
-  { id: 'gt', label: 'أكبر من' },
-  { id: 'gte', label: 'أكبر من أو يساوي' },
-  { id: 'lt', label: 'أصغر من' },
-  { id: 'lte', label: 'أصغر من أو يساوي' },
-  { id: 'between', label: 'من / إلى' },
-  { id: 'in', label: 'واحد من قائمة' },
-  { id: 'notin', label: 'ليس من قائمة' },
-  { id: 'empty', label: 'فارغ' },
-  { id: 'notempty', label: 'غير فارغ' },
-];
-const TH_OP_GLYPH = { contains: '\u25be', startswith: '\u25b8', endswith: '\u25c2', eq: '=', ne: '\u2260', gt: '>', gte: '\u2265', lt: '<', lte: '\u2264', between: '\u2194', in: '\u2208', notin: '\u2209', empty: '\u2205', notempty: '\u2295' };
-const thOpLabel = id => { const o = TH_OPS.find(x => x.id === id); return o ? o.label : 'يحتوي على'; };
-
-/* هل قاعدة الفلتر فعّالة (لها قيمة)؟ */
+/* أدوات فلترة الأعمدة: عوامل مقارنة + رموزها */
+const TH_OP_GLYPH = { contains: '\u25be', startswith: '\u25b8', endswith: '\u25c2', eq: '=', ne: '\u2260', gt: '>', gte: '\u2265', lt: '<', lte: '\u2264', between: '\u2194', empty: '\u2205', notempty: '\u2295' };
+const TH_OP_LABEL = { contains: 'يحتوي على', startswith: 'يبدأ بـ', endswith: 'ينتهي بـ', eq: 'يساوي', ne: 'لا يساوي', gt: 'أكبر من', gte: 'أكبر من أو يساوي', lt: 'أصغر من', lte: 'أصغر من أو يساوي', between: 'من / إلى', empty: 'فارغ', notempty: 'غير فارغ' };
+const TH_ADV_OPS = ['contains', 'startswith', 'endswith', 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'empty', 'notempty'];
 function filterRuleActive(r) {
   if (!r) return false;
   if (typeof r === 'string') return r.trim() !== '';
-  const op = r.op || 'contains';
+  const op = r.op || 'in';
+  if (op === 'in' || op === 'notin') {
+    return Array.isArray(r.set) ? r.set.length > 0 : String(r.v || '').trim() !== '';
+  }
   if (op === 'empty' || op === 'notempty') return true;
   const v = String(r.v === null || r.v === undefined ? '' : r.v).trim();
   const v2 = String(r.v2 === null || r.v2 === undefined ? '' : r.v2).trim();
@@ -318,6 +306,11 @@ function matchRule(disp, rule) {
       return tblCmpVals(plain, lo) >= 0 && tblCmpVals(plain, hi) <= 0;
     }
     case 'in': case 'notin': {
+      if (Array.isArray(rule.set)) {
+        if (!rule.set.length) return true;
+        const hit = rule.set.some(x => tblCmpVals(plain, x) === 0);
+        return op === 'in' ? hit : !hit;
+      }
       const list = String(rule && rule.v !== null && rule.v !== undefined ? rule.v : '')
         .split(/[,،;]/).map(x => tblNorm(x)).filter(Boolean);
       if (!list.length) return true;
@@ -347,18 +340,147 @@ function thMenuScroll(e) {
   if (thMenu && e.target && (e.target === thMenu || (thMenu.contains && thMenu.contains(e.target)))) return;
   closeThMenu();
 }
-function openThMenu(btn, rule, onPick) {
+
+/* ------- قائمة قيم العمود المنسدلة: عرض القيم المختلفة واختيار منها ------- */
+function openThValueMenu(host, btn, key, col, rule, onPick) {
   if (thMenu && thMenu.__btn === btn) { closeThMenu(); return; }
   closeThMenu();
-  const m = document.createElement('div'); thMenu = m; m.className = 'thmenu'; m.__btn = btn;
-  TH_OPS.forEach(op => {
+  const rows = host.__rows || [];
+  const counts = new Map();
+  for (const r of rows) {
+    const raw = tblPlain(tblDisp(r, col));
+    const s = String(raw === null || raw === undefined ? '' : raw).trim();
+    const k = tblNorm(s) || '\u0000';
+    const e = counts.get(k) || { v: s, n: 0 };
+    e.n++;
+    counts.set(k, e);
+  }
+  let vals = [...counts.values()];
+  vals.sort((a, b) => tblCmpVals(a.v, b.v));
+  const m = document.createElement('div'); thMenu = m; m.className = 'thmenu thval-menu'; m.__btn = btn;
+  /* ---- بحث ---- */
+  const search = document.createElement('input');
+  search.className = 'thval-q'; search.placeholder = 'بحث في القيم...';
+  m.appendChild(search);
+  /* ---- قائمة القيم ---- */
+  const list = document.createElement('div'); list.className = 'thval-list';
+  m.appendChild(list);
+  function renderList(filter) {
+    list.textContent = '';
+    const frag = document.createDocumentFragment();
+    let shown = 0;
+    for (const v of vals) {
+      if (filter && !tblNorm(v.v).includes(tblNorm(filter))) continue;
+      if (shown >= 300) break;
+      shown++;
+      const lbl = document.createElement('label'); lbl.className = 'thval-item';
+      const cb = document.createElement('input'); cb.type = 'checkbox';
+      cb.checked = (rule.set || []).includes(v.v);
+      cb.addEventListener('change', () => {
+        const cur = new Set(rule.set || []);
+        if (cb.checked) cur.add(v.v); else cur.delete(v.v);
+        rule.set = [...cur];
+        rule.op = rule.set.length ? 'in' : 'contains';
+        rule.v = ''; rule.v2 = '';
+        onPick();
+      });
+      const span = document.createElement('span'); span.textContent = v.v || '(فارغ)';
+      const cnt = document.createElement('b'); cnt.className = 'thval-cnt'; cnt.textContent = String(v.n);
+      lbl.appendChild(cb); lbl.appendChild(span); lbl.appendChild(cnt);
+      frag.appendChild(lbl);
+    }
+    if (!shown) {
+      const d = document.createElement('div'); d.className = 'muted'; d.style.padding = '8px'; d.textContent = 'لا قيم مطابقة';
+      frag.appendChild(d);
+    }
+    list.appendChild(frag);
+  }
+  renderList('');
+  search.addEventListener('input', () => renderList(search.value));
+  search.addEventListener('click', e => e.stopPropagation());
+  search.addEventListener('mousedown', e => e.stopPropagation());
+  /* ---- إجراءات ---- */
+  const actions = document.createElement('div'); actions.className = 'thval-actions';
+  const selAll = document.createElement('button');
+  selAll.type = 'button'; selAll.className = 'thop-item'; selAll.textContent = 'الكل';
+  selAll.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); rule.set = vals.map(v => v.v); rule.op = 'in'; rule.v = ''; rule.v2 = ''; renderList(search.value); onPick(); });
+  const clrAll = document.createElement('button');
+  clrAll.type = 'button'; clrAll.className = 'thop-item thop-clear'; clrAll.textContent = '✕ فلتر';
+  clrAll.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); rule.set = []; rule.op = 'contains'; rule.v = ''; rule.v2 = ''; renderList(search.value); onPick(); });
+  actions.appendChild(selAll);
+  const advBtn = document.createElement('button');
+  advBtn.type = 'button'; advBtn.className = 'thop-item thval-adv-btn'; advBtn.textContent = 'متقدمة';
+  actions.appendChild(advBtn);
+  actions.appendChild(clrAll);
+  const sortClr = document.createElement('button');
+  sortClr.type = 'button'; sortClr.className = 'thop-item thop-clear'; sortClr.textContent = '✕ ترتيب';
+  sortClr.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); host.__sort = null; tablePaint(host); });
+  actions.appendChild(sortClr);
+  m.appendChild(actions);
+  const info = document.createElement('div'); info.className = 'thval-info';
+  info.textContent = vals.length + ' قيمة مختلفة';
+  m.appendChild(info);
+  /* ---- فلترة متقدمة (عرض منفصل) ---- */
+  const advBox = document.createElement('div'); advBox.className = 'thval-adv'; advBox.hidden = true;
+  /* عوامل المقارنة */
+  const opRow = document.createElement('div'); opRow.className = 'thval-ops';
+  advBox.appendChild(opRow);
+  TH_ADV_OPS.forEach(op => {
     const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'thop-item' + ((rule.op || 'contains') === op.id ? ' on' : '');
-    b.textContent = (TH_OP_GLYPH[op.id] || '') + '  ' + op.label;
-    b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); rule.op = op.id; closeThMenu(); onPick(); });
-    m.appendChild(b);
+    b.type = 'button'; b.className = 'thop-item thval-op' + ((rule.op || 'contains') === op ? ' on' : '');
+    b.textContent = (TH_OP_GLYPH[op] || '') + ' ' + TH_OP_LABEL[op];
+    b.addEventListener('click', e => {
+      e.preventDefault(); e.stopPropagation();
+      rule.op = op;
+      rule.set = [];
+      advBox.querySelectorAll('.thval-op').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      syncAdvInputs();
+      onPick();
+    });
+    opRow.appendChild(b);
   });
+  /* مربعات القيمة */
+  const in1 = document.createElement('input'); in1.className = 'thf'; in1.type = 'text';
+  in1.placeholder = 'القيمة';
+  const in2 = document.createElement('input'); in2.className = 'thf thf2'; in2.type = 'text'; in2.placeholder = 'إلى';
+  advBox.appendChild(in1); advBox.appendChild(in2);
+  function syncAdvInputs() {
+    const op = rule.op || 'contains';
+    const noVal = op === 'empty' || op === 'notempty';
+    in1.style.display = noVal ? 'none' : '';
+    in2.style.display = op === 'between' ? '' : 'none';
+    in1.placeholder = op === 'between' ? 'من' : 'القيمة';
+    in1.value = rule.v === null || rule.v === undefined ? '' : rule.v;
+    in2.value = rule.v2 === null || rule.v2 === undefined ? '' : rule.v2;
+  }
+  syncAdvInputs();
+  in1.addEventListener('input', () => { rule.v = in1.value; rule.set = []; onPick(); });
+  in2.addEventListener('input', () => { rule.v2 = in2.value; rule.set = []; onPick(); });
+  /* ---- تبديل العرض: قيم ↔ متقدم ---- */
+  const viewVals = document.createElement('div'); viewVals.className = 'thval-view';
+  const viewAdv = document.createElement('div'); viewAdv.className = 'thval-view'; viewAdv.hidden = true;
+  /* نقل العناصر إلى الحاويات */
+  [search, list, actions, info].forEach(el => { if (el.parentNode === m) m.removeChild(el); viewVals.appendChild(el); });
+  const backBtn = document.createElement('button');
+  backBtn.type = 'button'; backBtn.className = 'thop-item thval-back'; backBtn.textContent = '← رجوع للقيم';
+  if (advBox.parentNode === m) m.removeChild(advBox);
+  viewAdv.appendChild(backBtn);
+  viewAdv.appendChild(advBox);
+  m.appendChild(viewVals);
+  m.appendChild(viewAdv);
+  advBtn.addEventListener('click', e => {
+    e.preventDefault(); e.stopPropagation();
+    viewVals.hidden = true;
+    viewAdv.hidden = false;
+    syncAdvInputs();
+  });
+  backBtn.addEventListener('click', e => {
+    e.preventDefault(); e.stopPropagation();
+    viewAdv.hidden = true;
+    viewVals.hidden = false;
+  });
+  /* ---- positioning ---- */
   document.body.appendChild(m);
   const r = btn.getBoundingClientRect();
   const mw = m.offsetWidth, mh = m.offsetHeight;
@@ -389,19 +511,7 @@ function tableBuild(host) {
 
   const bar = document.createElement('div'); bar.className = 'tbar'; bar.hidden = true;
   const info = document.createElement('span'); info.className = 'tbar-i';
-  const clr = document.createElement('button');
-  clr.type = 'button'; clr.className = 'btn sm ghost'; clr.textContent = 'مسح الفلاتر';
-  clr.addEventListener('click', e => {
-    e.stopPropagation();
-    keys.forEach(k => {
-      const r = filt[k];
-      if (r && typeof r === 'object') { r.op = 'contains'; r.v = ''; r.v2 = ''; }
-      else filt[k] = { op: 'contains', v: '', v2: '' };
-    });
-    (host.__ths || []).forEach(th => th.__sync && th.__sync());
-    tablePaint(host); refetch();
-  });
-  bar.appendChild(info); bar.appendChild(clr);
+  bar.appendChild(info);
   host.__bar = bar; host.__barInfo = info;
 
   const tbl = document.createElement('table');
@@ -428,50 +538,25 @@ function tableBuild(host) {
     if (opts.filters !== false) {
       const key = keys[i];
       if (!filt[key] || typeof filt[key] !== 'object') {
-        filt[key] = { op: 'contains', v: (typeof filt[key] === 'string' ? filt[key] : ''), v2: '' };
+        filt[key] = { op: 'in', set: [] };
       }
       const rule = filt[key];
-      const wrapEl = document.createElement('div'); wrapEl.className = 'thfil';
-      const opBtn = document.createElement('button');
-      opBtn.type = 'button'; opBtn.className = 'thop';
-      const in1 = document.createElement('input');
-      in1.className = 'thf'; in1.type = 'text';
-      in1.setAttribute('aria-label', 'فلتر ' + c.t);
-      const in2 = document.createElement('input');
-      in2.className = 'thf thf2'; in2.type = 'text'; in2.placeholder = 'إلى';
-      function sync() {
-        const op = rule.op || 'contains';
-        opBtn.textContent = TH_OP_GLYPH[op] || '\u25be';
-        opBtn.title = 'نوع الفلتر: ' + thOpLabel(op);
-        opBtn.classList.toggle('on', op !== 'contains');
-        const noVal = op === 'empty' || op === 'notempty';
-        in1.style.display = noVal ? 'none' : '';
-        in2.style.display = op === 'between' ? '' : 'none';
-        in1.placeholder = op === 'between' ? 'من' : ((op === 'in' || op === 'notin') ? 'قيم بفاصلة' : 'فلتر');
-        in1.value = rule.v === null || rule.v === undefined ? '' : rule.v;
-        in2.value = rule.v2 === null || rule.v2 === undefined ? '' : rule.v2;
+      const fbtn = document.createElement('button');
+      fbtn.type = 'button'; fbtn.className = 'thfil-btn';
+      fbtn.innerHTML = '<span class="thfil-ic">▼</span>';
+      fbtn.title = 'فلتر: عرض قيم العمود والاختيار منها';
+      function syncF() {
+        const n = Array.isArray(rule.set) ? rule.set.length : 0;
+        const hasAdv = rule.op && rule.op !== 'in' && rule.op !== 'contains' && filterRuleActive(rule);
+        fbtn.classList.toggle('on', n > 0 || hasAdv);
       }
-      opBtn.addEventListener('click', e => {
+      fbtn.addEventListener('click', e => {
         e.preventDefault(); e.stopPropagation();
-        openThMenu(opBtn, rule, () => {
-          sync(); schedule();
-          /* نضع المؤشر في مربع القيمة حتى يكتب المستخدم مباشرة */
-          const op = rule.op || 'contains';
-          if (op !== 'empty' && op !== 'notempty') (op === 'between' ? in2 : in1).focus();
-        });
+        openThValueMenu(host, fbtn, key, c, rule, () => { syncF(); schedule(); });
       });
-      in1.addEventListener('input', () => { rule.v = in1.value; schedule(); });
-      in2.addEventListener('input', () => { rule.v2 = in2.value; schedule(); });
-      const keyEsc = e => {
-        if (e.key === 'Escape') { rule.op = 'contains'; rule.v = ''; rule.v2 = ''; sync(); tablePaint(host); refetch(); }
-        else if (e.key === 'Enter') { e.preventDefault(); if (host.__ft) clearTimeout(host.__ft); tablePaint(host); refetch(); }
-      };
-      in1.addEventListener('keydown', keyEsc);
-      in2.addEventListener('keydown', keyEsc);
-      wrapEl.appendChild(opBtn); wrapEl.appendChild(in1); wrapEl.appendChild(in2);
-      box.appendChild(wrapEl);
-      th.__sync = sync;
-      sync();
+      th.__sync = syncF;
+      box.appendChild(fbtn);
+      syncF();
     }
     th.appendChild(box);
     host.__ths.push(th);
@@ -528,19 +613,122 @@ function tablePaint(host) {
   if (tb) {
     tb.textContent = '';
     const frag = document.createDocumentFragment();
-    for (const r of shown) {
-      const row = document.createElement('tr');
-      for (const c of cols) {
-        const td = document.createElement('td');
-        const v = tblDisp(r, c);
-        if (c.n) td.classList.add('num');
-        if (c.cls) { const k = c.cls(r); if (k) td.classList.add(k); }
-        const txt = (v === null || v === undefined || v === '') ? '—' : v;
-        if (c.h) td.innerHTML = txt; else td.textContent = txt;
-        if (c.title) td.title = c.title(r);
-        row.appendChild(td);
+    const gbKey = host.__groupBy || '';
+    const gbCol = gbKey ? cols.find(c => c.k === gbKey) : null;
+    if (gbCol) {
+      /* تجميع: صفوف مجمّعة + صف إجمالي فرعي + إجمالي كلي */
+      const groups = new Map();
+      for (const r of shown) {
+        const gv = String(tblPlain(tblDisp(r, gbCol)) ?? '').trim() || '(فارغ)';
+        if (!groups.has(gv)) groups.set(gv, []);
+        groups.get(gv).push(r);
       }
-      frag.appendChild(row);
+      let grandTotals = cols.map(c => c.n ? 0 : null);
+      for (const [gv, grows] of groups) {
+        const subTotals = cols.map(c => c.n ? 0 : null);
+        for (const r of grows) {
+          const tr = document.createElement('tr');
+          for (let i = 0; i < cols.length; i++) {
+            const c = cols[i];
+            const td = document.createElement('td');
+            const v = tblDisp(r, c);
+            if (c.n) td.classList.add('num');
+            if (c.cls) { const k = c.cls(r); if (k) td.classList.add(k); }
+            const txt = (v === null || v === undefined || v === '') ? '—' : v;
+            if (c.h) td.innerHTML = txt; else td.textContent = txt;
+            if (c.title) td.title = c.title(r);
+            tr.appendChild(td);
+            if (c.n && typeof sortVal(r, c) === 'number') subTotals[i] += sortVal(r, c);
+          }
+          frag.appendChild(tr);
+        }
+        /* صف إجمالي فرعي */
+        const subRow = document.createElement('tr');
+        subRow.className = 'subtotal-row';
+        for (let i = 0; i < cols.length; i++) {
+          const c = cols[i];
+          const td = document.createElement('td');
+          if (i === 0) {
+            td.textContent = 'إجمالي ' + gv + ' (' + grows.length + ' صف)';
+            td.style.fontWeight = '700';
+          } else if (c.n && subTotals[i] !== null) {
+            const v = subTotals[i];
+            td.textContent = c.f ? c.f({ [c.k]: v }) : (c.n ? (Math.abs(v - Math.round(v)) < 1e-9 ? v.toLocaleString('en-US') : v.toFixed(2)) : v);
+            td.classList.add('num');
+            td.style.fontWeight = '700';
+            grandTotals[i] += subTotals[i];
+          } else {
+            td.textContent = '';
+          }
+          subRow.appendChild(td);
+        }
+        frag.appendChild(subRow);
+      }
+      /* إجمالي كلي */
+      const grandRow = document.createElement('tr');
+      grandRow.className = 'grandtotal-row';
+      for (let i = 0; i < cols.length; i++) {
+        const c = cols[i];
+        const td = document.createElement('td');
+        if (i === 0) {
+          td.textContent = 'الإجمالي الكلي (' + shown.length + ' صف)';
+          td.style.fontWeight = '800';
+        } else if (c.n && grandTotals[i] !== null) {
+          const v = grandTotals[i];
+          td.textContent = c.f ? c.f({ [c.k]: v }) : (Math.abs(v - Math.round(v)) < 1e-9 ? v.toLocaleString('en-US') : v.toFixed(2));
+          td.classList.add('num');
+          td.style.fontWeight = '800';
+        } else {
+          td.textContent = '';
+        }
+        grandRow.appendChild(td);
+      }
+      frag.appendChild(grandRow);
+    } else {
+      for (const r of shown) {
+        const row = document.createElement('tr');
+        for (const c of cols) {
+          const td = document.createElement('td');
+          const v = tblDisp(r, c);
+          if (c.n) td.classList.add('num');
+          if (c.cls) { const k = c.cls(r); if (k) td.classList.add(k); }
+          const txt = (v === null || v === undefined || v === '') ? '—' : v;
+          if (c.h) td.innerHTML = txt; else td.textContent = txt;
+          if (c.title) td.title = c.title(r);
+          row.appendChild(td);
+        }
+        frag.appendChild(row);
+      }
+      /* إجمالي كلي (بدون تجميع) — يُلغى عند totals=false */
+      const hasNum = cols.some(c => c.n) && opts.totals !== false;
+      if (hasNum && shown.length > 0) {
+        const grandTotals = cols.map(c => c.n ? 0 : null);
+        for (const r of shown) {
+          for (let i = 0; i < cols.length; i++) {
+            const c = cols[i];
+            if (c.n && typeof sortVal(r, c) === 'number') grandTotals[i] += sortVal(r, c);
+          }
+        }
+        const grandRow = document.createElement('tr');
+        grandRow.className = 'grandtotal-row';
+        for (let i = 0; i < cols.length; i++) {
+          const c = cols[i];
+          const td = document.createElement('td');
+          if (i === 0) {
+            td.textContent = 'الإجمالي (' + shown.length + ' صف)';
+            td.style.fontWeight = '800';
+          } else if (c.n && grandTotals[i] !== null) {
+            const v = grandTotals[i];
+            td.textContent = c.f ? c.f({ [c.k]: v }) : (Math.abs(v - Math.round(v)) < 1e-9 ? v.toLocaleString('en-US') : v.toFixed(2));
+            td.classList.add('num');
+            td.style.fontWeight = '800';
+          } else {
+            td.textContent = '';
+          }
+          grandRow.appendChild(td);
+        }
+        frag.appendChild(grandRow);
+      }
     }
     tb.appendChild(frag);
   }
@@ -566,8 +754,8 @@ function tablePaint(host) {
 }
 
 /** جدول عام — ترتيب افتراضي على الصنف + ترتيب يدوي + فلتر ديناميكي في رأس كل عمود */
-function table(host, cols, rows, { limit = 500, empty = 'لا توجد بيانات', sort = true, filters = true } = {}) {
-  const sig = (cols || []).map(c => c.k || ('t:' + c.t)).join('|') + '#' + (sort ? 1 : 0) + (filters ? 1 : 0);
+function table(host, cols, rows, { limit = 500, empty = 'لا توجد بيانات', sort = true, filters = true, totals = true } = {}) {
+  const sig = (cols || []).map(c => c.k || ('t:' + c.t)).join('|') + '#' + (sort ? 1 : 0) + (filters ? 1 : 0) + (totals ? 1 : 0);
   /* هل هيكل الجدول الحالي صالح لنفس الأعمدة؟ نبقي الرأس (ورأس الفلاتر) بدل مسحه */
   const keep = host.__colSig === sig && host.__tbody && host.contains(host.__tbody);
   if (!rows || !rows.length) {
@@ -577,7 +765,7 @@ function table(host, cols, rows, { limit = 500, empty = 'لا توجد بيان�
       host.__rows = [];
       host.__cols = cols;
       host.__keys = (cols || []).map(c => c.k || ('t:' + c.t));
-      host.__opts = { limit, empty, sort, filters };
+      host.__opts = { limit, empty, sort, filters, totals };
       tablePaint(host);
       const tb = host.__tbody;
       if (tb) {
@@ -601,7 +789,7 @@ function table(host, cols, rows, { limit = 500, empty = 'لا توجد بيان�
   host.__rows = rows;
   host.__cols = cols;
   host.__keys = (cols || []).map(c => c.k || ('t:' + c.t));
-  host.__opts = { limit, empty, sort, filters };
+  host.__opts = { limit, empty, sort, filters, totals };
   /* نعيد البناء فقط عند تغيّر الاعمدة، او اذا مُسح هيكل الجدول من الخارج */
   if (!keep) {
     host.__colSig = sig;

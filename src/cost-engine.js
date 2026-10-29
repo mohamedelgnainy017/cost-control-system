@@ -29,6 +29,8 @@
  */
 const DB = require('./db');
 const BE = require('./borse-edit');
+const { randomUUID } = require('node:crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const DIRTY_KEY = 'costs_dirty';
@@ -37,58 +39,69 @@ const DIRTY_KEY = 'costs_dirty';
 const COLS = ['cost_date', 'item_code', 'item', 'unit_code', 'method',
               'cost', 'qty', 'value', 'cost_usd', 'usd_rate', 'fees'];
 
-const pad = n => String(n).padStart(2, '0');
 const today = () => BE.today();
 const iso = BE.iso;
 const num = BE.num;
 const round = (v, d) => (v === null || v === undefined ? null : Math.round(v * 10 ** d) / 10 ** d);
 
-/* كل حسابات التواريخ هنا على UTC **عمداً**:
-   في توقيت Africa/Cairo يُنزلق `new Date(iso + 'T00:00:00')` إلى 01:00 بعد يوم
-   التحوّل الصيفي، فتُخسر جملة `while (d <= end)` اليوم الأخير من المدى
-   (مُختبَر: 1740 يوماً بدل 1741). UTC لا يعرف التحوّل الصيفي إطلاقاً. */
-const D_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const toUtc = s => { const m = D_RE.exec(String(s || '')); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : NaN; };
-
-/** إزاحة تاريخ بـ n يوم */
-function shift(s, n) {
-  const t = toUtc(s);
-  if (!isFinite(t)) return s;
-  const d = new Date(t + n * 86400000);
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
-}
-function nextDay(s) { return shift(s, 1); }
-
-/** كل الأيام التقويمية من from إلى to (لبنية الحمل للأمام) */
-function eachDay(from, to) {
-  const out = [];
-  const s = toUtc(from), e = toUtc(to);
-  if (!isFinite(s) || !isFinite(e) || s > e) return out;
-  for (let t = s; t <= e; t += 86400000) {
-    const d = new Date(t);
-    out.push(`${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`);
-  }
-  return out;
-}
+/* مساعدات تواريخ UTC — منقولة إلى src/pure.js (Phase 0.3C-B5) */
+const { toUtc, shift, nextDay, eachDay } = require('./pure');
 
 /* ------------------------------------------------------------------ */
 /* علامة «يحتاج إعادة بناء من تاريخ كذا»                               */
 /* ------------------------------------------------------------------ */
 
-/** تُبقي أقدم تاريخ ملوّن (أي تعديل قديم يسبق تعديل حديث) */
+/**
+ * القيمة المخزّنة في `settings` بصيغة `<date>#<uuid>`:
+ *  - `<date>` : أقدم تاريخ صالح ملوّن (نفس منطق `min` السابق).
+ *  - `<uuid>` : إصدار فريد لكل استدعاء حتى لو تساوى التاريخ (يُولَّد بـ randomUUID).
+ * الإصدار هو ما يميّز التحديث الجديد عن القديم عند تساوي التاريخ، فلا يمحوه `flush`
+ * بخطأ سباق. القيم القديمة بلا `#` تُقرأ كما هي (توافق خلفي).
+ */
+const splitDirty = v => {
+  const s = String(v ?? '');
+  const i = s.indexOf('#');
+  const date = i < 0 ? s : s.slice(0, i);
+  return { date: ISO.test(date) ? date : null, raw: s };
+};
+
+/**
+ * تُبقي أقدم تاريخ ملوّن (أي تعديل قديم يسبق تعديل حديث) وتُحدّث الإصدار،
+ * في عملية PostgreSQL **ذرّية واحدة** — لا قراءة-ثم-كتابة.
+ * تُعيد الواجهة التاريخ (كما كانت) لتبقى متوافقة مع المستهلكين الحاليين.
+ */
 async function markDirty(date) {
-  const cur = await DB.getSetting(DIRTY_KEY, null);
-  const a = (cur && ISO.test(cur)) ? cur : null;
   const b = (date && ISO.test(date)) ? date : null;
-  const next = a && b ? (a < b ? a : b) : (a || b);
-  if (!next) return null;
-  await DB.setSetting(DIRTY_KEY, next);
-  return next;
+  if (!b) return null;
+  /* إصدار فريد واحد لكل استدعاء — يُستخدم في الإدراج وفي التحديث معًا. */
+  const uid = randomUUID();
+  const tok = `${b}#${uid}`;
+  const row = await DB.get(
+    `INSERT INTO settings(key, value) VALUES($1, $2)
+       ON CONFLICT (key) DO UPDATE
+       SET value = COALESCE(
+             LEAST(
+               CASE WHEN split_part(settings.value, '#', 1) ~ '^\\d{4}-\\d{2}-\\d{2}$'
+                    THEN split_part(settings.value, '#', 1) END,
+               $3),
+             $3) || '#' || $4
+     RETURNING value`,
+    [DIRTY_KEY, tok, b, uid]);
+  const { date: d } = splitDirty(row && row.value);
+  return d;
 }
 
+/** التاريخ الملوّن فقط (مُتفكَّك من الإصدار) — للعرض في status وتحديد نطاق البناء. */
 async function dirty() {
-  const v = await DB.getSetting(DIRTY_KEY, null);
-  return (v && ISO.test(v)) ? v : null;
+  const { date } = splitDirty(await DB.getSetting(DIRTY_KEY, null));
+  return date;
+}
+
+/** التاريخ + الإصدار الكامل (للحذف الذرّي المشروط في flush). */
+async function dirtyTok() {
+  const cur = await DB.getSetting(DIRTY_KEY, null);
+  const { date, raw } = splitDirty(cur);
+  return date ? { date, tok: raw } : null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -222,14 +235,38 @@ async function balanceCosts(from, to) {
 /* البناء                                                              */
 /* ------------------------------------------------------------------ */
 
+/* مُسلسِل إعادة البناء داخل عملية Node.js: أي عمليتي بناء متعارضتين
+   (flush / rebuildAll / rebuild مباشر) تنتظران واحدة تلو الأخرى فلا
+   تتداخل معاملتا DELETE+INSERT على المدى المتقاطع. قابل لإعادة الدخول
+   (reentrant) عبر AsyncLocalStorage — فلا deadlock حين تستدعي إحداها الأخرى،
+   ولا يستطيع نداء خارجي متزامن تجاوز القفل. */
+const buildAls = new AsyncLocalStorage();
+let buildChain = Promise.resolve();
+
+function withBuildLock(fn) {
+  /* إعادة الدخول داخل نفس سياق async: نداء داخلي (flush → rebuildLocked لا يحتاج
+     القفل أصلًا، لكن هذا يحمي أي استدعاء متداخل مستقبلي) لا ينتظر القفل ثانيةً. */
+  if (buildAls.getStore()) return Promise.resolve().then(fn);
+  return buildAls.run(true, () => {
+    const run = buildChain.then(
+      () => fn(),
+      () => fn()
+    );
+    /* السلسلة تبقى حيّة حتى لو فشل البناء (لا تُرفض إلى الأبد) */
+    buildChain = run.then(() => {}, () => {});
+    return run;
+  });
+}
+
 /**
  * إعادة بناء المدى [from, to] كاملاً: حذف ثم حساب المصدرين ثم إدراج.
  * (يُنفَّذ داخل معاملة واحدة حتى لا يُرى الجدول نصف مبني.)
+ * القفل في `rebuild()` العام فقط؛ الدوال الداخلية تستدعي `rebuildLocked` مباشرة.
  */
-async function rebuild(from, to) {
+async function rebuildLocked(from, to) {
   to = to || today();
   if (!from) from = await minDate();
-  if (!from || from > to) return { from, to, rows: 0, balance: 0, borse: 0 };
+  if (!from || from > to) return { from, to, rows: 0, balance: 0, borse: 0, built: false };
 
   const [bal, bse] = await Promise.all([
     balanceCosts(from, to),
@@ -247,13 +284,26 @@ async function rebuild(from, to) {
     await DB.insertBatch('daily_costs', COLS, rows, 800);
   });
 
-  return { from, to, rows: rows.length, balance: map.size - bse.length, borse: bse.length };
+  return { from, to, rows: rows.length, balance: map.size - bse.length, borse: bse.length, built: true };
 }
 
-/** بناء كامل من أقدم مصدر حتى اليوم */
+/** الواجهة العامة: تُسلسِل أي إعادة بناء مع غيرها (بما فيها الاستدعاء المباشر). */
+function rebuild(from, to) {
+  return withBuildLock(() => rebuildLocked(from, to));
+}
+
+/** بناء كامل من أقدم مصدر حتى اليوم — لا يحذف العلم إلا بعد نجاح البناء وبشرط مطابقته. */
 async function rebuildAll() {
-  await DB.delSetting(DIRTY_KEY);
-  return rebuild(await minDate(), today());
+  const flag = await dirtyTok();
+  const from = await minDate();
+const r = await withBuildLock(() => rebuildLocked(from, today()));
+  /* لا تحذف العلم إلا إذا نُفّذت إعادة بناء فعلية (built) وبشرط مطابقة القيمة الكاملة */
+  if (flag && r && r.built) {
+    await DB.run(
+      `DELETE FROM settings WHERE key = $1 AND value = $2 RETURNING key`,
+      [DIRTY_KEY, flag.tok]);
+  }
+  return r;
 }
 
 /**
@@ -262,9 +312,28 @@ async function rebuildAll() {
  *  - الجدول فارغ     → بناء كامل.
  *  - المدى يمتد يوماً جديداً → أضف الأيام الناقصة فقط.
  */
+/* مُسلسِل flush داخل العملية: (١) نداءان متزامنان بنفس to يشتركان الوعد نفسه
+   فلا يتكرر البناء؛ (٢) أي flush آخر (to مختلف) ينتظر انتهاء الجاري — فلا
+   يتداخل بناءان على مدى متقاطع. المرجع يُصفَّر في finally عند النجاح والفشل. */
+const inflight = new Map();
+let flushChain = Promise.resolve();
+
 async function flush(to) {
   to = to || today();
-  const d = await dirty();
+  const running = inflight.get(to);
+  if (running) return running;
+  const p = flushChain.then(
+    () => doFlush(to),
+    () => doFlush(to)
+  ).finally(() => { inflight.delete(to); });
+  inflight.set(to, p);
+  flushChain = p.then(() => {}, () => {});
+  return p;
+}
+
+async function doFlush(to) {
+  const flag = await dirtyTok();
+  const d = flag ? flag.date : null;
   const st = await DB.get(
     'SELECT COUNT(*)::int n, MIN(cost_date) a, MAX(cost_date) b FROM daily_costs');
 
@@ -283,8 +352,16 @@ async function flush(to) {
   if (min && from < min) from = min;
   if (from > to) return { skipped: true, pending: d || null };
 
-  const r = await rebuild(from, to);
-  if (d) await DB.delSetting(DIRTY_KEY);
+  /* withBuildLock قابل لإعادة الدخول: rebuild() الداخلي لا ينتظر القفل ثانيةً */
+  const r = await withBuildLock(() => rebuildLocked(from, to));
+  /* حذف العلم شرطًا بمطابقة القيمة الكاملة المقروءة + RETURNING key — فلا يمحو
+     تحديثًا وصل أثناء البناء (حتى لو تساوى تاريخه). عدم المطابقة ليس خطأً. */
+  /* لا تحذف العلم إلا إذا نُفّذت إعادة بناء فعلية (built) وبشرط مطابقة القيمة الكاملة */
+  if (flag && r && r.built) {
+    await DB.run(
+      `DELETE FROM settings WHERE key = $1 AND value = $2 RETURNING key`,
+      [DIRTY_KEY, flag.tok]);
+  }
   return r;
 }
 

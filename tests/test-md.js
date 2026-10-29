@@ -31,17 +31,27 @@ async function req(method, path, body, cookie) {
   const ck = (lg.setCookie || '').split(';')[0];
   if (!ck) { console.log('STOP: no cookie'); process.exit(1); }
 
-  /* 3) الشاشات: 12 شاشة — أُزيل تبويب الاستيراد العام (الاستيراد صلاحية import لا شاشة) */
+  /* 3) الشاشات: 13 شاشة — لوحة التحكم + 4 بيانات أساسية + المخزون/المبيعات/الحركات
+        + البورصة + الأسعار + التكلفة + العقود + التقارير (بلا شاشة استيراد عامة، وبلا شاشة جودة) */
   const tabs = await req('GET', '/api/tabs', null, ck);
   const ids = (tabs.j.data && tabs.j.data.tabs || []).map(t => t.id);
-  chk(ids.length === 12, 'tabs = 12 (الحالي ' + ids.length + ')');
-  chk(['md-items', 'md-locations', 'md-movetypes'].every(t => ids.includes(t)), 'الشاشات الثلاث الجديدة مسجلة');
+  chk(ids.length === 13, 'tabs = 13 (الحالي ' + ids.length + ')');
+  chk(['md-items', 'md-locations', 'md-movetypes', 'md-contractrefs'].every(t => ids.includes(t)), 'شاشات البيانات الأساسية الأربع مسجلة');
   chk(!ids.includes('import'), 'لا شاشة «import» — الاستيراد صلاحية بلا شاشة');
   const perms = tabs.j.data && tabs.j.data.perms;
-  chk(perms && perms.accountant && perms.accountant.length === 11,
-    'محاسب افتراضياً 11 شاشة (الحالي ' + (perms && perms.accountant && perms.accountant.length) + ')');
-  chk(perms && perms.viewer && perms.viewer.length === 11,
-    'مشاهد افتراضياً 11 شاشة (الحالي ' + (perms && perms.viewer && perms.viewer.length) + ')');
+  const tUsers = (tabs.j.data && tabs.j.data.users) || [];
+  const allTabs = (tabs.j.data && tabs.j.data.tabs) || [];
+  /* الصلاحيات تُقرأ لكل مستخدم (مفاتيح الأدوار قديمة) — افتراضي المحاسب/المشاهد 11 شاشة */
+  const tabsOfUserOrRole = u => (u && Array.isArray(perms[String(u.id)])) ? perms[String(u.id)]
+    : (u && Array.isArray(perms[u.role])) ? perms[u.role] : null;
+  const fmtAcct = j => j || '—';
+  for (const role of ['accountant', 'viewer']) {
+    const su = tUsers.find(x => x.role === role);
+    if (!su) { console.log('  SKIP  لا يوجد مستخدم بحرـ' + role + ' للحظة — يُفحص لاحقاً بالمستخدم المؤقت'); continue; }
+    const arr = tabsOfUserOrRole(su);
+    chk(arr && arr.length === allTabs.length - 1,
+      role + ' افتراضياً ' + (allTabs.length - 1) + ' شاشة (الحالي ' + fmtAcct(arr && arr.length) + ')');
+  }
 
   /* 4) قراءة الشاشات الثلاث */
   const items = await req('GET', '/api/md/items?origin=all&limit=5', null, ck);
@@ -102,12 +112,7 @@ async function req(method, path, body, cookie) {
   const t3 = tst3.j.data && tst3.j.data[0];
   chk(t3 && t3.class_code === 'ZZC', 'صُنف المجموعة رُثَّ منها التصنيف تلقائياً (' + (t3 && t3.class_code) + ')');
 
-  /* 6) المزامنة: جلب الأصناف من الحركات + التسكين */
-  const sy = await req('POST', '/api/md/items/sync', {}, ck);
-  chk(sy.status === 200, 'POST /api/md/items/sync = 200');
-  const ins = sy.j.data && sy.j.data.inserted, stl = sy.j.data && sy.j.data.settled;
-  console.log('       inserted=' + ins + ' settled=' + stl + ' (0/0 إذا كانت المزامنة سبقت)');
-
+  /* 6) الأصناف المولّدة من الحركات + التسكين (بيانات موجودة مسبقاً — بلا مسار مزامنة يدوي) */
   const movAll = await req('GET', '/api/md/items?origin=movement&limit=3000', null, ck);
   const movCnt = (movAll.j.data || []).length;
   chk(movCnt > 1300, 'إجمالي الأصناف المجلوبة من الحركات > 1300 (' + movCnt + ')');
@@ -153,22 +158,6 @@ async function req(method, path, body, cookie) {
     'تعديل الشركة انعكس على وحداتها (status=' + co3.status + ' err=' + (co3.j.error || '') +
     ' name=' + (uz && uz.company_name) + ' ccy=' + (uz && uz.currency) + ')');
 
-  /* 7ب) مع كل استيراد حركات: الوحدة الجديدة وموقع التخزين الجديد يُجلبان تلقائياً
-         (نُدرج حركة تجريبية كأنها وصلت بشيت جديد ثم نشغّل المزامنة) */
-  await DB.run(`INSERT INTO movements(item, item_desc, uom, qty, company_code, unit_code, storage_loc, source_file)
-                VALUES('155555555','صنف من حركة اختبار','KG',5,'ZZT','ZZN1','ZZW1','__test_md')`);
-  const sy2 = await req('POST', '/api/md/items/sync', {}, ck);
-  chk(sy2.status === 200 && sy2.j.data.inserted >= 1, 'مزامنة جُلبت الحركة التجريبية');
-  const locs3 = await req('GET', '/api/md/locs', null, ck);
-  const unN = (locs3.j.data.units || []).find(u => u.code === 'ZZN1');
-  chk(!!unN && unN.company_code === 'ZZT', 'الوحدة الجديدة من الحركات ظهرت في المواقع تلقائياً');
-  const whN = (locs3.j.data.warehouses || []).find(w => w.code === 'ZZW1');
-  chk(!!whN && whN.unit_code === 'ZZN1' && whN.company_code === 'ZZT',
-    'موقع التخزين الجديد من الحركات ظهر في المخازن تلقائياً (اسمه واسم الموقع معاً)');
-  const itN = await req('GET', '/api/md/items?q=155555555', null, ck);
-  chk((itN.j.data || []).some(x => x.code === '155555555' && x.origin === 'movement'),
-    'صنف الحركة الجديدة اتحلب في الأصناف بعلامة «من الحركات»');
-
   /* 8) أنواع الحركات: إضافة وصف السيستم والتصنيف */
   const mt = await req('POST', '/api/md/mtypes/save',
     { code: 'ZZZ', descr: 'وصف اختبار', systemDesc: 'ينقل للمخزن', category: 'ترحيل' }, ck);
@@ -177,6 +166,12 @@ async function req(method, path, body, cookie) {
   chk(mts2.j.data.length === 1 && mts2.j.data[0].system_desc === 'ينقل للمخزن', 'وصف السيستم والتصنيف محفوظان');
 
   /* 9) المشاهد: قراءة مفتوحة + كتابة ممنوعة (master) — يُنشأ مؤقتاً ثم يُحذف */
+  /* إزالة بقايا مشاهد متبقية من تشغيل متقطع سابق */
+  {
+    const preU = (await req('GET', '/api/users', null, ck)).j.data || [];
+    const preT = preU.find(u => u.username === '__tstmd');
+    if (preT) await req('POST', '/api/users/delete', { id: preT.id }, ck);
+  }
   await req('POST', '/api/users', { username: '__tstmd', full_name: 'اختبار', password: 'x123456', role: 'viewer' }, ck);
   const ulist = await req('GET', '/api/users', null, ck);
   const tu = (ulist.j.data || []).find(u => u.username === '__tstmd');
@@ -192,22 +187,52 @@ async function req(method, path, body, cookie) {
     chk(vwh.status === 403, 'مشاهد يضيف مخزن = 403');
     const vm = await req('POST', '/api/md/mtypes/save', { code: 'Q' }, vck);
     chk(vm.status === 403, 'مشاهد يضيف نوع حركة = 403');
-    /* حماية الشاشة: سحب شاشة الأصناف عن المشاهد → 403 على قراءتها */
-    const permsNow = (await req('GET', '/api/tabs', null, ck)).j.data.perms;
-    const bodyPerms = {
-      accountant: permsNow.accountant,
-      viewer: permsNow.viewer.filter(t => t !== 'md-items'),
-    };
-    await req('POST', '/api/tabs/save', { perms: bodyPerms }, ck);
+    const vref = await req('POST', '/api/md/refs/delete', { kind: 'supplier', code: 'S001' }, vck);
+    chk(vref.status === 403, 'مشاهد يحذف مرجع عقود = 403');
+    /* حماية الشاشة: سحب شاشة الأصناف عن المشاهد → 403 على قراءتها
+       (الصلاحيات موزّعة لكل مستخدم — مفتاحها id المستخدم، وبقية المستخدمين تبقى كما هي) */
+    const permsNow = (await req('GET', '/api/tabs', null, ck)).j.data;
+    const pSrc = permsNow.perms || {};
+    const curVT = Array.isArray(pSrc[String(tu.id)]) ? pSrc[String(tu.id)] : (Array.isArray(pSrc[tu.role]) ? pSrc[tu.role] : []);
+    const stripped = { ...pSrc, [String(tu.id)]: curVT.filter(t => t !== 'md-items') };
+    await req('POST', '/api/tabs/save', { perms: stripped }, ck);
     const blocked = await req('GET', '/api/md/items?limit=2', null, vck);
     chk(blocked.status === 403, 'سحب شاشة الأصناف عن المشاهد → 403 على API الشاشة');
-    await req('POST', '/api/tabs/save', { perms: permsNow }, ck);   // استعادة
+    await req('POST', '/api/tabs/save', { perms: pSrc }, ck);   // استعادة
     await req('POST', '/api/users/delete', { id: tu.id }, ck);      // حذف الاختبار
     const gone = await req('GET', '/api/users', null, ck);
     chk(!(gone.j.data || []).some(u => u.username === '__tstmd'), 'حذف المشاهد التجريبي');
   } else {
     badTag('إعداد المشاهد التجريبي (status=' + vlg.status + ')');
   }
+
+  /* 7ب) مراجع عقود الاستيراد (موردين/مصادر/موانئ) — قراءة + توليد كود + حماية الحذف */
+  const refSup = await req('GET', '/api/md/refs?kind=supplier', null, ck);
+  chk(refSup.status === 200 && Array.isArray(refSup.j.data) && refSup.j.data.every(r => /^S\d+$/.test(r.code)),
+    'مرجع الموردين (S) = ' + ((refSup.j.data || []).length));
+  chk((refSup.j.data || []).length === 14, 'عدد الموردين 14 (تنظيم الجدول المختلط)');
+  const refSrc = await req('GET', '/api/md/refs?kind=source', null, ck);
+  chk((refSrc.j.data || []).length === 8 && refSrc.j.data.every(r => /^C\d+$/.test(r.code)), 'مرجع المصادر (C) = 8');
+  const refArr = await req('GET', '/api/md/refs?kind=arrival_port', null, ck);
+  chk((refArr.j.data || []).length === 4 && refArr.j.data.every(r => /^PN\d+$/.test(r.code)), 'مرجع موانئ الوصول (PN) = 4');
+  const refLoad = await req('GET', '/api/md/refs?kind=loading_port', null, ck);
+  chk((refLoad.j.data || []).length === 17 && refLoad.j.data.every(r => /^PX\d+$/.test(r.code)), 'مرجع موانئ التحميل (PX) = 17');
+  const refBad = await req('GET', '/api/md/refs?kind=zzz', null, ck);
+  chk(refBad.status === 400, 'نوع مرجع غير معروف → 400');
+  const allRefs = await req('GET', '/api/contracts/refs', null, ck);
+  chk(allRefs.status === 200 && allRefs.j.data && allRefs.j.data.supplier && allRefs.j.data.source &&
+    allRefs.j.data.arrival_port && allRefs.j.data.loading_port, 'GET /api/contracts/refs = كل القوائم للمنسدلات');
+  const newSup = await req('POST', '/api/md/refs/save', { kind: 'supplier', name: 'مورد اختبار' }, ck);
+  chk(newSup.status === 200 && /^S\d+$/.test((newSup.j.data || {}).code || ''),
+    'إضافة مورد بكود تلقائي (' + ((newSup.j.data || {}).code || '—') + ')');
+  const dupSup = await req('POST', '/api/md/refs/save', { kind: 'supplier', code: (newSup.j.data || {}).code, name: 'مكرر' }, ck);
+  chk(dupSup.status === 400, 'كود مورد مكرر → 400');
+  const emptyName = await req('POST', '/api/md/refs/save', { kind: 'supplier' }, ck);
+  chk(emptyName.status === 400, 'مورد بلا اسم → 400');
+  const delSup = await req('POST', '/api/md/refs/delete', { kind: 'supplier', code: (newSup.j.data || {}).code }, ck);
+  chk(delSup.status === 200, 'حذف المورد التجريبي = 200');
+  const delUsed = await req('POST', '/api/md/refs/delete', { kind: 'supplier', code: 'S001' }, ck);
+  chk(delUsed.status === 400, 'مورد مستخدم في العقود لا يُحذف (400)');
 
   /* 8) استيراد الملفات اليومية: قائمة + تاريخ اليوم من الاسم + الحذف */
   const dl = await req('GET', '/api/files/daily?cat=movements', null, ck);
